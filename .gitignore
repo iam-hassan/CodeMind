@@ -1,0 +1,25 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log
+
+# Build outputs
+out/
+out-*/
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+
+# Environment
+.env
+.env.local
+
+# Backup
+*.bak
