@@ -38,10 +38,8 @@ export class ExperimentService implements IExperimentService {
 	) { }
 
 	getExperiments() {
-		if (!this.experiments) {
-			this.experiments = loadExperiments(this.storageService, this.configurationService);
-		}
-		return this.experiments;
+		// CODEMIND-DISABLED: return empty overrides
+		return {};
 	}
 }
 

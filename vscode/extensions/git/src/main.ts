@@ -61,7 +61,8 @@ async function _activate(context: ExtensionContext, disposables: Disposable[]): 
 	try {
 		return await init(context, outputChannel, disposables);
 	} catch (err) {
-		if (!/Git installation not found/.test(err.message || '')) {
+		const error = err as any;
+		if (!/Git installation not found/.test(error.message || '')) {
 			throw err;
 		}
 
@@ -72,8 +73,8 @@ async function _activate(context: ExtensionContext, disposables: Disposable[]): 
 			return;
 		}
 
-		console.warn(err.message);
-		outputChannel.appendLine(err.message);
+		console.warn(error.message);
+		outputChannel.appendLine(error.message);
 		outputChannel.show();
 
 		const download = localize('downloadgit', "Download Git");

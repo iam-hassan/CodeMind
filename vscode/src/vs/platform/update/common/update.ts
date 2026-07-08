@@ -56,3 +56,21 @@ export interface IUpdateService {
 	checkForUpdates(explicit: boolean): TPromise<IUpdate>;
 	quitAndInstall(): TPromise<void>;
 }
+
+export const NullUpdateService: IUpdateService = new class implements IUpdateService {
+	_serviceBrand: any;
+	readonly onError: Event<any> = Event.None;
+	readonly onUpdateAvailable: Event<{ url: string; version: string; }> = Event.None;
+	readonly onUpdateNotAvailable: Event<boolean> = Event.None;
+	readonly onUpdateReady: Event<IRawUpdate> = Event.None;
+	readonly onStateChange: Event<State> = Event.None;
+	readonly state: State = State.Idle;
+
+	checkForUpdates(explicit: boolean): TPromise<IUpdate> {
+		return TPromise.as(null);
+	}
+
+	quitAndInstall(): TPromise<void> {
+		return TPromise.as(null);
+	}
+};

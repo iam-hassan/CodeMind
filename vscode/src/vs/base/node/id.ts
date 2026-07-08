@@ -78,8 +78,10 @@ export const virtualMachineHint: { value(): number } = new class {
 
 let machineId: TPromise<string>;
 export function getMachineId(): TPromise<string> {
-	return machineId || (machineId = getMacMachineId()
-		.then(id => id || uuid.generateUuid())); // fallback, generate a UUID
+	// CODEMIND-DISABLED:
+	// return machineId || (machineId = getMacMachineId()
+	// 	.then(id => id || uuid.generateUuid())); // fallback, generate a UUID
+	return machineId || (machineId = TPromise.as(uuid.generateUuid()));
 }
 
 function getMacMachineId(): TPromise<string> {

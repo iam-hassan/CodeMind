@@ -316,6 +316,7 @@ export class WorkbenchShell {
 		serviceCollection.set(IExperimentService, this.experimentService);
 
 		// Telemetry
+		/* CODEMIND-DISABLED:
 		if (this.environmentService.isBuilt && !this.environmentService.isExtensionDevelopment && !this.environmentService.args['disable-telemetry'] && !!product.enableTelemetry) {
 			const channel = getDelayedChannel<ITelemetryAppenderChannel>(sharedProcess.then(c => c.getChannel('telemetryAppender')));
 			const commit = product.commit;
@@ -336,14 +337,18 @@ export class WorkbenchShell {
 		} else {
 			this.telemetryService = NullTelemetryService;
 		}
+		*/
+		this.telemetryService = NullTelemetryService;
 
 		serviceCollection.set(ITelemetryService, this.telemetryService);
 		disposables.push(configurationTelemetry(this.telemetryService, this.configurationService));
 
 		let crashReporterService = NullCrashReporterService;
+		/* CODEMIND-DISABLED:
 		if (!this.environmentService.disableCrashReporter && product.crashReporter && product.hockeyApp) {
 			crashReporterService = instantiationService.createInstance(CrashReporterService);
 		}
+		*/
 		serviceCollection.set(ICrashReporterService, crashReporterService);
 
 		this.messageService = instantiationService.createInstance(MessageService, container);

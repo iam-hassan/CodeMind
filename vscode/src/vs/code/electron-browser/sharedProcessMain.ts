@@ -101,23 +101,20 @@ function main(server: Server, initData: ISharedProcessInitData, configuration: I
 	const instantiationService = new InstantiationService(services);
 
 	instantiationService.invokeFunction(accessor => {
-		const appenders: AppInsightsAppender[] = [];
-
-		if (product.aiConfig && product.aiConfig.asimovKey) {
-			appenders.push(new AppInsightsAppender(eventPrefix, null, product.aiConfig.asimovKey));
-		}
-
-		// It is important to dispose the AI adapter properly because
-		// only then they flush remaining data.
-		process.once('exit', () => appenders.forEach(a => a.dispose()));
-
-		const appender = combinedAppender(...appenders);
-		server.registerChannel('telemetryAppender', new TelemetryAppenderChannel(appender));
+		// CODEMIND-DISABLED:
+		// const appenders: AppInsightsAppender[] = [];
+		// if (product.aiConfig && product.aiConfig.asimovKey) {
+		// 	appenders.push(new AppInsightsAppender(eventPrefix, null, product.aiConfig.asimovKey));
+		// }
+		// process.once('exit', () => appenders.forEach(a => a.dispose()));
+		// const appender = combinedAppender(...appenders);
+		// server.registerChannel('telemetryAppender', new TelemetryAppenderChannel(appender));
 
 		const services = new ServiceCollection();
 		const environmentService = accessor.get(IEnvironmentService);
 		const { appRoot, extensionsPath, extensionDevelopmentPath, isBuilt, installSourcePath } = environmentService;
 
+		/* CODEMIND-DISABLED:
 		if (isBuilt && !extensionDevelopmentPath && !environmentService.args['disable-telemetry'] && product.enableTelemetry) {
 			const config: ITelemetryServiceConfig = {
 				appender,
@@ -129,6 +126,8 @@ function main(server: Server, initData: ISharedProcessInitData, configuration: I
 		} else {
 			services.set(ITelemetryService, NullTelemetryService);
 		}
+		*/
+		services.set(ITelemetryService, NullTelemetryService);
 
 		services.set(IExtensionManagementService, new SyncDescriptor(ExtensionManagementService));
 		services.set(IExtensionGalleryService, new SyncDescriptor(ExtensionGalleryService));

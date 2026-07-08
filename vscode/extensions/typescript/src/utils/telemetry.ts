@@ -39,18 +39,8 @@ export default class TelemetryReporter {
 	}
 
 	private get reporter(): VsCodeTelemetryReporter | null {
-		if (typeof this._reporter !== 'undefined') {
-			return this._reporter;
-		}
-
-		if (this.packageInfo && this.packageInfo.aiKey) {
-			this._reporter = new VsCodeTelemetryReporter(
-				this.packageInfo.name,
-				this.packageInfo.version,
-				this.packageInfo.aiKey);
-		} else {
-			this._reporter = null;
-		}
+		// CODEMIND-DISABLED: force reporter to null
+		this._reporter = null;
 		return this._reporter;
 	}
 

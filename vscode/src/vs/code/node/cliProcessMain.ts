@@ -221,6 +221,7 @@ export function main(argv: ParsedArgs): TPromise<void> {
 			services.set(IExtensionGalleryService, new SyncDescriptor(ExtensionGalleryService));
 			services.set(IChoiceService, new SyncDescriptor(ChoiceCliService));
 
+			/* CODEMIND-DISABLED:
 			if (isBuilt && !extensionDevelopmentPath && !envService.args['disable-telemetry'] && product.enableTelemetry) {
 				const appenders: AppInsightsAppender[] = [];
 
@@ -242,6 +243,8 @@ export function main(argv: ParsedArgs): TPromise<void> {
 			} else {
 				services.set(ITelemetryService, NullTelemetryService);
 			}
+			*/
+			services.set(ITelemetryService, NullTelemetryService);
 
 			const instantiationService2 = instantiationService.createChild(services);
 			const main = instantiationService2.createInstance(Main);

@@ -340,7 +340,8 @@ export class ExtensionGalleryService implements IExtensionGalleryService {
 	}
 
 	isEnabled(): boolean {
-		return !!this.extensionsGalleryUrl;
+		// CODEMIND-DISABLED: return !!this.extensionsGalleryUrl;
+		return false;
 	}
 
 	query(options: IQueryOptions = {}): TPromise<IPager<IGalleryExtension>> {

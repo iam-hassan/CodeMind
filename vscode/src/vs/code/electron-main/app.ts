@@ -14,9 +14,9 @@ import { WindowsService } from 'vs/platform/windows/electron-main/windowsService
 import { ILifecycleService } from 'vs/platform/lifecycle/electron-main/lifecycleMain';
 import { CodeMenu } from 'vs/code/electron-main/menus';
 import { getShellEnvironment } from 'vs/code/node/shellEnv';
-import { IUpdateService } from 'vs/platform/update/common/update';
+import { IUpdateService, NullUpdateService } from 'vs/platform/update/common/update';
 import { UpdateChannel } from 'vs/platform/update/common/updateIpc';
-import { UpdateService } from 'vs/platform/update/electron-main/updateService';
+// CODEMIND-DISABLED: import { UpdateService } from 'vs/platform/update/electron-main/updateService';
 import { Server as ElectronIPCServer } from 'vs/base/parts/ipc/electron-main/ipc.electron-main';
 import { Server, connect, Client } from 'vs/base/parts/ipc/node/ipc.net';
 import { SharedProcess } from 'vs/code/electron-main/sharedProcess';
@@ -269,9 +269,9 @@ export class CodeApplication {
 			// Services
 			const appInstantiationService = this.initServices(machineId);
 
-			// Setup Auth Handler
-			const authHandler = appInstantiationService.createInstance(ProxyAuthHandler);
-			this.toDispose.push(authHandler);
+			// CODEMIND-DISABLED: Setup Auth Handler
+			// const authHandler = appInstantiationService.createInstance(ProxyAuthHandler);
+			// this.toDispose.push(authHandler);
 
 			// Open Windows
 			appInstantiationService.invokeFunction(accessor => this.openFirstWindow(accessor));
@@ -299,12 +299,14 @@ export class CodeApplication {
 	private initServices(machineId: string): IInstantiationService {
 		const services = new ServiceCollection();
 
-		services.set(IUpdateService, new SyncDescriptor(UpdateService));
+		// CODEMIND-DISABLED: services.set(IUpdateService, new SyncDescriptor(UpdateService));
+		services.set(IUpdateService, NullUpdateService);
 		services.set(IWindowsMainService, new SyncDescriptor(WindowsManager, machineId));
 		services.set(IWindowsService, new SyncDescriptor(WindowsService, this.sharedProcess));
 		services.set(ILaunchService, new SyncDescriptor(LaunchService));
 
 		// Telemtry
+		/* CODEMIND-DISABLED:
 		if (this.environmentService.isBuilt && !this.environmentService.isExtensionDevelopment && !this.environmentService.args['disable-telemetry'] && !!product.enableTelemetry) {
 			const channel = getDelayedChannel<ITelemetryAppenderChannel>(this.sharedProcessClient.then(c => c.getChannel('telemetryAppender')));
 			const appender = new TelemetryAppenderClient(channel);
@@ -316,6 +318,8 @@ export class CodeApplication {
 		} else {
 			services.set(ITelemetryService, NullTelemetryService);
 		}
+		*/
+		services.set(ITelemetryService, NullTelemetryService);
 
 		return this.instantiationService.createChild(services);
 	}

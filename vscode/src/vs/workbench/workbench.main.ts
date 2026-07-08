@@ -42,7 +42,7 @@ import 'vs/workbench/parts/files/electron-browser/files.contribution';
 
 import 'vs/workbench/parts/backup/common/backup.contribution';
 
-import 'vs/workbench/parts/stats/node/stats.contribution';
+// CODEMIND-DISABLED: import 'vs/workbench/parts/stats/node/stats.contribution';
 import 'vs/workbench/parts/cache/node/cache.contribution';
 
 import 'vs/workbench/parts/search/electron-browser/search.contribution';
@@ -101,14 +101,14 @@ import 'vs/workbench/parts/snippets/electron-browser/tabCompletion';
 
 import 'vs/workbench/parts/themes/electron-browser/themes.contribution';
 
-import 'vs/workbench/parts/feedback/electron-browser/feedback.contribution';
+// CODEMIND-DISABLED: import 'vs/workbench/parts/feedback/electron-browser/feedback.contribution';
 
 import 'vs/workbench/parts/welcome/gettingStarted/electron-browser/gettingStarted.contribution';
 
-import 'vs/workbench/parts/update/electron-browser/update.contribution';
+// CODEMIND-DISABLED: import 'vs/workbench/parts/update/electron-browser/update.contribution';
 
-import 'vs/workbench/parts/surveys/electron-browser/nps.contribution';
-import 'vs/workbench/parts/surveys/electron-browser/languageSurveys.contribution';
+// CODEMIND-DISABLED: import 'vs/workbench/parts/surveys/electron-browser/nps.contribution';
+// CODEMIND-DISABLED: import 'vs/workbench/parts/surveys/electron-browser/languageSurveys.contribution';
 
 import 'vs/workbench/parts/performance/electron-browser/performance.contribution';
 

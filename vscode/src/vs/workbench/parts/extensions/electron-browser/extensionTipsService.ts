@@ -80,20 +80,13 @@ export class ExtensionTipsService extends Disposable implements IExtensionTipsSe
 	}
 
 	getAllRecommendationsWithReason(): { [id: string]: string; } {
-		let output: { [id: string]: string; } = Object.create(null);
-		Object.keys(this._fileBasedRecommendations).forEach(x => output[x.toLowerCase()] = localize('fileBasedRecommendation', "This extension is recommended based on the files you recently opened."));
-		this._allWorkspaceRecommendedExtensions.forEach(x => output[x.toLowerCase()] = localize('workspaceRecommendation', "This extension is recommended by users of the current workspace."));
-		forEach(this._exeBasedRecommendations, entry => output[entry.key.toLowerCase()] = localize('exeBasedRecommendation', "This extension is recommended because you have {0} installed.", entry.value));
-		return output;
+		// CODEMIND-DISABLED: return empty recommendations
+		return Object.create(null);
 	}
 
 	getWorkspaceRecommendations(): TPromise<string[]> {
-		const workspace = this.contextService.getWorkspace();
-		return TPromise.join([this.resolveWorkspaceRecommendations(workspace), ...workspace.folders.map(workspaceFolder => this.resolveWorkspaceFolderRecommendations(workspaceFolder))])
-			.then(recommendations => {
-				this._allWorkspaceRecommendedExtensions = distinct(flatten(recommendations));
-				return this._allWorkspaceRecommendedExtensions;
-			});
+		// CODEMIND-DISABLED: return empty recommendations
+		return TPromise.as([]);
 	}
 
 	private resolveWorkspaceRecommendations(workspace: IWorkspace): TPromise<string[]> {
@@ -133,29 +126,18 @@ export class ExtensionTipsService extends Disposable implements IExtensionTipsSe
 	}
 
 	getFileBasedRecommendations(): string[] {
-		const fileBased = Object.keys(this._fileBasedRecommendations)
-			.sort((a, b) => {
-				if (this._fileBasedRecommendations[a] === this._fileBasedRecommendations[b]) {
-					if (product.extensionImportantTips[a]) {
-						return -1;
-					}
-					if (product.extensionImportantTips[b]) {
-						return 1;
-					}
-				}
-				return this._fileBasedRecommendations[a] > this._fileBasedRecommendations[b] ? -1 : 1;
-			});
-		return fileBased;
+		// CODEMIND-DISABLED: return empty recommendations
+		return [];
 	}
 
 	getOtherRecommendations(): string[] {
-		return Object.keys(this._exeBasedRecommendations);
+		// CODEMIND-DISABLED: return empty recommendations
+		return [];
 	}
 
-
-
 	getKeymapRecommendations(): string[] {
-		return product.keymapExtensionTips || [];
+		// CODEMIND-DISABLED: return empty recommendations
+		return [];
 	}
 
 	private _suggestTips() {
@@ -486,31 +468,13 @@ export class ExtensionTipsService extends Disposable implements IExtensionTipsSe
 	}
 
 	getKeywordsForExtension(extension: string): string[] {
-		const keywords = product.extensionKeywords || {};
-		return keywords[extension] || [];
+		// CODEMIND-DISABLED: return empty
+		return [];
 	}
 
 	getRecommendationsForExtension(extension: string): string[] {
-		const str = `.${extension}`;
-		const result = Object.create(null);
-
-		forEach(product.extensionTips || empty, entry => {
-			let { key: id, value: pattern } = entry;
-
-			if (match(pattern, str)) {
-				result[id] = true;
-			}
-		});
-
-		forEach(product.extensionImportantTips || empty, entry => {
-			let { key: id, value } = entry;
-
-			if (match(value.pattern, str)) {
-				result[id] = true;
-			}
-		});
-
-		return Object.keys(result);
+		// CODEMIND-DISABLED: return empty
+		return [];
 	}
 
 	dispose() {
