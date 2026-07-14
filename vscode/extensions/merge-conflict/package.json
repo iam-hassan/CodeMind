@@ -1,76 +1,139 @@
 {
   "name": "merge-conflict",
   "publisher": "vscode",
-  "displayName": "merge-conflict",
-  "description": "Merge Conflict",
-  "version": "0.7.0",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "icon": "media/icon.png",
+  "version": "10.0.0",
+  "license": "MIT",
   "engines": {
     "vscode": "^1.5.0"
   },
   "categories": [
     "Other"
   ],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
   "activationEvents": [
-    "*"
+    "onStartupFinished"
   ],
-  "main": "./out/extension",
+  "main": "./out/mergeConflictMain",
+  "browser": "./dist/browser/mergeConflictMain",
   "scripts": {
     "compile": "gulp compile-extension:merge-conflict",
-    "watch": "gulp watch-extension:merge-conflict"
+    "watch": "gulp watch-extension:merge-conflict",
+    "compile-web": "npm-run-all2 -lp bundle-web typecheck-web",
+    "bundle-web": "node ./esbuild.browser.mts",
+    "typecheck-web": "tsgo --project ./tsconfig.json --noEmit",
+    "watch-web": "npm-run-all2 -lp watch-bundle-web watch-typecheck-web",
+    "watch-bundle-web": "node ./esbuild.browser.mts --watch",
+    "watch-typecheck-web": "tsgo --project ./tsconfig.json --noEmit --watch"
   },
   "contributes": {
     "commands": [
       {
         "category": "%command.category%",
         "title": "%command.accept.all-current%",
-        "command": "merge-conflict.accept.all-current"
+        "original": "Accept All Current",
+        "command": "merge-conflict.accept.all-current",
+        "enablement": "!isMergeEditor"
       },
       {
         "category": "%command.category%",
         "title": "%command.accept.all-incoming%",
-        "command": "merge-conflict.accept.all-incoming"
+        "original": "Accept All Incoming",
+        "command": "merge-conflict.accept.all-incoming",
+        "enablement": "!isMergeEditor"
       },
       {
         "category": "%command.category%",
         "title": "%command.accept.all-both%",
-        "command": "merge-conflict.accept.all-both"
+        "original": "Accept All Both",
+        "command": "merge-conflict.accept.all-both",
+        "enablement": "!isMergeEditor"
       },
       {
         "category": "%command.category%",
         "title": "%command.accept.current%",
-        "command": "merge-conflict.accept.current"
+        "original": "Accept Current",
+        "command": "merge-conflict.accept.current",
+        "enablement": "!isMergeEditor"
       },
       {
         "category": "%command.category%",
         "title": "%command.accept.incoming%",
-        "command": "merge-conflict.accept.incoming"
+        "original": "Accept Incoming",
+        "command": "merge-conflict.accept.incoming",
+        "enablement": "!isMergeEditor"
       },
       {
         "category": "%command.category%",
         "title": "%command.accept.selection%",
-        "command": "merge-conflict.accept.selection"
+        "original": "Accept Selection",
+        "command": "merge-conflict.accept.selection",
+        "enablement": "!isMergeEditor"
       },
       {
         "category": "%command.category%",
         "title": "%command.accept.both%",
-        "command": "merge-conflict.accept.both"
+        "original": "Accept Both",
+        "command": "merge-conflict.accept.both",
+        "enablement": "!isMergeEditor"
       },
       {
         "category": "%command.category%",
         "title": "%command.next%",
-        "command": "merge-conflict.next"
+        "original": "Next Conflict",
+        "command": "merge-conflict.next",
+        "enablement": "!isMergeEditor",
+        "icon": "$(arrow-down)"
       },
       {
         "category": "%command.category%",
         "title": "%command.previous%",
-        "command": "merge-conflict.previous"
+        "original": "Previous Conflict",
+        "command": "merge-conflict.previous",
+        "enablement": "!isMergeEditor",
+        "icon": "$(arrow-up)"
       },
       {
         "category": "%command.category%",
         "title": "%command.compare%",
-        "command": "merge-conflict.compare"
+        "original": "Compare Current Conflict",
+        "command": "merge-conflict.compare",
+        "enablement": "!isMergeEditor"
       }
     ],
+    "menus": {
+      "scm/resourceState/context": [
+        {
+          "command": "merge-conflict.accept.all-current",
+          "when": "scmProvider == git && scmResourceGroup == merge",
+          "group": "1_modification"
+        },
+        {
+          "command": "merge-conflict.accept.all-incoming",
+          "when": "scmProvider == git && scmResourceGroup == merge",
+          "group": "1_modification"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "merge-conflict.previous",
+          "group": "navigation@1",
+          "when": "!isMergeEditor && mergeConflictsCount && mergeConflictsCount != 0"
+        },
+        {
+          "command": "merge-conflict.next",
+          "group": "navigation@2",
+          "when": "!isMergeEditor && mergeConflictsCount && mergeConflictsCount != 0"
+        }
+      ]
+    },
     "configuration": {
       "title": "%config.title%",
       "properties": {
@@ -83,15 +146,38 @@
           "type": "boolean",
           "description": "%config.decoratorsEnabled%",
           "default": true
+        },
+        "merge-conflict.autoNavigateNextConflict.enabled": {
+          "type": "boolean",
+          "description": "%config.autoNavigateNextConflictEnabled%",
+          "default": false
+        },
+        "merge-conflict.diffViewPosition": {
+          "type": "string",
+          "enum": [
+            "Current",
+            "Beside",
+            "Below"
+          ],
+          "description": "%config.diffViewPosition%",
+          "enumDescriptions": [
+            "%config.diffViewPosition.current%",
+            "%config.diffViewPosition.beside%",
+            "%config.diffViewPosition.below%"
+          ],
+          "default": "Current"
         }
       }
     }
   },
   "dependencies": {
-    "vscode-extension-telemetry": "0.0.8",
-    "vscode-nls": "^2.0.2"
+    "@vscode/extension-telemetry": "^0.9.8"
   },
   "devDependencies": {
-    "@types/node": "8.0.33"
+    "@types/node": "24.x"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/microsoft/vscode.git"
   }
 }

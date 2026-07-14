@@ -4,11 +4,9 @@
 		"If you want to provide a fix or improvement, please create a pull request against the original repository.",
 		"Once accepted there, we are happy to receive an update request."
 	],
-	"version": "https://github.com/moby/moby/commit/abd39744c6f3ed854500e423f5fabf952165161f",
-	"fileTypes": [
-		"Dockerfile"
-	],
+	"version": "https://github.com/moby/moby/commit/c2029cb2574647e4bc28ed58486b8e85883eedb9",
 	"name": "Dockerfile",
+	"scopeName": "source.dockerfile",
 	"patterns": [
 		{
 			"captures": {
@@ -44,6 +42,9 @@
 			"match": "^\\s*(?i:(ONBUILD)\\s+)?(?i:(CMD|ENTRYPOINT))\\s"
 		},
 		{
+			"include": "#string-character-escape"
+		},
+		{
 			"begin": "\"",
 			"beginCaptures": {
 				"1": {
@@ -59,8 +60,7 @@
 			"name": "string.quoted.double.dockerfile",
 			"patterns": [
 				{
-					"match": "\\\\.",
-					"name": "constant.character.escaped.dockerfile"
+					"include": "#string-character-escape"
 				}
 			]
 		},
@@ -80,8 +80,7 @@
 			"name": "string.quoted.single.dockerfile",
 			"patterns": [
 				{
-					"match": "\\\\.",
-					"name": "constant.character.escaped.dockerfile"
+					"include": "#string-character-escape"
 				}
 			]
 		},
@@ -101,6 +100,10 @@
 			"match": "^(\\s*)((#).*$\\n?)"
 		}
 	],
-	"scopeName": "source.dockerfile",
-	"uuid": "a39d8795-59d2-49af-aa00-fe74ee29576e"
+	"repository": {
+		"string-character-escape": {
+			"name": "constant.character.escaped.dockerfile",
+			"match": "\\\\."
+		}
+	}
 }

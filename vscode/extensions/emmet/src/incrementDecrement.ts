@@ -21,7 +21,7 @@ export function incrementDecrement(delta: number): Thenable<boolean> | undefined
 
 	return editor.edit(editBuilder => {
 		editor.selections.forEach(selection => {
-			let rangeToReplace = locate(editor.document, selection.isReversed ? selection.anchor : selection.active);
+			const rangeToReplace = locate(editor.document, selection.isReversed ? selection.anchor : selection.active);
 			if (!rangeToReplace) {
 				return;
 			}
@@ -40,12 +40,12 @@ export function incrementDecrement(delta: number): Thenable<boolean> | undefined
  */
 export function update(numString: string, delta: number): string {
 	let m: RegExpMatchArray | null;
-	let decimals = (m = numString.match(/\.(\d+)$/)) ? m[1].length : 1;
+	const decimals = (m = numString.match(/\.(\d+)$/)) ? m[1].length : 1;
 	let output = String((parseFloat(numString) + delta).toFixed(decimals)).replace(/\.0+$/, '');
 
 	if (m = numString.match(/^\-?(0\d+)/)) {
 		// padded number: preserve padding
-		output = output.replace(/^(\-?)(\d+)/, (str, minus, prefix) =>
+		output = output.replace(/^(\-?)(\d+)/, (_, minus, prefix) =>
 			minus + '0'.repeat(Math.max(0, (m ? m[1].length : 0) - prefix.length)) + prefix);
 	}
 
@@ -102,6 +102,8 @@ export function locate(document: vscode.TextDocument, pos: vscode.Position): vsc
 	if (start !== end && isValidNumber(line.slice(start, end))) {
 		return new vscode.Range(pos.line, start, pos.line, end);
 	}
+
+	return;
 }
 
 /**

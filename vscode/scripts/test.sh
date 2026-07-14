@@ -1,5 +1,5 @@
-#!/bin/bash
-
+#!/usr/bin/env bash
+set -e
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
 	realpath() { [[ $1 = /* ]] && echo "$1" || echo "$PWD/${1#./}"; }
@@ -12,26 +12,32 @@ cd $ROOT
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
 	NAME=`node -p "require('./product.json').nameLong"`
-	CODE="./.build/electron/$NAME.app/Contents/MacOS/Electron"
+	EXE_NAME=`node -p "require('./product.json').nameShort"`
+	CODE="./.build/electron/$NAME.app/Contents/MacOS/$EXE_NAME"
 else
 	NAME=`node -p "require('./product.json').applicationName"`
 	CODE=".build/electron/$NAME"
 fi
 
+VSCODECRASHDIR=$ROOT/.build/crashes
+
 # Node modules
-test -d node_modules || yarn
+test -d node_modules || npm i
 
 # Get electron
-node build/lib/electron.js || ./node_modules/.bin/gulp electron
+if [[ -z "${VSCODE_SKIP_PRELAUNCH}" ]]; then
+	npm run electron
+fi
 
 # Unit Tests
-export ELECTRON_ENABLE_LOGGING=1
 if [[ "$OSTYPE" == "darwin"* ]]; then
 	cd $ROOT ; ulimit -n 4096 ; \
+		ELECTRON_ENABLE_LOGGING=1 \
 		"$CODE" \
-		test/electron/index.js "$@"
+		test/unit/electron/index.js --crash-reporter-directory=$VSCODECRASHDIR "$@"
 else
 	cd $ROOT ; \
+		ELECTRON_ENABLE_LOGGING=1 \
 		"$CODE" \
-		test/electron/index.js "$@"
+		test/unit/electron/index.js --crash-reporter-directory=$VSCODECRASHDIR "$@"
 fi

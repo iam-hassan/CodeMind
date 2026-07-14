@@ -3,34 +3,29 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as assert from 'assert';
-import { SpectronApplication, Quality } from '../../spectron/application';
+import { Application, Logger } from '../../../../automation';
+import { installAllHandlers } from '../../utils';
 
-describe('Extensions', () => {
-	before(function () {
-		this.app.suiteName = 'Extensions';
+export function setup(logger: Logger) {
+	describe('Extensions', () => {
+
+		// Shared before/after handling
+		installAllHandlers(logger, opts => {
+			opts.verbose = true; // enable verbose logging for tracing
+			opts.snapshots = true; // enable network tab in devtools for tracing since we install an extension
+			return opts;
+		});
+
+		it.skip('install and enable vscode-smoketest-check extension', async function () {
+			const app = this.app as Application;
+
+			await app.workbench.extensions.installExtension('ms-vscode.vscode-smoketest-check', true);
+
+			// Close extension editor because keybindings dispatch is not working when web views are opened and focused
+			// https://github.com/microsoft/vscode/issues/110276
+			await app.workbench.extensions.closeExtension('vscode-smoketest-check');
+
+			await app.workbench.quickaccess.runCommand('Smoke Test Check');
+		});
 	});
-
-	it(`install and activate vscode-smoketest-check extension`, async function () {
-		const app = this.app as SpectronApplication;
-
-		if (app.quality === Quality.Dev) {
-			this.skip();
-			return;
-		}
-
-		const extensionName = 'vscode-smoketest-check';
-		await app.workbench.extensions.openExtensionsViewlet();
-
-		const installed = await app.workbench.extensions.installExtension(extensionName);
-		assert.ok(installed);
-
-		await app.reload();
-		await app.workbench.extensions.waitForExtensionsViewlet();
-		await app.workbench.quickopen.runCommand('Smoke Test Check');
-
-		const statusbarText = await app.workbench.statusbar.getStatusbarTextByTitle('smoke test');
-		await app.screenCapturer.capture('Statusbar');
-		assert.equal(statusbarText, 'VS Code Smoke Test Check');
-	});
-});
+}

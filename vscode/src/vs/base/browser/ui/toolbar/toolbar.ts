@@ -3,261 +3,552 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
+import { IContextMenuProvider } from '../../contextmenu.js';
+import * as DOM from '../../dom.js';
+import { ActionBar, ActionsOrientation, IActionViewItemProvider } from '../actionbar/actionbar.js';
+import { AnchorAlignment } from '../contextview/contextview.js';
+import { DropdownMenuActionViewItem } from '../dropdown/dropdownActionViewItem.js';
+import { Action, IAction, IActionRunner, Separator, SubmenuAction } from '../../../common/actions.js';
+import { Codicon } from '../../../common/codicons.js';
+import { ThemeIcon } from '../../../common/themables.js';
+import { EventMultiplexer } from '../../../common/event.js';
+import { ResolvedKeybinding } from '../../../common/keybindings.js';
+import { Disposable, DisposableStore, toDisposable } from '../../../common/lifecycle.js';
+import './toolbar.css';
+import * as nls from '../../../../nls.js';
+import { IHoverDelegate } from '../hover/hoverDelegate.js';
+import { createInstantHoverDelegate } from '../hover/hoverDelegateFactory.js';
 
-import 'vs/css!./toolbar';
-import nls = require('vs/nls');
-import { TPromise } from 'vs/base/common/winjs.base';
-import { IDisposable } from 'vs/base/common/lifecycle';
-import { Builder, $ } from 'vs/base/browser/builder';
-import types = require('vs/base/common/types');
-import { Action, IActionRunner, IAction } from 'vs/base/common/actions';
-import { ActionBar, ActionsOrientation, IActionItemProvider, BaseActionItem } from 'vs/base/browser/ui/actionbar/actionbar';
-import { IContextMenuProvider, DropdownMenu, IActionProvider, ILabelRenderer, IDropdownMenuOptions } from 'vs/base/browser/ui/dropdown/dropdown';
-import { ResolvedKeybinding } from 'vs/base/common/keyCodes';
+const ACTION_MIN_WIDTH = 20; /* 20px codicon */
+const ACTION_PADDING = 4; /* 4px padding */
 
-export const CONTEXT = 'context.toolbar';
+const ACTION_MIN_WIDTH_VAR = '--vscode-toolbar-action-min-width';
+
+export interface IToolBarResponsiveBehaviorOptions {
+	readonly enabled: boolean;
+	readonly kind: 'last' | 'all';
+	readonly minItems?: number;
+	readonly actionMinWidth?: number;
+	readonly getActionMinWidth?: (action: IAction) => number | undefined;
+	readonly observedElement?: HTMLElement;
+	readonly getAvailableWidth?: () => number;
+}
 
 export interface IToolBarOptions {
 	orientation?: ActionsOrientation;
-	actionItemProvider?: IActionItemProvider;
+	actionViewItemProvider?: IActionViewItemProvider;
 	ariaLabel?: string;
-	getKeyBinding?: (action: IAction) => ResolvedKeybinding;
+	getKeyBinding?: (action: IAction) => ResolvedKeybinding | undefined;
 	actionRunner?: IActionRunner;
+	toggleMenuTitle?: string;
+	anchorAlignmentProvider?: () => AnchorAlignment;
+	renderDropdownAsChildElement?: boolean;
+	moreIcon?: ThemeIcon;
+	allowContextMenu?: boolean;
+	skipTelemetry?: boolean;
+	hoverDelegate?: IHoverDelegate;
+	trailingSeparator?: boolean;
+
+	/**
+	 * If true, toggled primary items are highlighted with a background color.
+	 */
+	highlightToggledItems?: boolean;
+
+	/**
+	 * Render action with icons (default: `true`)
+	 */
+	icon?: boolean;
+
+	/**
+	 * Render action with label (default: `false`)
+	 */
+	label?: boolean;
+
+	/**
+	 * Controls the responsive behavior of the primary group of the toolbar.
+	 * - `enabled`: Whether the responsive behavior is enabled.
+	 * - `kind`: The kind of responsive behavior to apply. Can be either `last` to only shrink the last item, or `all` to shrink all items equally.
+	 * - `minItems`: The minimum number of items that should always be visible.
+	 * - `actionMinWidth`: The minimum width of each action item. Defaults to `ACTION_MIN_WIDTH` (24px).
+	 * - `getActionMinWidth`: Optional per-action minimum width override in pixels.
+	 */
+	responsiveBehavior?: IToolBarResponsiveBehaviorOptions;
 }
 
 /**
  * A widget that combines an action bar for primary actions and a dropdown for secondary actions.
  */
-export class ToolBar {
+export class ToolBar extends Disposable {
 	private options: IToolBarOptions;
-	private actionBar: ActionBar;
+	protected readonly actionBar: ActionBar;
 	private toggleMenuAction: ToggleMenuAction;
-	private toggleMenuActionItem: DropdownMenuActionItem;
-	private hasSecondaryActions: boolean;
-	private lookupKeybindings: boolean;
+	private toggleMenuActionViewItem: DropdownMenuActionViewItem | undefined;
+	private submenuActionViewItems: DropdownMenuActionViewItem[] = [];
+	private hasSecondaryActions: boolean = false;
+	private readonly element: HTMLElement;
 
-	constructor(container: HTMLElement, contextMenuProvider: IContextMenuProvider, options: IToolBarOptions = { orientation: ActionsOrientation.HORIZONTAL }) {
+	private _onDidChangeDropdownVisibility = this._register(new EventMultiplexer<boolean>());
+	get onDidChangeDropdownVisibility() { return this._onDidChangeDropdownVisibility.event; }
+	private originalPrimaryActions: ReadonlyArray<IAction> = [];
+	private originalSecondaryActions: ReadonlyArray<IAction> = [];
+	private hiddenActions: { action: IAction; size: number }[] = [];
+	private readonly disposables = this._register(new DisposableStore());
+
+	constructor(private readonly container: HTMLElement, contextMenuProvider: IContextMenuProvider, options: IToolBarOptions = { orientation: ActionsOrientation.HORIZONTAL }) {
+		super();
+
+		options.hoverDelegate = options.hoverDelegate ?? this._register(createInstantHoverDelegate());
 		this.options = options;
-		this.lookupKeybindings = typeof this.options.getKeyBinding === 'function';
 
-		this.toggleMenuAction = new ToggleMenuAction(() => this.toggleMenuActionItem && this.toggleMenuActionItem.show());
+		this.toggleMenuAction = this._register(new ToggleMenuAction(() => this.toggleMenuActionViewItem?.show(), options.toggleMenuTitle));
 
-		let element = document.createElement('div');
-		element.className = 'monaco-toolbar';
-		container.appendChild(element);
+		this.element = document.createElement('div');
+		this.element.className = 'monaco-toolbar';
+		container.appendChild(this.element);
 
-		this.actionBar = new ActionBar($(element), {
+		this.actionBar = this._register(new ActionBar(this.element, {
 			orientation: options.orientation,
 			ariaLabel: options.ariaLabel,
 			actionRunner: options.actionRunner,
-			actionItemProvider: (action: Action) => {
-
-				// Return special action item for the toggle menu action
+			allowContextMenu: options.allowContextMenu,
+			highlightToggledItems: options.highlightToggledItems,
+			hoverDelegate: options.hoverDelegate,
+			actionViewItemProvider: (action, viewItemOptions) => {
 				if (action.id === ToggleMenuAction.ID) {
-
-					// Dispose old
-					if (this.toggleMenuActionItem) {
-						this.toggleMenuActionItem.dispose();
-					}
-
-					// Create new
-					this.toggleMenuActionItem = new DropdownMenuActionItem(
+					this.toggleMenuActionViewItem = new DropdownMenuActionViewItem(
 						action,
-						(<ToggleMenuAction>action).menuActions,
+						{ getActions: () => this.toggleMenuAction.menuActions },
 						contextMenuProvider,
-						this.options.actionItemProvider,
-						this.actionRunner,
-						this.options.getKeyBinding,
-						'toolbar-toggle-more'
+						{
+							actionViewItemProvider: this.options.actionViewItemProvider,
+							actionRunner: this.actionRunner,
+							keybindingProvider: this.options.getKeyBinding,
+							classNames: ThemeIcon.asClassNameArray(options.moreIcon ?? Codicon.toolBarMore),
+							anchorAlignmentProvider: this.options.anchorAlignmentProvider,
+							menuAsChild: !!this.options.renderDropdownAsChildElement,
+							skipTelemetry: this.options.skipTelemetry,
+							isMenu: true,
+							hoverDelegate: this.options.hoverDelegate
+						}
 					);
-					this.toggleMenuActionItem.setActionContext(this.actionBar.context);
+					this.toggleMenuActionViewItem.setActionContext(this.actionBar.context);
+					this.disposables.add(this._onDidChangeDropdownVisibility.add(this.toggleMenuActionViewItem.onDidChangeVisibility));
 
-					return this.toggleMenuActionItem;
+					return this.toggleMenuActionViewItem;
 				}
 
-				return options.actionItemProvider ? options.actionItemProvider(action) : null;
+				if (options.actionViewItemProvider) {
+					const result = options.actionViewItemProvider(action, viewItemOptions);
+
+					if (result) {
+						return result;
+					}
+				}
+
+				if (action instanceof SubmenuAction) {
+					const result = new DropdownMenuActionViewItem(
+						action,
+						action.actions,
+						contextMenuProvider,
+						{
+							actionViewItemProvider: this.options.actionViewItemProvider,
+							actionRunner: this.actionRunner,
+							keybindingProvider: this.options.getKeyBinding,
+							classNames: action.class,
+							anchorAlignmentProvider: this.options.anchorAlignmentProvider,
+							menuAsChild: !!this.options.renderDropdownAsChildElement,
+							skipTelemetry: this.options.skipTelemetry,
+							hoverDelegate: this.options.hoverDelegate
+						}
+					);
+					result.setActionContext(this.actionBar.context);
+					this.submenuActionViewItems.push(result);
+					this.disposables.add(this._onDidChangeDropdownVisibility.add(result.onDidChangeVisibility));
+
+					return result;
+				}
+
+				return undefined;
 			}
-		});
+		}));
+
+		// Responsive support
+		if (this.options.responsiveBehavior?.enabled) {
+			this.element.classList.toggle('responsive', true);
+			this.element.classList.toggle('responsive-all', this.options.responsiveBehavior.kind === 'all');
+			this.element.classList.toggle('responsive-last', this.options.responsiveBehavior.kind === 'last');
+			this.element.style.setProperty(ACTION_MIN_WIDTH_VAR, `${this.getConfiguredActionMinWidth()}px`);
+
+			const observer = new ResizeObserver(() => {
+				this.updateActions(this.getAvailableWidth());
+			});
+			observer.observe(this.options.responsiveBehavior?.observedElement ?? this.element);
+			this._store.add(toDisposable(() => observer.disconnect()));
+		}
 	}
 
-	public set actionRunner(actionRunner: IActionRunner) {
+	set actionRunner(actionRunner: IActionRunner) {
 		this.actionBar.actionRunner = actionRunner;
 	}
 
-	public get actionRunner(): IActionRunner {
+	get actionRunner(): IActionRunner {
 		return this.actionBar.actionRunner;
 	}
 
-	public set context(context: any) {
+	set context(context: unknown) {
 		this.actionBar.context = context;
-		if (this.toggleMenuActionItem) {
-			this.toggleMenuActionItem.setActionContext(context);
+		this.toggleMenuActionViewItem?.setActionContext(context);
+		for (const actionViewItem of this.submenuActionViewItems) {
+			actionViewItem.setActionContext(context);
 		}
 	}
 
-	public getContainer(): Builder {
-		return this.actionBar.getContainer();
+	getElement(): HTMLElement {
+		return this.element;
 	}
 
-	public setAriaLabel(label: string): void {
+	focus(): void {
+		this.actionBar.focus();
+	}
+
+	getItemsWidth(): number {
+		let itemsWidth = 0;
+		for (let i = 0; i < this.actionBar.length(); i++) {
+			itemsWidth += this.actionBar.getWidth(i);
+		}
+		return itemsWidth;
+	}
+
+	getItemAction(indexOrElement: number | HTMLElement) {
+		return this.actionBar.getAction(indexOrElement);
+	}
+
+	getItemWidth(index: number): number {
+		return this.actionBar.getWidth(index);
+	}
+
+	getItemsLength(): number {
+		return this.actionBar.length();
+	}
+
+	setAriaLabel(label: string): void {
 		this.actionBar.setAriaLabel(label);
 	}
 
-	public setActions(primaryActions: IAction[], secondaryActions?: IAction[]): () => void {
-		return () => {
-			let primaryActionsToSet = primaryActions ? primaryActions.slice(0) : [];
-
-			// Inject additional action to open secondary actions if present
-			this.hasSecondaryActions = secondaryActions && secondaryActions.length > 0;
-			if (this.hasSecondaryActions) {
-				this.toggleMenuAction.menuActions = secondaryActions.slice(0);
-				primaryActionsToSet.push(this.toggleMenuAction);
-			}
-
-			this.actionBar.clear();
-
-			primaryActionsToSet.forEach(action => {
-				this.actionBar.push(action, { icon: true, label: false, keybinding: this.getKeybindingLabel(action) });
-			});
-		};
-	}
-
-	private getKeybindingLabel(action: IAction): string {
-		const key = this.lookupKeybindings ? this.options.getKeyBinding(action) : void 0;
-
-		return key ? key.getLabel() : void 0;
-	}
-
-	public addPrimaryAction(primaryAction: IAction): () => void {
-		return () => {
-
-			// Add after the "..." action if we have secondary actions
-			if (this.hasSecondaryActions) {
-				let itemCount = this.actionBar.length();
-				this.actionBar.push(primaryAction, { icon: true, label: false, index: itemCount, keybinding: this.getKeybindingLabel(primaryAction) });
-			}
-
-			// Otherwise just add to the end
-			else {
-				this.actionBar.push(primaryAction, { icon: true, label: false, keybinding: this.getKeybindingLabel(primaryAction) });
-			}
-		};
-	}
-
-	public dispose(): void {
-		this.actionBar.dispose();
-		this.toggleMenuAction.dispose();
-
-		if (this.toggleMenuActionItem) {
-			this.toggleMenuActionItem.dispose();
+	/**
+	 * Force the responsive overflow logic to re-evaluate item visibility.
+	 * Call this after action view items change their rendered size externally
+	 * (e.g. label text changes) without the toolbar being notified.
+	 */
+	relayout(): void {
+		if (this.options.responsiveBehavior?.enabled) {
+			const width = this.getAvailableWidth();
+			this.updateActions(width);
 		}
+	}
+
+	setActions(primaryActions: ReadonlyArray<IAction>, secondaryActions?: ReadonlyArray<IAction>): void {
+		this.clear();
+
+		// Store primary and secondary actions as rendered initially
+		this.originalPrimaryActions = primaryActions ? primaryActions.slice(0) : [];
+		this.originalSecondaryActions = secondaryActions ? secondaryActions.slice(0) : [];
+
+		const primaryActionsToSet = primaryActions ? primaryActions.slice(0) : [];
+
+		// Inject additional action to open secondary actions if present
+		this.hasSecondaryActions = !!(secondaryActions && secondaryActions.length > 0);
+		if (this.hasSecondaryActions && secondaryActions) {
+			this.toggleMenuAction.menuActions = secondaryActions.slice(0);
+			primaryActionsToSet.push(this.toggleMenuAction);
+		}
+
+		if (primaryActionsToSet.length > 0 && this.options.trailingSeparator) {
+			primaryActionsToSet.push(new Separator());
+		}
+
+		primaryActionsToSet.forEach(action => {
+			this.actionBar.push(action, { icon: this.options.icon ?? true, label: this.options.label ?? false, keybinding: this.getKeybindingLabel(action) });
+		});
+
+		this.updateOverflowClassName();
+		this.applyResponsiveActionMinWidths();
+
+		if (this.options.responsiveBehavior?.enabled) {
+			// Reset hidden actions
+			this.hiddenActions.length = 0;
+
+			// Set the minimum width
+			if (this.options.responsiveBehavior?.minItems !== undefined) {
+				const itemCount = this.options.responsiveBehavior.minItems;
+				const primaryActionsMinWidth = this.originalPrimaryActions
+					.slice(0, itemCount)
+					.reduce((total, action) => total + this.getActionMinWidth(action), 0);
+
+				// Account for overflow menu
+				let overflowWidth = 0;
+				if (
+					this.originalSecondaryActions.length > 0 ||
+					itemCount < this.originalPrimaryActions.length
+				) {
+					overflowWidth = ACTION_MIN_WIDTH + ACTION_PADDING;
+				}
+
+				this.container.style.minWidth = `${primaryActionsMinWidth + overflowWidth}px`;
+				this.element.style.minWidth = `${primaryActionsMinWidth + overflowWidth}px`;
+			} else {
+				const minimumActionWidth = this.originalPrimaryActions.length > 0 ? this.getActionMinWidth(this.originalPrimaryActions[0]) : ACTION_MIN_WIDTH + ACTION_PADDING;
+				this.container.style.minWidth = `${minimumActionWidth}px`;
+				this.element.style.minWidth = `${minimumActionWidth}px`;
+			}
+
+			// Update toolbar actions to fit with container width
+			this.updateActions(this.getAvailableWidth());
+		}
+	}
+
+	isEmpty(): boolean {
+		return this.actionBar.isEmpty();
+	}
+
+	private getKeybindingLabel(action: IAction): string | undefined {
+		const key = this.options.getKeyBinding?.(action);
+
+		return key?.getLabel() ?? undefined;
+	}
+
+	private getConfiguredActionMinWidth(action?: IAction): number {
+		if (action?.id === ToggleMenuAction.ID) {
+			return ACTION_MIN_WIDTH;
+		}
+
+		return this.options.responsiveBehavior?.getActionMinWidth?.(action ?? this.toggleMenuAction)
+			?? this.options.responsiveBehavior?.actionMinWidth
+			?? ACTION_MIN_WIDTH;
+	}
+
+	private getActionMinWidth(action?: IAction): number {
+		return this.getConfiguredActionMinWidth(action) + ACTION_PADDING;
+	}
+
+	private getAvailableWidth(): number {
+		if (this.options.responsiveBehavior?.getAvailableWidth) {
+			return this.options.responsiveBehavior.getAvailableWidth();
+		}
+		return this.element.getBoundingClientRect().width;
+	}
+
+	private applyResponsiveActionMinWidths(): void {
+		if (!this.options.responsiveBehavior?.enabled) {
+			return;
+		}
+
+		if (this.options.responsiveBehavior.kind === 'last') {
+			const hasToggleMenuAction = this.actionBar.hasAction(this.toggleMenuAction);
+			const shrinkableIndex = hasToggleMenuAction ? this.actionBar.length() - 2 : this.actionBar.length() - 1;
+			const shrinkableAction = shrinkableIndex >= 0 ? this.actionBar.getAction(shrinkableIndex) : undefined;
+			const minWidth = `${this.getConfiguredActionMinWidth(shrinkableAction)}px`;
+			if (this.element.style.getPropertyValue(ACTION_MIN_WIDTH_VAR) !== minWidth) {
+				this.element.style.setProperty(ACTION_MIN_WIDTH_VAR, minWidth);
+			}
+			return;
+		}
+
+		const actionsContainer = this.actionBar.getContainer().firstElementChild;
+		if (!DOM.isHTMLElement(actionsContainer)) {
+			return;
+		}
+
+		for (let i = 0; i < actionsContainer.children.length; i++) {
+			const actionItem = actionsContainer.children.item(i);
+			if (!DOM.isHTMLElement(actionItem)) {
+				continue;
+			}
+
+			const action = this.actionBar.getAction(i);
+			const minWidth = `${this.getConfiguredActionMinWidth(action)}px`;
+			if (actionItem.style.minWidth !== minWidth) {
+				actionItem.style.minWidth = minWidth;
+			}
+		}
+	}
+
+	private updateActions(containerWidth: number) {
+		// Actions bar is empty
+		if (this.actionBar.isEmpty()) {
+			return;
+		}
+
+		this.applyResponsiveActionMinWidths();
+
+		// Ensure that the container width respects the minimum width of the
+		// element which is set based on the `responsiveBehavior.minItems` option
+		const parsedMinWidth = parseInt(this.element.style.minWidth);
+		containerWidth = Math.max(containerWidth, Number.isNaN(parsedMinWidth) ? 0 : parsedMinWidth);
+
+		// Each action is assumed to have a minimum width so that actions with a label
+		// can shrink to the action's minimum width. We do this so that action visibility
+		// takes precedence over the action label.
+		const actionBarWidth = (actualWidth: boolean) => {
+			if (this.options.responsiveBehavior?.kind === 'last') {
+				const hasToggleMenuAction = this.actionBar.hasAction(this.toggleMenuAction);
+				const primaryActionsCount = hasToggleMenuAction
+					? this.actionBar.length() - 1
+					: this.actionBar.length();
+				if (primaryActionsCount === 0) {
+					return hasToggleMenuAction ? ACTION_MIN_WIDTH + ACTION_PADDING : 0;
+				}
+
+				let itemsWidth = 0;
+				for (let i = 0; i < primaryActionsCount - 1; i++) {
+					itemsWidth += this.actionBar.getWidth(i) + ACTION_PADDING;
+				}
+
+				const action = this.actionBar.getAction(primaryActionsCount - 1);
+				itemsWidth += actualWidth ? this.actionBar.getWidth(primaryActionsCount - 1) : this.getActionMinWidth(action); // item to shrink
+				itemsWidth += hasToggleMenuAction ? ACTION_MIN_WIDTH + ACTION_PADDING : 0; // toggle menu action
+
+				return itemsWidth;
+			} else {
+				let itemsWidth = 0;
+				for (let i = 0; i < this.actionBar.length(); i++) {
+					itemsWidth += actualWidth ? this.actionBar.getWidth(i) : this.getActionMinWidth(this.actionBar.getAction(i));
+				}
+				return itemsWidth;
+			}
+		};
+
+		const minimumWidth = actionBarWidth(false);
+
+		// Action bar fits and there are no hidden actions to show
+		if (minimumWidth <= containerWidth && this.hiddenActions.length === 0) {
+			return;
+		}
+
+		if (minimumWidth > containerWidth) {
+			// Check for max items limit
+			if (this.options.responsiveBehavior?.minItems !== undefined) {
+				const primaryActionsCount = this.actionBar.hasAction(this.toggleMenuAction)
+					? this.actionBar.length() - 1
+					: this.actionBar.length();
+
+				if (primaryActionsCount <= this.options.responsiveBehavior.minItems) {
+					return;
+				}
+			}
+
+			// Hide actions from the right
+			while (actionBarWidth(false) > containerWidth && this.actionBar.length() > 0) {
+				const index = this.originalPrimaryActions.length - this.hiddenActions.length - 1;
+				if (index < 0) {
+					break;
+				}
+
+				// Store the action and its size
+				const action = this.originalPrimaryActions[index];
+				const size = Math.min(this.getActionMinWidth(action), this.getItemWidth(index));
+				this.hiddenActions.unshift({ action, size });
+
+				// Remove the action
+				this.actionBar.pull(index);
+
+				// There are no secondary actions, but we have actions that we need to hide so we
+				// create the overflow menu. This will ensure that another primary action will be
+				// removed making space for the overflow menu.
+				if (this.originalSecondaryActions.length === 0 && this.hiddenActions.length === 1) {
+					this.actionBar.push(this.toggleMenuAction, {
+						icon: this.options.icon ?? true,
+						label: this.options.label ?? false,
+						keybinding: this.getKeybindingLabel(this.toggleMenuAction),
+					});
+					this.updateOverflowClassName();
+				}
+
+				this.applyResponsiveActionMinWidths();
+			}
+		} else {
+			// Show actions from the top of the toggle menu
+			while (this.hiddenActions.length > 0) {
+				const entry = this.hiddenActions.shift()!;
+				if (actionBarWidth(true) + entry.size > containerWidth) {
+					// Not enough space to show the action
+					this.hiddenActions.unshift(entry);
+					break;
+				}
+
+				// Add the action
+				this.actionBar.push(entry.action, {
+					icon: this.options.icon ?? true,
+					label: this.options.label ?? false,
+					keybinding: this.getKeybindingLabel(entry.action),
+					index: this.originalPrimaryActions.length - this.hiddenActions.length - 1
+				});
+
+				// There are no secondary actions, and there is only one hidden item left so we
+				// remove the overflow menu making space for the last hidden action to be shown.
+				if (this.originalSecondaryActions.length === 0 && this.hiddenActions.length === 0) {
+					this.toggleMenuAction.menuActions = [];
+					this.actionBar.pull(this.actionBar.length() - 1);
+					this.updateOverflowClassName();
+				}
+
+				this.applyResponsiveActionMinWidths();
+			}
+		}
+
+		// Update overflow menu
+		const hiddenActions = this.hiddenActions.map(entry => entry.action);
+		if (this.originalSecondaryActions.length > 0 || hiddenActions.length > 0) {
+			const secondaryActions = this.originalSecondaryActions.slice(0);
+			this.toggleMenuAction.menuActions = Separator.join(hiddenActions, secondaryActions);
+		}
+
+		this.updateOverflowClassName();
+		this.applyResponsiveActionMinWidths();
+	}
+
+	private updateOverflowClassName(): void {
+		this.actionBar.domNode.classList.toggle('has-overflow', this.actionBar.hasAction(this.toggleMenuAction));
+	}
+
+	private clear(): void {
+		this.submenuActionViewItems = [];
+		this.disposables.clear();
+		this.actionBar.clear();
+	}
+
+	override dispose(): void {
+		this.clear();
+		this.disposables.dispose();
+		this.element.remove();
+		super.dispose();
 	}
 }
 
-class ToggleMenuAction extends Action {
+export class ToggleMenuAction extends Action {
 
-	public static readonly ID = 'toolbar.toggle.more';
+	static readonly ID = 'toolbar.toggle.more';
 
-	private _menuActions: IAction[];
+	private _menuActions: ReadonlyArray<IAction>;
 	private toggleDropdownMenu: () => void;
 
-	constructor(toggleDropdownMenu: () => void) {
-		super(ToggleMenuAction.ID, nls.localize('more', "More"), null, true);
+	constructor(toggleDropdownMenu: () => void, title?: string) {
+		title = title || nls.localize('moreActions', "More Actions...");
+		super(ToggleMenuAction.ID, title, undefined, true);
 
+		this._menuActions = [];
 		this.toggleDropdownMenu = toggleDropdownMenu;
 	}
 
-	public run(): TPromise<any> {
+	override async run(): Promise<void> {
 		this.toggleDropdownMenu();
-
-		return TPromise.as(true);
 	}
 
-	public get menuActions() {
+	get menuActions(): ReadonlyArray<IAction> {
 		return this._menuActions;
 	}
 
-	public set menuActions(actions: IAction[]) {
+	set menuActions(actions: ReadonlyArray<IAction>) {
 		this._menuActions = actions;
-	}
-}
-
-export class DropdownMenuActionItem extends BaseActionItem {
-	private menuActionsOrProvider: any;
-	private dropdownMenu: DropdownMenu;
-	private contextMenuProvider: IContextMenuProvider;
-	private actionItemProvider: IActionItemProvider;
-	private keybindings: (action: IAction) => ResolvedKeybinding;
-	private clazz: string;
-
-	constructor(action: IAction, menuActions: IAction[], contextMenuProvider: IContextMenuProvider, actionItemProvider: IActionItemProvider, actionRunner: IActionRunner, keybindings: (action: IAction) => ResolvedKeybinding, clazz: string);
-	constructor(action: IAction, actionProvider: IActionProvider, contextMenuProvider: IContextMenuProvider, actionItemProvider: IActionItemProvider, actionRunner: IActionRunner, keybindings: (action: IAction) => ResolvedKeybinding, clazz: string);
-	constructor(action: IAction, menuActionsOrProvider: any, contextMenuProvider: IContextMenuProvider, actionItemProvider: IActionItemProvider, actionRunner: IActionRunner, keybindings: (action: IAction) => ResolvedKeybinding, clazz: string) {
-		super(null, action);
-
-		this.menuActionsOrProvider = menuActionsOrProvider;
-		this.contextMenuProvider = contextMenuProvider;
-		this.actionItemProvider = actionItemProvider;
-		this.actionRunner = actionRunner;
-		this.keybindings = keybindings;
-		this.clazz = clazz;
-	}
-
-	public render(container: HTMLElement): void {
-		let labelRenderer: ILabelRenderer = (el: HTMLElement): IDisposable => {
-			this.builder = $('a.action-label').attr({
-				tabIndex: '0',
-				role: 'button',
-				'aria-haspopup': 'true',
-				title: this._action.label || '',
-				class: this.clazz
-			});
-
-			this.builder.appendTo(el);
-
-			return null;
-		};
-
-		let options: IDropdownMenuOptions = {
-			contextMenuProvider: this.contextMenuProvider,
-			labelRenderer: labelRenderer
-		};
-
-		// Render the DropdownMenu around a simple action to toggle it
-		if (types.isArray(this.menuActionsOrProvider)) {
-			options.actions = this.menuActionsOrProvider;
-		} else {
-			options.actionProvider = this.menuActionsOrProvider;
-		}
-
-		this.dropdownMenu = new DropdownMenu(container, options);
-
-		this.dropdownMenu.menuOptions = {
-			actionItemProvider: this.actionItemProvider,
-			actionRunner: this.actionRunner,
-			getKeyBinding: this.keybindings,
-			context: this._context
-		};
-	}
-
-	public setActionContext(newContext: any): void {
-		super.setActionContext(newContext);
-
-		if (this.dropdownMenu) {
-			this.dropdownMenu.menuOptions.context = newContext;
-		}
-	}
-
-	public show(): void {
-		if (this.dropdownMenu) {
-			this.dropdownMenu.show();
-		}
-	}
-
-	public dispose(): void {
-		this.dropdownMenu.dispose();
-
-		super.dispose();
 	}
 }

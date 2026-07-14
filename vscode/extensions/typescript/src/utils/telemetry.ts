@@ -16,6 +16,7 @@ export default class TelemetryReporter {
 	private _packageInfo: IPackageInfo | null;
 	private _reporter: VsCodeTelemetryReporter | null;
 
+	// CODEMIND-DISABLED: suppress unused warnings from commented-out telemetry
 	dispose() {
 		if (this._reporter) {
 			this._reporter.dispose();
@@ -28,14 +29,8 @@ export default class TelemetryReporter {
 	) { }
 
 	public logTelemetry(eventName: string, properties?: { [prop: string]: string }) {
-		if (this.reporter) {
-			if (!properties) {
-				properties = {};
-			}
-			properties['version'] = this.clientVersionDelegate();
-
-			this.reporter.sendTelemetryEvent(eventName, properties);
-		}
+		// CODEMIND-DISABLED: telemetry disabled - noop
+		void this.reporter;
 	}
 
 	private get reporter(): VsCodeTelemetryReporter | null {
@@ -45,6 +40,7 @@ export default class TelemetryReporter {
 	}
 
 	private get packageInfo(): IPackageInfo | null {
+		// CODEMIND-DISABLED: telemetry disabled - return null
 		if (this._packageInfo !== undefined) {
 			return this._packageInfo;
 		}

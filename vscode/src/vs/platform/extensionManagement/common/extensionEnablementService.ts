@@ -3,275 +3,162 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { localize } from 'vs/nls';
-import { TPromise } from 'vs/base/common/winjs.base';
-import { distinct, coalesce } from 'vs/base/common/arrays';
-import Event, { Emitter } from 'vs/base/common/event';
-import { IDisposable, dispose } from 'vs/base/common/lifecycle';
-import { IExtensionManagementService, DidUninstallExtensionEvent, IExtensionEnablementService, IExtensionIdentifier, EnablementState } from 'vs/platform/extensionManagement/common/extensionManagement';
-import { adoptToGalleryExtensionId, getIdFromLocalExtensionId, areSameExtensions } from 'vs/platform/extensionManagement/common/extensionManagementUtil';
-import { IWorkspaceContextService, WorkbenchState } from 'vs/platform/workspace/common/workspace';
-import { IStorageService, StorageScope } from 'vs/platform/storage/common/storage';
-import { IEnvironmentService } from 'vs/platform/environment/common/environment';
+import { Emitter, Event } from '../../../base/common/event.js';
+import { Disposable } from '../../../base/common/lifecycle.js';
+import { isUndefinedOrNull } from '../../../base/common/types.js';
+import { DISABLED_EXTENSIONS_STORAGE_PATH, IExtensionIdentifier, IExtensionManagementService, IGlobalExtensionEnablementService, InstallOperation } from './extensionManagement.js';
+import { areSameExtensions } from './extensionManagementUtil.js';
+import { IProfileStorageValueChangeEvent, IStorageService, StorageScope, StorageTarget } from '../../storage/common/storage.js';
 
-const DISABLED_EXTENSIONS_STORAGE_PATH = 'extensionsIdentifiers/disabled';
-const ENABLED_EXTENSIONS_STORAGE_PATH = 'extensionsIdentifiers/enabled';
+export class GlobalExtensionEnablementService extends Disposable implements IGlobalExtensionEnablementService {
 
-export class ExtensionEnablementService implements IExtensionEnablementService {
+	declare readonly _serviceBrand: undefined;
 
-	_serviceBrand: any;
-
-	private disposables: IDisposable[] = [];
-
-	private _onEnablementChanged = new Emitter<IExtensionIdentifier>();
-	public onEnablementChanged: Event<IExtensionIdentifier> = this._onEnablementChanged.event;
+	private _onDidChangeEnablement = this._register(new Emitter<{ readonly extensions: IExtensionIdentifier[]; readonly source?: string }>());
+	readonly onDidChangeEnablement: Event<{ readonly extensions: IExtensionIdentifier[]; readonly source?: string }> = this._onDidChangeEnablement.event;
+	private readonly storageManager: StorageManager;
 
 	constructor(
-		@IStorageService private storageService: IStorageService,
-		@IWorkspaceContextService private contextService: IWorkspaceContextService,
-		@IEnvironmentService private environmentService: IEnvironmentService,
-		@IExtensionManagementService extensionManagementService: IExtensionManagementService
+		@IStorageService storageService: IStorageService,
+		@IExtensionManagementService extensionManagementService: IExtensionManagementService,
 	) {
-		extensionManagementService.onDidUninstallExtension(this._onDidUninstallExtension, this, this.disposables);
-	}
-
-	private get hasWorkspace(): boolean {
-		return this.contextService.getWorkbenchState() !== WorkbenchState.EMPTY;
-	}
-
-	getDisabledExtensions(): TPromise<IExtensionIdentifier[]> {
-
-		let result = this._getDisabledExtensions(StorageScope.GLOBAL);
-
-		if (this.hasWorkspace) {
-			for (const e of this._getDisabledExtensions(StorageScope.WORKSPACE)) {
-				if (!result.some(r => areSameExtensions(r, e))) {
-					result.push(e);
-				}
+		super();
+		this.storageManager = this._register(new StorageManager(storageService));
+		this._register(this.storageManager.onDidChange(extensions => this._onDidChangeEnablement.fire({ extensions, source: 'storage' })));
+		this._register(extensionManagementService.onDidInstallExtensions(e => e.forEach(({ local, operation }) => {
+			if (local && operation === InstallOperation.Migrate) {
+				this._removeFromDisabledExtensions(local.identifier); /* Reset migrated extensions */
 			}
-			const workspaceEnabledExtensions = this._getEnabledExtensions(StorageScope.WORKSPACE);
-			if (workspaceEnabledExtensions.length) {
-				result = result.filter(r => !workspaceEnabledExtensions.some(e => areSameExtensions(e, r)));
-			}
-		}
-
-		return TPromise.as(result);
+		})));
 	}
 
-	getEnablementState(identifier: IExtensionIdentifier): EnablementState {
-		if (this.environmentService.disableExtensions) {
-			return EnablementState.Disabled;
-		}
-		if (this.hasWorkspace) {
-			if (this._getEnabledExtensions(StorageScope.WORKSPACE).filter(e => areSameExtensions(e, identifier))[0]) {
-				return EnablementState.WorkspaceEnabled;
-			}
-
-			if (this._getDisabledExtensions(StorageScope.WORKSPACE).filter(e => areSameExtensions(e, identifier))[0]) {
-				return EnablementState.WorkspaceDisabled;
-			}
-		}
-		if (this._getDisabledExtensions(StorageScope.GLOBAL).filter(e => areSameExtensions(e, identifier))[0]) {
-			return EnablementState.Disabled;
-		}
-		return EnablementState.Enabled;
-	}
-
-	canChangeEnablement(): boolean {
-		return !this.environmentService.disableExtensions;
-	}
-
-	setEnablement(identifier: IExtensionIdentifier, newState: EnablementState): TPromise<boolean> {
-		if (this.environmentService.disableExtensions) {
-			return TPromise.wrap(false);
-		}
-
-		const workspace = newState === EnablementState.WorkspaceDisabled || newState === EnablementState.WorkspaceEnabled;
-		if (workspace && !this.hasWorkspace) {
-			return TPromise.wrapError<boolean>(new Error(localize('noWorkspace', "No workspace.")));
-		}
-
-		const currentState = this.getEnablementState(identifier);
-
-		if (currentState === newState) {
-			return TPromise.as(false);
-		}
-
-
-		switch (newState) {
-			case EnablementState.Enabled:
-				this._enableExtension(identifier);
-				break;
-			case EnablementState.Disabled:
-				this._disableExtension(identifier);
-				break;
-			case EnablementState.WorkspaceEnabled:
-				this._enableExtensionInWorkspace(identifier);
-				break;
-			case EnablementState.WorkspaceDisabled:
-				this._disableExtensionInWorkspace(identifier);
-				break;
-		}
-
-		this._onEnablementChanged.fire(identifier);
-		return TPromise.as(true);
-	}
-
-	isEnabled(identifier: IExtensionIdentifier): boolean {
-		const enablementState = this.getEnablementState(identifier);
-		return enablementState === EnablementState.WorkspaceEnabled || enablementState === EnablementState.Enabled;
-	}
-
-	migrateToIdentifiers(installed: IExtensionIdentifier[]): void {
-		this._migrateDisabledExtensions(installed, StorageScope.GLOBAL);
-		if (this.hasWorkspace) {
-			this._migrateDisabledExtensions(installed, StorageScope.WORKSPACE);
-		}
-	}
-
-	private _enableExtension(identifier: IExtensionIdentifier): void {
-		this._removeFromDisabledExtensions(identifier, StorageScope.WORKSPACE);
-		this._removeFromEnabledExtensions(identifier, StorageScope.WORKSPACE);
-		this._removeFromDisabledExtensions(identifier, StorageScope.GLOBAL);
-	}
-
-	private _disableExtension(identifier: IExtensionIdentifier): void {
-		this._removeFromDisabledExtensions(identifier, StorageScope.WORKSPACE);
-		this._removeFromEnabledExtensions(identifier, StorageScope.WORKSPACE);
-		this._addToDisabledExtensions(identifier, StorageScope.GLOBAL);
-	}
-
-	private _enableExtensionInWorkspace(identifier: IExtensionIdentifier): void {
-		this._removeFromDisabledExtensions(identifier, StorageScope.WORKSPACE);
-		this._addToEnabledExtensions(identifier, StorageScope.WORKSPACE);
-	}
-
-	private _disableExtensionInWorkspace(identifier: IExtensionIdentifier): void {
-		this._addToDisabledExtensions(identifier, StorageScope.WORKSPACE);
-		this._removeFromEnabledExtensions(identifier, StorageScope.WORKSPACE);
-	}
-
-	private _addToDisabledExtensions(identifier: IExtensionIdentifier, scope: StorageScope): TPromise<boolean> {
-		if (scope === StorageScope.WORKSPACE && !this.hasWorkspace) {
-			return TPromise.wrap(false);
-		}
-		let disabledExtensions = this._getDisabledExtensions(scope);
-		if (disabledExtensions.every(e => !areSameExtensions(e, identifier))) {
-			disabledExtensions.push(identifier);
-			this._setDisabledExtensions(disabledExtensions, scope, identifier);
-			return TPromise.wrap(true);
-		}
-		return TPromise.wrap(false);
-	}
-
-	private _removeFromDisabledExtensions(identifier: IExtensionIdentifier, scope: StorageScope): boolean {
-		if (scope === StorageScope.WORKSPACE && !this.hasWorkspace) {
-			return false;
-		}
-		let disabledExtensions = this._getDisabledExtensions(scope);
-		for (let index = 0; index < disabledExtensions.length; index++) {
-			const disabledExtension = disabledExtensions[index];
-			if (areSameExtensions(disabledExtension, identifier)) {
-				disabledExtensions.splice(index, 1);
-				this._setDisabledExtensions(disabledExtensions, scope, identifier);
-				return true;
-			}
-		}
-		return false;
-	}
-
-	private _addToEnabledExtensions(identifier: IExtensionIdentifier, scope: StorageScope): boolean {
-		if (scope === StorageScope.WORKSPACE && !this.hasWorkspace) {
-			return false;
-		}
-		let enabledExtensions = this._getEnabledExtensions(scope);
-		if (enabledExtensions.every(e => !areSameExtensions(e, identifier))) {
-			enabledExtensions.push(identifier);
-			this._setEnabledExtensions(enabledExtensions, scope, identifier);
+	async enableExtension(extension: IExtensionIdentifier, source?: string): Promise<boolean> {
+		if (this._removeFromDisabledExtensions(extension)) {
+			this._onDidChangeEnablement.fire({ extensions: [extension], source });
 			return true;
 		}
 		return false;
 	}
 
-	private _removeFromEnabledExtensions(identifier: IExtensionIdentifier, scope: StorageScope): boolean {
-		if (scope === StorageScope.WORKSPACE && !this.hasWorkspace) {
-			return false;
+	async disableExtension(extension: IExtensionIdentifier, source?: string): Promise<boolean> {
+		if (this._addToDisabledExtensions(extension)) {
+			this._onDidChangeEnablement.fire({ extensions: [extension], source });
+			return true;
 		}
-		let enabledExtensions = this._getEnabledExtensions(scope);
-		for (let index = 0; index < enabledExtensions.length; index++) {
-			const disabledExtension = enabledExtensions[index];
+		return false;
+	}
+
+	getDisabledExtensions(): IExtensionIdentifier[] {
+		return this._getExtensions(DISABLED_EXTENSIONS_STORAGE_PATH);
+	}
+
+	async getDisabledExtensionsAsync(): Promise<IExtensionIdentifier[]> {
+		return this.getDisabledExtensions();
+	}
+
+	private _addToDisabledExtensions(identifier: IExtensionIdentifier): boolean {
+		const disabledExtensions = this.getDisabledExtensions();
+		if (disabledExtensions.every(e => !areSameExtensions(e, identifier))) {
+			disabledExtensions.push(identifier);
+			this._setDisabledExtensions(disabledExtensions);
+			return true;
+		}
+		return false;
+	}
+
+	private _removeFromDisabledExtensions(identifier: IExtensionIdentifier): boolean {
+		const disabledExtensions = this.getDisabledExtensions();
+		for (let index = 0; index < disabledExtensions.length; index++) {
+			const disabledExtension = disabledExtensions[index];
 			if (areSameExtensions(disabledExtension, identifier)) {
-				enabledExtensions.splice(index, 1);
-				this._setEnabledExtensions(enabledExtensions, scope, identifier);
+				disabledExtensions.splice(index, 1);
+				this._setDisabledExtensions(disabledExtensions);
 				return true;
 			}
 		}
 		return false;
 	}
 
-	private _getEnabledExtensions(scope: StorageScope): IExtensionIdentifier[] {
-		return this._getExtensions(ENABLED_EXTENSIONS_STORAGE_PATH, scope);
+	private _setDisabledExtensions(disabledExtensions: IExtensionIdentifier[]): void {
+		this._setExtensions(DISABLED_EXTENSIONS_STORAGE_PATH, disabledExtensions);
 	}
 
-	private _setEnabledExtensions(enabledExtensions: IExtensionIdentifier[], scope: StorageScope, extension: IExtensionIdentifier): void {
-		this._setExtensions(ENABLED_EXTENSIONS_STORAGE_PATH, enabledExtensions, scope, extension);
+	private _getExtensions(storageId: string): IExtensionIdentifier[] {
+		return this.storageManager.get(storageId, StorageScope.PROFILE);
 	}
 
-	private _getDisabledExtensions(scope: StorageScope): IExtensionIdentifier[] {
-		return this._getExtensions(DISABLED_EXTENSIONS_STORAGE_PATH, scope);
+	private _setExtensions(storageId: string, extensions: IExtensionIdentifier[]): void {
+		this.storageManager.set(storageId, extensions, StorageScope.PROFILE);
 	}
 
-	private _setDisabledExtensions(disabledExtensions: IExtensionIdentifier[], scope: StorageScope, extension: IExtensionIdentifier, fireEvent = true): void {
-		this._setExtensions(DISABLED_EXTENSIONS_STORAGE_PATH, disabledExtensions, scope, extension, fireEvent);
+}
+
+export class StorageManager extends Disposable {
+
+	private storage: { [key: string]: string } = Object.create(null);
+
+	private _onDidChange: Emitter<IExtensionIdentifier[]> = this._register(new Emitter<IExtensionIdentifier[]>());
+	readonly onDidChange: Event<IExtensionIdentifier[]> = this._onDidChange.event;
+
+	constructor(private storageService: IStorageService) {
+		super();
+		this._register(storageService.onDidChangeValue(StorageScope.PROFILE, undefined, this._store)(e => this.onDidStorageChange(e)));
 	}
 
-	private _getExtensions(storageId: string, scope: StorageScope): IExtensionIdentifier[] {
-		if (scope === StorageScope.WORKSPACE && !this.hasWorkspace) {
-			return [];
-		}
-		const value = this.storageService.get(storageId, scope, '');
-		return value ? JSON.parse(value) : [];
-	}
-
-	private _setExtensions(storageId: string, extensions: IExtensionIdentifier[], scope: StorageScope, extension: IExtensionIdentifier, fireEvent = true): void {
-		if (extensions.length) {
-			this.storageService.store(storageId, JSON.stringify(extensions.map(({ id, uuid }) => (<IExtensionIdentifier>{ id, uuid }))), scope);
+	get(key: string, scope: StorageScope): IExtensionIdentifier[] {
+		let value: string;
+		if (scope === StorageScope.PROFILE) {
+			if (isUndefinedOrNull(this.storage[key])) {
+				this.storage[key] = this._get(key, scope);
+			}
+			value = this.storage[key];
 		} else {
-			this.storageService.remove(storageId, scope);
+			value = this._get(key, scope);
 		}
-		if (fireEvent) {
-			this._onEnablementChanged.fire(extension);
+		return JSON.parse(value);
+	}
+
+	set(key: string, value: IExtensionIdentifier[], scope: StorageScope): void {
+		const newValue: string = JSON.stringify(value.map(({ id, uuid }): IExtensionIdentifier => ({ id, uuid })));
+		const oldValue = this._get(key, scope);
+		if (oldValue !== newValue) {
+			if (scope === StorageScope.PROFILE) {
+				if (value.length) {
+					this.storage[key] = newValue;
+				} else {
+					delete this.storage[key];
+				}
+			}
+			this._set(key, value.length ? newValue : undefined, scope);
 		}
 	}
 
-	private _migrateDisabledExtensions(installedExtensions: IExtensionIdentifier[], scope: StorageScope): void {
-		const oldValue = this.storageService.get('extensions/disabled', scope, '');
-		if (oldValue) {
-			const extensionIdentifiers = coalesce(distinct(oldValue.split(',')).map(id => {
-				id = adoptToGalleryExtensionId(id);
-				const matched = installedExtensions.filter(installed => areSameExtensions({ id }, { id: installed.id }))[0];
-				return matched ? { id: matched.id, uuid: matched.uuid } : null;
-			}));
-			if (extensionIdentifiers.length) {
-				this.storageService.store(DISABLED_EXTENSIONS_STORAGE_PATH, JSON.stringify(extensionIdentifiers), scope);
+	private onDidStorageChange(storageChangeEvent: IProfileStorageValueChangeEvent): void {
+		if (!isUndefinedOrNull(this.storage[storageChangeEvent.key])) {
+			const newValue = this._get(storageChangeEvent.key, storageChangeEvent.scope);
+			if (newValue !== this.storage[storageChangeEvent.key]) {
+				const oldValues = this.get(storageChangeEvent.key, storageChangeEvent.scope);
+				delete this.storage[storageChangeEvent.key];
+				const newValues = this.get(storageChangeEvent.key, storageChangeEvent.scope);
+				const added = oldValues.filter(oldValue => !newValues.some(newValue => areSameExtensions(oldValue, newValue)));
+				const removed = newValues.filter(newValue => !oldValues.some(oldValue => areSameExtensions(oldValue, newValue)));
+				if (added.length || removed.length) {
+					this._onDidChange.fire([...added, ...removed]);
+				}
 			}
 		}
-		this.storageService.remove('extensions/disabled', scope);
 	}
 
-	private _onDidUninstallExtension({ identifier, error }: DidUninstallExtensionEvent): void {
-		if (!error) {
-			const id = getIdFromLocalExtensionId(identifier.id);
-			if (id) {
-				const extension = { id, uuid: identifier.uuid };
-				this._removeFromDisabledExtensions(extension, StorageScope.WORKSPACE);
-				this._removeFromEnabledExtensions(extension, StorageScope.WORKSPACE);
-				this._removeFromDisabledExtensions(extension, StorageScope.GLOBAL);
-			}
+	private _get(key: string, scope: StorageScope): string {
+		return this.storageService.get(key, scope, '[]');
+	}
+
+	private _set(key: string, value: string | undefined, scope: StorageScope): void {
+		if (value) {
+			// Enablement state is synced separately through extensions
+			this.storageService.store(key, value, scope, StorageTarget.MACHINE);
+		} else {
+			this.storageService.remove(key, scope);
 		}
-	}
-
-	dispose(): void {
-		this.disposables = dispose(this.disposables);
 	}
 }

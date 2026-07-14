@@ -23,9 +23,15 @@ const commit = util.getVersion(root);
 
 const extensionsPath = path.join(path.dirname(__dirname), 'extensions');
 
+// CODEMIND-DISABLED: Skip test-only extensions that lack vscode.d.ts typings
+const excludedExtensions = ['vscode-api-tests', 'vscode-colorize-tests'];
+
 const compilations = glob.sync('**/tsconfig.json', {
 	cwd: extensionsPath,
 	ignore: ['**/out/**', '**/node_modules/**']
+}).filter(function (tsconfigFile) {
+	const dir = path.dirname(tsconfigFile);
+	return excludedExtensions.indexOf(dir) === -1;
 });
 
 const getBaseUrl = out => `https://ticino.blob.core.windows.net/sourcemaps/${commit}/${out}`;

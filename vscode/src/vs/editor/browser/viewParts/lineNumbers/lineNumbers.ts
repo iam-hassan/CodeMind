@@ -3,32 +3,36 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
+import './lineNumbers.css';
+import * as platform from '../../../../base/common/platform.js';
+import { DynamicViewOverlay } from '../../view/dynamicViewOverlay.js';
+import { RenderLineNumbersType, EditorOption } from '../../../common/config/editorOptions.js';
+import { Position } from '../../../common/core/position.js';
+import { Range } from '../../../common/core/range.js';
+import { RenderingContext } from '../../view/renderingContext.js';
+import { ViewContext } from '../../../common/viewModel/viewContext.js';
+import * as viewEvents from '../../../common/viewEvents.js';
+import { registerThemingParticipant } from '../../../../platform/theme/common/themeService.js';
+import { editorDimmedLineNumber, editorLineNumbers } from '../../../common/core/editorColorRegistry.js';
 
-import 'vs/css!./lineNumbers';
-import { editorLineNumbers } from 'vs/editor/common/view/editorColorRegistry';
-import { registerThemingParticipant } from 'vs/platform/theme/common/themeService';
-import * as platform from 'vs/base/common/platform';
-import { DynamicViewOverlay } from 'vs/editor/browser/view/dynamicViewOverlay';
-import { ViewContext } from 'vs/editor/common/view/viewContext';
-import { RenderingContext } from 'vs/editor/common/view/renderingContext';
-import * as viewEvents from 'vs/editor/common/view/viewEvents';
-import { Position } from 'vs/editor/common/core/position';
-import { RenderLineNumbersType } from 'vs/editor/common/config/editorOptions';
-
+/**
+ * Renders line numbers to the left of the main view lines content.
+ */
 export class LineNumbersOverlay extends DynamicViewOverlay {
 
 	public static readonly CLASS_NAME = 'line-numbers';
 
-	private _context: ViewContext;
+	private readonly _context: ViewContext;
 
-	private _lineHeight: number;
-	private _renderLineNumbers: RenderLineNumbersType;
-	private _renderCustomLineNumbers: (lineNumber: number) => string;
-	private _lineNumbersLeft: number;
-	private _lineNumbersWidth: number;
+	private _lineHeight!: number;
+	private _renderLineNumbers!: RenderLineNumbersType;
+	private _renderCustomLineNumbers!: ((lineNumber: number) => string) | null;
+	private _renderFinalNewline!: 'off' | 'on' | 'dimmed';
+	private _lineNumbersLeft!: number;
+	private _lineNumbersWidth!: number;
 	private _lastCursorModelPosition: Position;
-	private _renderResult: string[];
+	private _renderResult: string[] | null;
+	private _activeModelLineNumber: number;
 
 	constructor(context: ViewContext) {
 		super();
@@ -38,74 +42,85 @@ export class LineNumbersOverlay extends DynamicViewOverlay {
 
 		this._lastCursorModelPosition = new Position(1, 1);
 		this._renderResult = null;
+		this._activeModelLineNumber = 1;
 		this._context.addEventHandler(this);
 	}
 
 	private _readConfig(): void {
-		const config = this._context.configuration.editor;
-		this._lineHeight = config.lineHeight;
-		this._renderLineNumbers = config.viewInfo.renderLineNumbers;
-		this._renderCustomLineNumbers = config.viewInfo.renderCustomLineNumbers;
-		this._lineNumbersLeft = config.layoutInfo.lineNumbersLeft;
-		this._lineNumbersWidth = config.layoutInfo.lineNumbersWidth;
+		const options = this._context.configuration.options;
+		this._lineHeight = options.get(EditorOption.lineHeight);
+		const lineNumbers = options.get(EditorOption.lineNumbers);
+		this._renderLineNumbers = lineNumbers.renderType;
+		this._renderCustomLineNumbers = lineNumbers.renderFn;
+		this._renderFinalNewline = options.get(EditorOption.renderFinalNewline);
+		const layoutInfo = options.get(EditorOption.layoutInfo);
+		this._lineNumbersLeft = layoutInfo.lineNumbersLeft;
+		this._lineNumbersWidth = layoutInfo.lineNumbersWidth;
 	}
 
-	public dispose(): void {
+	public override dispose(): void {
 		this._context.removeEventHandler(this);
-		this._context = null;
 		this._renderResult = null;
 		super.dispose();
 	}
 
 	// --- begin event handlers
 
-	public onConfigurationChanged(e: viewEvents.ViewConfigurationChangedEvent): boolean {
+	public override onConfigurationChanged(e: viewEvents.ViewConfigurationChangedEvent): boolean {
 		this._readConfig();
 		return true;
 	}
-	public onCursorStateChanged(e: viewEvents.ViewCursorStateChangedEvent): boolean {
+	public override onCursorStateChanged(e: viewEvents.ViewCursorStateChangedEvent): boolean {
 		const primaryViewPosition = e.selections[0].getPosition();
-		this._lastCursorModelPosition = this._context.model.coordinatesConverter.convertViewPositionToModelPosition(primaryViewPosition);
+		this._lastCursorModelPosition = this._context.viewModel.coordinatesConverter.convertViewPositionToModelPosition(primaryViewPosition);
 
-		if (this._renderLineNumbers === RenderLineNumbersType.Relative || this._renderLineNumbers === RenderLineNumbersType.Interval) {
-			return true;
+		let shouldRender = false;
+		if (this._activeModelLineNumber !== this._lastCursorModelPosition.lineNumber) {
+			this._activeModelLineNumber = this._lastCursorModelPosition.lineNumber;
+			shouldRender = true;
 		}
-		return false;
+		if (this._renderLineNumbers === RenderLineNumbersType.Relative || this._renderLineNumbers === RenderLineNumbersType.Interval) {
+			shouldRender = true;
+		}
+		return shouldRender;
 	}
-	public onFlushed(e: viewEvents.ViewFlushedEvent): boolean {
+	public override onFlushed(e: viewEvents.ViewFlushedEvent): boolean {
 		return true;
 	}
-	public onLinesChanged(e: viewEvents.ViewLinesChangedEvent): boolean {
+	public override onLinesChanged(e: viewEvents.ViewLinesChangedEvent): boolean {
 		return true;
 	}
-	public onLinesDeleted(e: viewEvents.ViewLinesDeletedEvent): boolean {
+	public override onLinesDeleted(e: viewEvents.ViewLinesDeletedEvent): boolean {
 		return true;
 	}
-	public onLinesInserted(e: viewEvents.ViewLinesInsertedEvent): boolean {
+	public override onLinesInserted(e: viewEvents.ViewLinesInsertedEvent): boolean {
 		return true;
 	}
-	public onScrollChanged(e: viewEvents.ViewScrollChangedEvent): boolean {
+	public override onScrollChanged(e: viewEvents.ViewScrollChangedEvent): boolean {
 		return e.scrollTopChanged;
 	}
-	public onZonesChanged(e: viewEvents.ViewZonesChangedEvent): boolean {
+	public override onZonesChanged(e: viewEvents.ViewZonesChangedEvent): boolean {
 		return true;
+	}
+	public override onDecorationsChanged(e: viewEvents.ViewDecorationsChangedEvent): boolean {
+		return e.affectsLineNumber;
 	}
 
 	// --- end event handlers
 
 	private _getLineRenderLineNumber(viewLineNumber: number): string {
-		const modelPosition = this._context.model.coordinatesConverter.convertViewPositionToModelPosition(new Position(viewLineNumber, 1));
+		const modelPosition = this._context.viewModel.coordinatesConverter.convertViewPositionToModelPosition(new Position(viewLineNumber, 1));
 		if (modelPosition.column !== 1) {
 			return '';
 		}
-		let modelLineNumber = modelPosition.lineNumber;
+		const modelLineNumber = modelPosition.lineNumber;
 
 		if (this._renderCustomLineNumbers) {
 			return this._renderCustomLineNumbers(modelLineNumber);
 		}
 
 		if (this._renderLineNumbers === RenderLineNumbersType.Relative) {
-			let diff = Math.abs(this._lastCursorModelPosition.lineNumber - modelLineNumber);
+			const diff = Math.abs(this._lastCursorModelPosition.lineNumber - modelLineNumber);
 			if (diff === 0) {
 				return '<span class="relative-current-line-number">' + modelLineNumber + '</span>';
 			}
@@ -117,6 +132,10 @@ export class LineNumbersOverlay extends DynamicViewOverlay {
 				return String(modelLineNumber);
 			}
 			if (modelLineNumber % 10 === 0) {
+				return String(modelLineNumber);
+			}
+			const finalLineNumber = this._context.viewModel.getLineCount();
+			if (modelLineNumber === finalLineNumber) {
 				return String(modelLineNumber);
 			}
 			return '';
@@ -131,26 +150,56 @@ export class LineNumbersOverlay extends DynamicViewOverlay {
 			return;
 		}
 
-		let lineHeightClassName = (platform.isLinux ? (this._lineHeight % 2 === 0 ? ' lh-even' : ' lh-odd') : '');
-		let visibleStartLineNumber = ctx.visibleRange.startLineNumber;
-		let visibleEndLineNumber = ctx.visibleRange.endLineNumber;
-		let common = '<div class="' + LineNumbersOverlay.CLASS_NAME + lineHeightClassName + '" style="left:' + this._lineNumbersLeft.toString() + 'px;width:' + this._lineNumbersWidth.toString() + 'px;">';
+		const lineHeightClassName = (platform.isLinux ? (this._lineHeight % 2 === 0 ? ' lh-even' : ' lh-odd') : '');
+		const visibleStartLineNumber = ctx.visibleRange.startLineNumber;
+		const visibleEndLineNumber = ctx.visibleRange.endLineNumber;
 
-		let output: string[] = [];
+		const lineNoDecorations = this._context.viewModel.getDecorationsInViewport(ctx.visibleRange).filter(d => !!d.options.lineNumberClassName);
+		lineNoDecorations.sort((a, b) => Range.compareRangesUsingEnds(a.range, b.range));
+		let decorationStartIndex = 0;
+
+		const lineCount = this._context.viewModel.getLineCount();
+		const output: string[] = [];
 		for (let lineNumber = visibleStartLineNumber; lineNumber <= visibleEndLineNumber; lineNumber++) {
-			let lineIndex = lineNumber - visibleStartLineNumber;
+			const lineIndex = lineNumber - visibleStartLineNumber;
+			const modelLineNumber: number = this._context.viewModel.coordinatesConverter.convertViewPositionToModelPosition(new Position(lineNumber, 1)).lineNumber;
 
 			let renderLineNumber = this._getLineRenderLineNumber(lineNumber);
+			let extraClassNames = '';
 
-			if (renderLineNumber) {
-				output[lineIndex] = (
-					common
-					+ renderLineNumber
-					+ '</div>'
-				);
-			} else {
-				output[lineIndex] = '';
+			// skip decorations whose end positions we've already passed
+			while (decorationStartIndex < lineNoDecorations.length && lineNoDecorations[decorationStartIndex].range.endLineNumber < lineNumber) {
+				decorationStartIndex++;
 			}
+			for (let i = decorationStartIndex; i < lineNoDecorations.length; i++) {
+				const { range, options } = lineNoDecorations[i];
+				if (range.startLineNumber <= lineNumber) {
+					extraClassNames += ' ' + options.lineNumberClassName;
+				}
+			}
+
+			if (!renderLineNumber && !extraClassNames) {
+				output[lineIndex] = '';
+				continue;
+			}
+
+			if (lineNumber === lineCount && this._context.viewModel.getLineLength(lineNumber) === 0) {
+				// this is the last line
+				if (this._renderFinalNewline === 'off') {
+					renderLineNumber = '';
+				}
+				if (this._renderFinalNewline === 'dimmed') {
+					extraClassNames += ' dimmed-line-number';
+				}
+			}
+			if (modelLineNumber === this._activeModelLineNumber) {
+				extraClassNames += ' active-line-number';
+			}
+
+
+			output[lineIndex] = (
+				`<div class="${LineNumbersOverlay.CLASS_NAME}${lineHeightClassName}${extraClassNames}" style="left:${this._lineNumbersLeft}px;width:${this._lineNumbersWidth}px;">${renderLineNumber}</div>`
+			);
 		}
 
 		this._renderResult = output;
@@ -160,19 +209,20 @@ export class LineNumbersOverlay extends DynamicViewOverlay {
 		if (!this._renderResult) {
 			return '';
 		}
-		let lineIndex = lineNumber - startLineNumber;
+		const lineIndex = lineNumber - startLineNumber;
 		if (lineIndex < 0 || lineIndex >= this._renderResult.length) {
-			throw new Error('Unexpected render request');
+			return '';
 		}
 		return this._renderResult[lineIndex];
 	}
 }
 
-// theming
-
 registerThemingParticipant((theme, collector) => {
-	let lineNumbers = theme.getColor(editorLineNumbers);
-	if (lineNumbers) {
-		collector.addRule(`.monaco-editor .line-numbers { color: ${lineNumbers}; }`);
+	const editorLineNumbersColor = theme.getColor(editorLineNumbers);
+	const editorDimmedLineNumberColor = theme.getColor(editorDimmedLineNumber);
+	if (editorDimmedLineNumberColor) {
+		collector.addRule(`.monaco-editor .line-numbers.dimmed-line-number { color: ${editorDimmedLineNumberColor}; }`);
+	} else if (editorLineNumbersColor) {
+		collector.addRule(`.monaco-editor .line-numbers.dimmed-line-number { color: ${editorLineNumbersColor.transparent(0.4)}; }`);
 	}
 });

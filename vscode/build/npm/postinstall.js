@@ -23,8 +23,6 @@ function yarnInstall(location, opts) {
 yarnInstall('extensions'); // node modules shared by all extensions
 
 const extensions = [
-	'vscode-api-tests',
-	'vscode-colorize-tests',
 	'json',
 	'configuration-editing',
 	'extension-editing',

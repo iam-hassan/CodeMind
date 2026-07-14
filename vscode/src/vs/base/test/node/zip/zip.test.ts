@@ -3,27 +3,32 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
-import * as assert from 'assert';
-import * as path from 'path';
-import * as os from 'os';
-import URI from 'vs/base/common/uri';
-import { extract } from 'vs/base/node/zip';
-import { generateUuid } from 'vs/base/common/uuid';
-import { rimraf, exists } from 'vs/base/node/pfs';
-
-const fixtures = URI.parse(require.toUrl('./fixtures')).fsPath;
+import * as fs from 'fs';
+import assert from 'assert';
+import { tmpdir } from 'os';
+import { createCancelablePromise } from '../../../common/async.js';
+import { FileAccess } from '../../../common/network.js';
+import * as path from '../../../common/path.js';
+import { Promises } from '../../../node/pfs.js';
+import { extract } from '../../../node/zip.js';
+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../common/utils.js';
+import { getRandomTestPath } from '../testUtils.js';
 
 suite('Zip', () => {
 
-	test('extract should handle directories', () => {
-		const fixture = path.join(fixtures, 'extract.zip');
-		const target = path.join(os.tmpdir(), generateUuid());
+	ensureNoDisposablesAreLeakedInTestSuite();
 
-		return extract(fixture, target)
-			.then(() => exists(path.join(target, 'extension')))
-			.then(exists => assert(exists))
-			.then(() => rimraf(target));
+	test('extract should handle directories', async () => {
+		const testDir = getRandomTestPath(tmpdir(), 'vsctests', 'zip');
+		await fs.promises.mkdir(testDir, { recursive: true });
+
+		const fixtures = FileAccess.asFileUri('vs/base/test/node/zip/fixtures').fsPath;
+		const fixture = path.join(fixtures, 'extract.zip');
+
+		await createCancelablePromise(token => extract(fixture, testDir, {}, token));
+		const doesExist = await Promises.exists(path.join(testDir, 'extension'));
+		assert(doesExist);
+
+		await Promises.rm(testDir);
 	});
 });

@@ -2,177 +2,293 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import { ServiceCollection } from 'vs/platform/instantiation/common/serviceCollection';
-import { InstantiationService } from 'vs/platform/instantiation/common/instantiationService';
-import { IContextKeyService, IContextKeyServiceTarget } from 'vs/platform/contextkey/common/contextkey';
-import { MockContextKeyService } from 'vs/platform/keybinding/test/common/mockKeybindingService';
-import { CommonCodeEditor } from 'vs/editor/common/commonCodeEditor';
-import { CommonEditorConfiguration } from 'vs/editor/common/config/commonEditorConfig';
-import { Cursor } from 'vs/editor/common/controller/cursor';
-import * as editorCommon from 'vs/editor/common/editorCommon';
-import * as editorBrowser from 'vs/editor/browser/editorBrowser';
-import { Model } from 'vs/editor/common/model/model';
-import { TestConfiguration } from 'vs/editor/test/common/mocks/testConfiguration';
-import * as editorOptions from 'vs/editor/common/config/editorOptions';
-import { IDisposable } from 'vs/base/common/lifecycle';
-import Event, { Emitter } from 'vs/base/common/event';
-import { IKeyboardEvent } from 'vs/base/browser/keyboardEvent';
-import { IPosition } from 'vs/editor/common/core/position';
-import { EditorExtensionsRegistry } from 'vs/editor/browser/editorExtensions';
-import { TPromise } from 'vs/base/common/winjs.base';
-import { onUnexpectedError } from 'vs/base/common/errors';
+import { DisposableStore, IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { mock } from '../../../base/test/common/mock.js';
+import { EditorConfiguration } from '../../browser/config/editorConfiguration.js';
+import { IActiveCodeEditor, ICodeEditor } from '../../browser/editorBrowser.js';
+import { ICodeEditorService } from '../../browser/services/codeEditorService.js';
+import { View } from '../../browser/view.js';
+import { CodeEditorWidget, ICodeEditorWidgetOptions } from '../../browser/widget/codeEditor/codeEditorWidget.js';
+import * as editorOptions from '../../common/config/editorOptions.js';
+import { IEditorContribution } from '../../common/editorCommon.js';
+import { ILanguageService } from '../../common/languages/language.js';
+import { ILanguageConfigurationService } from '../../common/languages/languageConfigurationRegistry.js';
+import { ITextBufferFactory, ITextModel } from '../../common/model.js';
+import { IEditorWorkerService } from '../../common/services/editorWorker.js';
+import { ILanguageFeatureDebounceService, LanguageFeatureDebounceService } from '../../common/services/languageFeatureDebounce.js';
+import { ILanguageFeaturesService } from '../../common/services/languageFeatures.js';
+import { LanguageFeaturesService } from '../../common/services/languageFeaturesService.js';
+import { LanguageService } from '../../common/services/languageService.js';
+import { IModelService } from '../../common/services/model.js';
+import { ModelService } from '../../common/services/modelService.js';
+import { ITextResourcePropertiesService } from '../../common/services/textResourceConfiguration.js';
+import { ViewModel } from '../../common/viewModel/viewModelImpl.js';
+import { TestConfiguration } from './config/testConfiguration.js';
+import { TestCodeEditorService, TestCommandService } from './editorTestServices.js';
+import { TestLanguageConfigurationService } from '../common/modes/testLanguageConfigurationService.js';
+import { TestEditorWorkerService } from '../common/services/testEditorWorkerService.js';
+import { TestTextResourcePropertiesService } from '../common/services/testTextResourcePropertiesService.js';
+import { instantiateTextModel } from '../common/testTextModel.js';
+import { AccessibilitySupport, IAccessibilityService } from '../../../platform/accessibility/common/accessibility.js';
+import { TestAccessibilityService } from '../../../platform/accessibility/test/common/testAccessibilityService.js';
+import { MenuId } from '../../../platform/actions/common/actions.js';
+import { IClipboardService } from '../../../platform/clipboard/common/clipboardService.js';
+import { TestClipboardService } from '../../../platform/clipboard/test/common/testClipboardService.js';
+import { ICommandService } from '../../../platform/commands/common/commands.js';
+import { IConfigurationService } from '../../../platform/configuration/common/configuration.js';
+import { TestConfigurationService } from '../../../platform/configuration/test/common/testConfigurationService.js';
+import { IContextKeyService, IContextKeyServiceTarget } from '../../../platform/contextkey/common/contextkey.js';
+import { IDialogService } from '../../../platform/dialogs/common/dialogs.js';
+import { TestDialogService } from '../../../platform/dialogs/test/common/testDialogService.js';
+import { IEnvironmentService } from '../../../platform/environment/common/environment.js';
+import { SyncDescriptor } from '../../../platform/instantiation/common/descriptors.js';
+import { BrandedService, IInstantiationService, ServiceIdentifier, ServicesAccessor } from '../../../platform/instantiation/common/instantiation.js';
+import { ServiceCollection } from '../../../platform/instantiation/common/serviceCollection.js';
+import { TestInstantiationService } from '../../../platform/instantiation/test/common/instantiationServiceMock.js';
+import { IKeybindingService } from '../../../platform/keybinding/common/keybinding.js';
+import { MockContextKeyService, MockKeybindingService } from '../../../platform/keybinding/test/common/mockKeybindingService.js';
+import { ILoggerService, ILogService, NullLoggerService, NullLogService } from '../../../platform/log/common/log.js';
+import { INotificationService } from '../../../platform/notification/common/notification.js';
+import { TestNotificationService } from '../../../platform/notification/test/common/testNotificationService.js';
+import { IOpenerService } from '../../../platform/opener/common/opener.js';
+import { NullOpenerService } from '../../../platform/opener/test/common/nullOpenerService.js';
+import { ITelemetryService } from '../../../platform/telemetry/common/telemetry.js';
+import { NullTelemetryServiceShape } from '../../../platform/telemetry/common/telemetryUtils.js';
+import { IThemeService } from '../../../platform/theme/common/themeService.js';
+import { TestThemeService } from '../../../platform/theme/test/common/testThemeService.js';
+import { IUndoRedoService } from '../../../platform/undoRedo/common/undoRedo.js';
+import { UndoRedoService } from '../../../platform/undoRedo/common/undoRedoService.js';
+import { ITreeSitterLibraryService } from '../../common/services/treeSitter/treeSitterLibraryService.js';
+import { TestTreeSitterLibraryService } from '../common/services/testTreeSitterLibraryService.js';
+import { IInlineCompletionsService, InlineCompletionsService } from '../../browser/services/inlineCompletionsService.js';
+import { EditorCommand } from '../../browser/editorExtensions.js';
+import { IDataChannelService, NullDataChannelService } from '../../../platform/dataChannel/common/dataChannel.js';
+import { IUserInteractionService, MockUserInteractionService } from '../../../platform/userInteraction/browser/userInteractionService.js';
 
-export class TestCodeEditor extends CommonCodeEditor implements editorBrowser.ICodeEditor {
-
-	private readonly _onMouseUp: Emitter<editorBrowser.IEditorMouseEvent> = this._register(new Emitter<editorBrowser.IEditorMouseEvent>());
-	public readonly onMouseUp: Event<editorBrowser.IEditorMouseEvent> = this._onMouseUp.event;
-
-	private readonly _onMouseDown: Emitter<editorBrowser.IEditorMouseEvent> = this._register(new Emitter<editorBrowser.IEditorMouseEvent>());
-	public readonly onMouseDown: Event<editorBrowser.IEditorMouseEvent> = this._onMouseDown.event;
-
-	private readonly _onMouseDrag: Emitter<editorBrowser.IEditorMouseEvent> = this._register(new Emitter<editorBrowser.IEditorMouseEvent>());
-	public readonly onMouseDrag: Event<editorBrowser.IEditorMouseEvent> = this._onMouseDrag.event;
-
-	private readonly _onMouseDrop: Emitter<editorBrowser.IEditorMouseEvent> = this._register(new Emitter<editorBrowser.IEditorMouseEvent>());
-	public readonly onMouseDrop: Event<editorBrowser.IEditorMouseEvent> = this._onMouseDrop.event;
-
-	private readonly _onContextMenu: Emitter<editorBrowser.IEditorMouseEvent> = this._register(new Emitter<editorBrowser.IEditorMouseEvent>());
-	public readonly onContextMenu: Event<editorBrowser.IEditorMouseEvent> = this._onContextMenu.event;
-
-	private readonly _onMouseMove: Emitter<editorBrowser.IEditorMouseEvent> = this._register(new Emitter<editorBrowser.IEditorMouseEvent>());
-	public readonly onMouseMove: Event<editorBrowser.IEditorMouseEvent> = this._onMouseMove.event;
-
-	private readonly _onMouseLeave: Emitter<editorBrowser.IEditorMouseEvent> = this._register(new Emitter<editorBrowser.IEditorMouseEvent>());
-	public readonly onMouseLeave: Event<editorBrowser.IEditorMouseEvent> = this._onMouseLeave.event;
-
-	private readonly _onKeyUp: Emitter<IKeyboardEvent> = this._register(new Emitter<IKeyboardEvent>());
-	public readonly onKeyUp: Event<IKeyboardEvent> = this._onKeyUp.event;
-
-	private readonly _onKeyDown: Emitter<IKeyboardEvent> = this._register(new Emitter<IKeyboardEvent>());
-	public readonly onKeyDown: Event<IKeyboardEvent> = this._onKeyDown.event;
-
-	private readonly _onDidScrollChange: Emitter<editorCommon.IScrollEvent> = this._register(new Emitter<editorCommon.IScrollEvent>());
-	public readonly onDidScrollChange: Event<editorCommon.IScrollEvent> = this._onDidScrollChange.event;
-
-	private readonly _onDidChangeViewZones: Emitter<void> = this._register(new Emitter<void>());
-	public readonly onDidChangeViewZones: Event<void> = this._onDidChangeViewZones.event;
-
-	public _isFocused = true;
-
-	protected _createConfiguration(options: editorOptions.IEditorOptions): CommonEditorConfiguration {
-		return new TestConfiguration(options);
-	}
-
-	public layout(dimension?: editorCommon.IDimension): void { }
-
-	public focus(): void { }
-	public isFocused(): boolean { return this._isFocused; }
-	public hasWidgetFocus(): boolean { return true; }
-
-	protected _enableEmptySelectionClipboard(): boolean { return false; }
-	protected _scheduleAtNextAnimationFrame(callback: () => void): IDisposable { throw new Error('Notimplemented'); }
-	protected _createView(): void { }
-
-	protected _registerDecorationType(key: string, options: editorCommon.IDecorationRenderOptions, parentTypeKey?: string): void { throw new Error('NotImplemented'); }
-	protected _removeDecorationType(key: string): void { throw new Error('NotImplemented'); }
-	protected _resolveDecorationOptions(typeKey: string, writable: boolean): editorCommon.IModelDecorationOptions { throw new Error('NotImplemented'); }
-
-	// --- test utils
-	getCursor(): Cursor {
-		return this.cursor;
-	}
-
-	public registerAndInstantiateContribution<T extends editorCommon.IEditorContribution>(ctor: any): T {
-		let r = <T>this._instantiationService.createInstance(ctor, this);
-		this._contributions[r.getId()] = r;
-		return r;
-	}
-
-	public dispose() {
-		super.dispose();
-		if (this.model) {
-			this.model.dispose();
-		}
-		this._contextKeyService.dispose();
-	}
-
-	protected _triggerEditorCommand(source: string, handlerId: string, payload: any): boolean {
-		const command = EditorExtensionsRegistry.getEditorCommand(handlerId);
-		if (command) {
-			payload = payload || {};
-			payload.source = source;
-			TPromise.as(command.runEditorCommand(null, this, payload)).done(null, onUnexpectedError);
-			return true;
-		}
-
-		return false;
-	}
-
-	//#region ICodeEditor
-	getDomNode(): HTMLElement { throw new Error('Not implemented'); }
-	addContentWidget(widget: editorBrowser.IContentWidget): void { throw new Error('Not implemented'); }
-	layoutContentWidget(widget: editorBrowser.IContentWidget): void { throw new Error('Not implemented'); }
-	removeContentWidget(widget: editorBrowser.IContentWidget): void { throw new Error('Not implemented'); }
-	addOverlayWidget(widget: editorBrowser.IOverlayWidget): void { throw new Error('Not implemented'); }
-	layoutOverlayWidget(widget: editorBrowser.IOverlayWidget): void { throw new Error('Not implemented'); }
-	removeOverlayWidget(widget: editorBrowser.IOverlayWidget): void { throw new Error('Not implemented'); }
-	changeViewZones(callback: (accessor: editorBrowser.IViewZoneChangeAccessor) => void): void { throw new Error('Not implemented'); }
-	getOffsetForColumn(lineNumber: number, column: number): number { throw new Error('Not implemented'); }
-	render(): void { throw new Error('Not implemented'); }
-	getTargetAtClientPoint(clientX: number, clientY: number): editorBrowser.IMouseTarget { throw new Error('Not implemented'); }
-	getScrolledVisiblePosition(position: IPosition): { top: number; left: number; height: number; } { throw new Error('Not implemented'); }
-	applyFontInfo(target: HTMLElement): void { throw new Error('Not implemented'); }
-	//#endregion ICodeEditor
+export interface ITestCodeEditor extends IActiveCodeEditor {
+	getViewModel(): ViewModel | undefined;
+	registerAndInstantiateContribution<T extends IEditorContribution, Services extends BrandedService[]>(id: string, ctor: new (editor: ICodeEditor, ...services: Services) => T): T;
+	registerDisposable(disposable: IDisposable): void;
+	runCommand(command: ITestEditorCommand, args?: any): void | Promise<void>;
+	runAction(action: ITestEditorAction, args?: any): void | Promise<void>;
 }
 
-export class MockScopeLocation implements IContextKeyServiceTarget {
-	parentElement: IContextKeyServiceTarget = null;
+export interface ITestEditorCommand {
+	runEditorCommand(accessor: ServicesAccessor, editor: ICodeEditor, args?: any): void | Promise<void>;
+}
+
+export interface ITestEditorAction {
+	run(accessor: ServicesAccessor, editor: ICodeEditor, args?: any): void | Promise<void>;
+}
+
+export class TestCodeEditor extends CodeEditorWidget implements ICodeEditor {
+
+	//#region testing overrides
+	protected override _createConfiguration(isSimpleWidget: boolean, contextMenuId: MenuId, options: Readonly<TestCodeEditorCreationOptions>): EditorConfiguration {
+		return new TestConfiguration(options);
+	}
+	protected override _createView(viewModel: ViewModel): [View, boolean] {
+		// Never create a view
+		return [null! as View, false];
+	}
+	private _hasTextFocus = false;
+	public setHasTextFocus(hasTextFocus: boolean): void {
+		this._hasTextFocus = hasTextFocus;
+	}
+	public override hasTextFocus(): boolean {
+		return this._hasTextFocus;
+	}
+	//#endregion
+
+	//#region Testing utils
+	public getViewModel(): ViewModel | undefined {
+		return this._modelData ? this._modelData.viewModel : undefined;
+	}
+	public registerAndInstantiateContribution<T extends IEditorContribution>(id: string, ctor: new (editor: ICodeEditor, ...services: BrandedService[]) => T): T {
+		const r: T = this._instantiationService.createInstance(ctor, this);
+		this._contributions.set(id, r);
+		return r;
+	}
+	public registerDisposable(disposable: IDisposable): void {
+		this._register(disposable);
+	}
+	public runCommand(command: EditorCommand, args?: any): void | Promise<void> {
+		return this._instantiationService.invokeFunction((accessor) => {
+			return command.runEditorCommand(accessor, this, args);
+		});
+	}
+	public runAction(action: ITestEditorAction, args?: any): void | Promise<void> {
+		return this._instantiationService.invokeFunction((accessor) => {
+			return action.run(accessor, this, args);
+		});
+	}
+}
+
+class TestEditorDomElement {
+	parentElement: IContextKeyServiceTarget | null = null;
+	ownerDocument = document;
+	document = document;
 	setAttribute(attr: string, value: string): void { }
 	removeAttribute(attr: string): void { }
 	hasAttribute(attr: string): boolean { return false; }
-	getAttribute(attr: string): string { return undefined; }
+	getAttribute(attr: string): string | undefined { return undefined; }
+	addEventListener(event: string): void { }
+	removeEventListener(event: string): void { }
 }
 
 export interface TestCodeEditorCreationOptions extends editorOptions.IEditorOptions {
 	/**
-	 * The initial model associated with this code editor.
+	 * If the editor has text focus.
+	 * Defaults to true.
 	 */
-	model?: editorCommon.IModel;
+	hasTextFocus?: boolean;
+	/**
+	 * Env configuration
+	 */
+	envConfig?: ITestEnvConfiguration;
+}
+
+export interface TestCodeEditorInstantiationOptions extends TestCodeEditorCreationOptions {
+	/**
+	 * Services to use.
+	 */
 	serviceCollection?: ServiceCollection;
 }
 
-export function withTestCodeEditor(text: string[], options: TestCodeEditorCreationOptions, callback: (editor: TestCodeEditor, cursor: Cursor) => void): void {
-	// create a model if necessary and remember it in order to dispose it.
-	let modelToDispose: Model = null;
-	if (!options.model) {
-		modelToDispose = Model.createFromString(text.join('\n'));
-		options.model = modelToDispose;
-	}
-
-	let editor = <TestCodeEditor>_createTestCodeEditor(options);
-	callback(editor, editor.getCursor());
-
-	if (modelToDispose) {
-		modelToDispose.dispose();
-	}
-	editor.dispose();
+export interface ITestEnvConfiguration {
+	extraEditorClassName?: string;
+	outerWidth?: number;
+	outerHeight?: number;
+	emptySelectionClipboard?: boolean;
+	pixelRatio?: number;
+	accessibilitySupport?: AccessibilitySupport;
 }
 
-export function createTestCodeEditor(model: editorCommon.IModel): TestCodeEditor {
-	return _createTestCodeEditor({ model: model });
+export function withTestCodeEditor(text: ITextModel | string | string[] | ITextBufferFactory, options: TestCodeEditorInstantiationOptions, callback: (editor: ITestCodeEditor, viewModel: ViewModel, instantiationService: TestInstantiationService) => void): void {
+	return _withTestCodeEditor(text, options, callback);
 }
 
-function _createTestCodeEditor(options: TestCodeEditorCreationOptions): TestCodeEditor {
+export async function withAsyncTestCodeEditor(text: ITextModel | string | string[] | ITextBufferFactory, options: TestCodeEditorInstantiationOptions, callback: (editor: ITestCodeEditor, viewModel: ViewModel, instantiationService: TestInstantiationService) => Promise<void>): Promise<void> {
+	return _withTestCodeEditor(text, options, callback);
+}
 
-	let contextKeyService = new MockContextKeyService();
+function isTextModel(arg: ITextModel | string | string[] | ITextBufferFactory): arg is ITextModel {
+	return Boolean(arg && (arg as ITextModel).uri);
+}
 
-	let services = options.serviceCollection || new ServiceCollection();
-	services.set(IContextKeyService, contextKeyService);
-	let instantiationService = new InstantiationService(services);
+function _withTestCodeEditor(arg: ITextModel | string | string[] | ITextBufferFactory, options: TestCodeEditorInstantiationOptions, callback: (editor: ITestCodeEditor, viewModel: ViewModel, instantiationService: TestInstantiationService) => void): void;
+function _withTestCodeEditor(arg: ITextModel | string | string[] | ITextBufferFactory, options: TestCodeEditorInstantiationOptions, callback: (editor: ITestCodeEditor, viewModel: ViewModel, instantiationService: TestInstantiationService) => Promise<void>): Promise<void>;
+function _withTestCodeEditor(arg: ITextModel | string | string[] | ITextBufferFactory, options: TestCodeEditorInstantiationOptions, callback: (editor: ITestCodeEditor, viewModel: ViewModel, instantiationService: TestInstantiationService) => Promise<void> | void): Promise<void> | void {
+	const disposables = new DisposableStore();
+	const instantiationService = createCodeEditorServices(disposables, options.serviceCollection);
+	delete options.serviceCollection;
 
-	let editor = new TestCodeEditor(new MockScopeLocation(), options, instantiationService, contextKeyService);
-	editor.setModel(options.model);
+	// create a model if necessary
+	let model: ITextModel;
+	if (isTextModel(arg)) {
+		model = arg;
+	} else {
+		model = disposables.add(instantiateTextModel(instantiationService, Array.isArray(arg) ? arg.join('\n') : arg));
+	}
+
+	const editor = disposables.add(instantiateTestCodeEditor(instantiationService, model, options));
+	const viewModel = editor.getViewModel()!;
+	viewModel.setHasFocus(true);
+	const result = callback(editor, editor.getViewModel()!, instantiationService);
+	if (result) {
+		return result.then(() => disposables.dispose());
+	}
+
+	disposables.dispose();
+}
+
+export function createCodeEditorServices(disposables: Pick<DisposableStore, 'add'>, services: ServiceCollection = new ServiceCollection()): TestInstantiationService {
+	const serviceIdentifiers: ServiceIdentifier<any>[] = [];
+	const define = <T>(id: ServiceIdentifier<T>, ctor: new (...args: any[]) => T) => {
+		if (!services.has(id)) {
+			services.set(id, new SyncDescriptor(ctor));
+		}
+		serviceIdentifiers.push(id);
+	};
+	const defineInstance = <T>(id: ServiceIdentifier<T>, instance: T) => {
+		if (!services.has(id)) {
+			services.set(id, instance);
+		}
+		serviceIdentifiers.push(id);
+	};
+
+	define(IAccessibilityService, TestAccessibilityService);
+	define(IKeybindingService, MockKeybindingService);
+	define(IClipboardService, TestClipboardService);
+	define(IEditorWorkerService, TestEditorWorkerService);
+	defineInstance(IOpenerService, NullOpenerService);
+	define(INotificationService, TestNotificationService);
+	define(IDialogService, TestDialogService);
+	define(IUndoRedoService, UndoRedoService);
+	define(ILanguageService, LanguageService);
+	define(ILanguageConfigurationService, TestLanguageConfigurationService);
+	define(IConfigurationService, TestConfigurationService);
+	define(ITextResourcePropertiesService, TestTextResourcePropertiesService);
+	define(IThemeService, TestThemeService);
+	define(ILogService, NullLogService);
+	define(IModelService, ModelService);
+	define(ICodeEditorService, TestCodeEditorService);
+	define(IContextKeyService, MockContextKeyService);
+	define(ICommandService, TestCommandService);
+	define(ITelemetryService, NullTelemetryServiceShape);
+	define(ILoggerService, NullLoggerService);
+	define(IDataChannelService, NullDataChannelService);
+	define(IEnvironmentService, class extends mock<IEnvironmentService>() {
+		declare readonly _serviceBrand: undefined;
+		override isBuilt: boolean = true;
+		override isExtensionDevelopment: boolean = false;
+	});
+	define(ILanguageFeatureDebounceService, LanguageFeatureDebounceService);
+	define(ILanguageFeaturesService, LanguageFeaturesService);
+	define(ITreeSitterLibraryService, TestTreeSitterLibraryService);
+	define(IInlineCompletionsService, InlineCompletionsService);
+	define(IUserInteractionService, MockUserInteractionService);
+
+	const instantiationService = disposables.add(new TestInstantiationService(services, true));
+	disposables.add(toDisposable(() => {
+		for (const id of serviceIdentifiers) {
+			const instanceOrDescriptor = services.get(id);
+			if (typeof instanceOrDescriptor.dispose === 'function') {
+				instanceOrDescriptor.dispose();
+			}
+		}
+	}));
+	return instantiationService;
+}
+
+export function createTestCodeEditor(model: ITextModel | undefined, options: TestCodeEditorInstantiationOptions = {}): ITestCodeEditor {
+	const disposables = new DisposableStore();
+	const instantiationService = createCodeEditorServices(disposables, options.serviceCollection);
+	delete options.serviceCollection;
+
+	const editor = instantiateTestCodeEditor(instantiationService, model || null, options);
+	editor.registerDisposable(disposables);
 	return editor;
+}
+
+export function instantiateTestCodeEditor(instantiationService: IInstantiationService, model: ITextModel | null, options: TestCodeEditorCreationOptions = {}): ITestCodeEditor {
+	const codeEditorWidgetOptions: ICodeEditorWidgetOptions = {
+		contributions: []
+	};
+	const editor = instantiationService.createInstance(
+		TestCodeEditor,
+		// eslint-disable-next-line local/code-no-any-casts
+		<HTMLElement><any>new TestEditorDomElement(),
+		options,
+		codeEditorWidgetOptions
+	);
+	if (typeof options.hasTextFocus === 'undefined') {
+		options.hasTextFocus = true;
+	}
+	editor.setHasTextFocus(options.hasTextFocus);
+	editor.setModel(model);
+	const viewModel = editor.getViewModel();
+	viewModel?.setHasFocus(options.hasTextFocus);
+	return <ITestCodeEditor>editor;
 }

@@ -3,547 +3,36 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
-import * as assert from 'assert';
-import { Range } from 'vs/editor/common/core/range';
-import { EndOfLineSequence, IIdentifiedSingleEditOperation } from 'vs/editor/common/editorCommon';
-import { EditableTextModel, IValidatedEditOperation } from 'vs/editor/common/model/editableTextModel';
-import { MirrorModel } from 'vs/editor/common/model/mirrorModel';
-import { assertSyncedModels, testApplyEditsWithSyncedModels } from 'vs/editor/test/common/model/editableTextModelTestUtils';
-import { IModelContentChangedEvent } from 'vs/editor/common/model/textModelEvents';
-import { TextModel } from 'vs/editor/common/model/textModel';
-import { RawTextSource } from 'vs/editor/common/model/textSource';
-
-function createEditableTextModelFromString(text: string): EditableTextModel {
-	return new EditableTextModel(RawTextSource.fromString(text), TextModel.DEFAULT_CREATION_OPTIONS, null);
-}
-
-suite('EditorModel - EditableTextModel._getInverseEdits', () => {
-
-	function editOp(startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number, text: string[]): IValidatedEditOperation {
-		return {
-			sortIndex: 0,
-			identifier: null,
-			range: new Range(startLineNumber, startColumn, endLineNumber, endColumn),
-			rangeOffset: 0,
-			rangeLength: 0,
-			lines: text,
-			forceMoveMarkers: false,
-			isAutoWhitespaceEdit: false
-		};
-	}
-
-	function inverseEditOp(startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number): Range {
-		return new Range(startLineNumber, startColumn, endLineNumber, endColumn);
-	}
-
-	function assertInverseEdits(ops: IValidatedEditOperation[], expected: Range[]): void {
-		var actual = EditableTextModel._getInverseEditRanges(ops);
-		assert.deepEqual(actual, expected);
-	}
-
-	test('single insert', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 1, 1, ['hello'])
-			],
-			[
-				inverseEditOp(1, 1, 1, 6)
-			]
-		);
-	});
-
-	test('Bug 19872: Undo is funky', () => {
-		assertInverseEdits(
-			[
-				editOp(2, 1, 2, 2, ['']),
-				editOp(3, 1, 4, 2, [''])
-			],
-			[
-				inverseEditOp(2, 1, 2, 1),
-				inverseEditOp(3, 1, 3, 1)
-			]
-		);
-	});
-
-	test('two single unrelated inserts', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 1, 1, ['hello']),
-				editOp(2, 1, 2, 1, ['world'])
-			],
-			[
-				inverseEditOp(1, 1, 1, 6),
-				inverseEditOp(2, 1, 2, 6)
-			]
-		);
-	});
-
-	test('two single inserts 1', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 1, 1, ['hello']),
-				editOp(1, 2, 1, 2, ['world'])
-			],
-			[
-				inverseEditOp(1, 1, 1, 6),
-				inverseEditOp(1, 7, 1, 12)
-			]
-		);
-	});
-
-	test('two single inserts 2', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 1, 1, ['hello']),
-				editOp(1, 4, 1, 4, ['world'])
-			],
-			[
-				inverseEditOp(1, 1, 1, 6),
-				inverseEditOp(1, 9, 1, 14)
-			]
-		);
-	});
-
-	test('multiline insert', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 1, 1, ['hello', 'world'])
-			],
-			[
-				inverseEditOp(1, 1, 2, 6)
-			]
-		);
-	});
-
-	test('two unrelated multiline inserts', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 1, 1, ['hello', 'world']),
-				editOp(2, 1, 2, 1, ['how', 'are', 'you?']),
-			],
-			[
-				inverseEditOp(1, 1, 2, 6),
-				inverseEditOp(3, 1, 5, 5),
-			]
-		);
-	});
-
-	test('two multiline inserts 1', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 1, 1, ['hello', 'world']),
-				editOp(1, 2, 1, 2, ['how', 'are', 'you?']),
-			],
-			[
-				inverseEditOp(1, 1, 2, 6),
-				inverseEditOp(2, 7, 4, 5),
-			]
-		);
-	});
-
-	test('single delete', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 1, 6, null)
-			],
-			[
-				inverseEditOp(1, 1, 1, 1)
-			]
-		);
-	});
-
-	test('two single unrelated deletes', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 1, 6, null),
-				editOp(2, 1, 2, 6, null)
-			],
-			[
-				inverseEditOp(1, 1, 1, 1),
-				inverseEditOp(2, 1, 2, 1)
-			]
-		);
-	});
-
-	test('two single deletes 1', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 1, 6, null),
-				editOp(1, 7, 1, 12, null)
-			],
-			[
-				inverseEditOp(1, 1, 1, 1),
-				inverseEditOp(1, 2, 1, 2)
-			]
-		);
-	});
-
-	test('two single deletes 2', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 1, 6, null),
-				editOp(1, 9, 1, 14, null)
-			],
-			[
-				inverseEditOp(1, 1, 1, 1),
-				inverseEditOp(1, 4, 1, 4)
-			]
-		);
-	});
-
-	test('multiline delete', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 2, 6, null)
-			],
-			[
-				inverseEditOp(1, 1, 1, 1)
-			]
-		);
-	});
-
-	test('two unrelated multiline deletes', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 2, 6, null),
-				editOp(3, 1, 5, 5, null),
-			],
-			[
-				inverseEditOp(1, 1, 1, 1),
-				inverseEditOp(2, 1, 2, 1),
-			]
-		);
-	});
-
-	test('two multiline deletes 1', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 2, 6, null),
-				editOp(2, 7, 4, 5, null),
-			],
-			[
-				inverseEditOp(1, 1, 1, 1),
-				inverseEditOp(1, 2, 1, 2),
-			]
-		);
-	});
-
-	test('single replace', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 1, 6, ['Hello world'])
-			],
-			[
-				inverseEditOp(1, 1, 1, 12)
-			]
-		);
-	});
-
-	test('two replaces', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 1, 1, 6, ['Hello world']),
-				editOp(1, 7, 1, 8, ['How are you?']),
-			],
-			[
-				inverseEditOp(1, 1, 1, 12),
-				inverseEditOp(1, 13, 1, 25)
-			]
-		);
-	});
-
-	test('many edits', () => {
-		assertInverseEdits(
-			[
-				editOp(1, 2, 1, 2, ['', '  ']),
-				editOp(1, 5, 1, 6, ['']),
-				editOp(1, 9, 1, 9, ['', ''])
-			],
-			[
-				inverseEditOp(1, 2, 2, 3),
-				inverseEditOp(2, 6, 2, 6),
-				inverseEditOp(2, 9, 3, 1)
-			]
-		);
-	});
-});
-
-suite('EditorModel - EditableTextModel._toSingleEditOperation', () => {
-
-	function editOp(startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number, rangeOffset: number, rangeLength: number, text: string[]): IValidatedEditOperation {
-		return {
-			sortIndex: 0,
-			identifier: null,
-			range: new Range(startLineNumber, startColumn, endLineNumber, endColumn),
-			rangeOffset: rangeOffset,
-			rangeLength: rangeLength,
-			lines: text,
-			forceMoveMarkers: false,
-			isAutoWhitespaceEdit: false
-		};
-	}
-
-	function testSimpleApplyEdits(original: string[], edits: IValidatedEditOperation[], expected: IValidatedEditOperation): void {
-		let model = createEditableTextModelFromString(original.join('\n'));
-		model.setEOL(EndOfLineSequence.LF);
-
-		let actual = model._toSingleEditOperation(edits);
-		assert.deepEqual(actual, expected);
-
-		model.dispose();
-	}
-
-	test('one edit op is unchanged', () => {
-		testSimpleApplyEdits(
-			[
-				'My First Line',
-				'\t\tMy Second Line',
-				'    Third Line',
-				'',
-				'1'
-			],
-			[
-				editOp(1, 3, 1, 3, 2, 0, [' new line', 'No longer'])
-			],
-			editOp(1, 3, 1, 3, 2, 0, [' new line', 'No longer'])
-		);
-	});
-
-	test('two edits on one line', () => {
-		testSimpleApplyEdits([
-			'My First Line',
-			'\t\tMy Second Line',
-			'    Third Line',
-			'',
-			'1'
-		], [
-				editOp(1, 1, 1, 3, 0, 2, ['Your']),
-				editOp(1, 4, 1, 4, 3, 0, ['Interesting ']),
-				editOp(2, 3, 2, 6, 16, 3, null)
-			],
-			editOp(1, 1, 2, 6, 0, 19, [
-				'Your Interesting First Line',
-				'\t\t'
-			]));
-	});
-
-	test('insert multiple newlines', () => {
-		testSimpleApplyEdits(
-			[
-				'My First Line',
-				'\t\tMy Second Line',
-				'    Third Line',
-				'',
-				'1'
-			],
-			[
-				editOp(1, 3, 1, 3, 2, 0, ['', '', '', '', '']),
-				editOp(3, 15, 3, 15, 45, 0, ['a', 'b'])
-			],
-			editOp(1, 3, 3, 15, 2, 43, [
-				'',
-				'',
-				'',
-				'',
-				' First Line',
-				'\t\tMy Second Line',
-				'    Third Linea',
-				'b'
-			])
-		);
-	});
-
-	test('delete empty text', () => {
-		testSimpleApplyEdits(
-			[
-				'My First Line',
-				'\t\tMy Second Line',
-				'    Third Line',
-				'',
-				'1'
-			],
-			[
-				editOp(1, 1, 1, 1, 0, 0, [''])
-			],
-			editOp(1, 1, 1, 1, 0, 0, [''])
-		);
-	});
-
-	test('two unrelated edits', () => {
-		testSimpleApplyEdits(
-			[
-				'My First Line',
-				'\t\tMy Second Line',
-				'    Third Line',
-				'',
-				'123'
-			],
-			[
-				editOp(2, 1, 2, 3, 14, 2, ['\t']),
-				editOp(3, 1, 3, 5, 31, 4, [''])
-			],
-			editOp(2, 1, 3, 5, 14, 21, ['\tMy Second Line', ''])
-		);
-	});
-
-	test('many edits', () => {
-		testSimpleApplyEdits(
-			[
-				'{"x" : 1}'
-			],
-			[
-				editOp(1, 2, 1, 2, 1, 0, ['\n  ']),
-				editOp(1, 5, 1, 6, 4, 1, ['']),
-				editOp(1, 9, 1, 9, 8, 0, ['\n'])
-			],
-			editOp(1, 2, 1, 9, 1, 7, [
-				'',
-				'  "x": 1',
-				''
-			])
-		);
-	});
-
-	test('many edits reversed', () => {
-		testSimpleApplyEdits(
-			[
-				'{',
-				'  "x": 1',
-				'}'
-			],
-			[
-				editOp(1, 2, 2, 3, 1, 3, ['']),
-				editOp(2, 6, 2, 6, 7, 0, [' ']),
-				editOp(2, 9, 3, 1, 10, 1, [''])
-			],
-			editOp(1, 2, 3, 1, 1, 10, ['"x" : 1'])
-		);
-	});
-
-	test('replacing newlines 1', () => {
-		testSimpleApplyEdits(
-			[
-				'{',
-				'"a": true,',
-				'',
-				'"b": true',
-				'}'
-			],
-			[
-				editOp(1, 2, 2, 1, 1, 1, ['', '\t']),
-				editOp(2, 11, 4, 1, 12, 2, ['', '\t'])
-			],
-			editOp(1, 2, 4, 1, 1, 13, [
-				'',
-				'\t"a": true,',
-				'\t'
-			])
-		);
-	});
-
-	test('replacing newlines 2', () => {
-		testSimpleApplyEdits(
-			[
-				'some text',
-				'some more text',
-				'now comes an empty line',
-				'',
-				'after empty line',
-				'and the last line'
-			],
-			[
-				editOp(1, 5, 3, 1, 4, 21, [' text', 'some more text', 'some more text']),
-				editOp(3, 2, 4, 1, 26, 23, ['o more lines', 'asd', 'asd', 'asd']),
-				editOp(5, 1, 5, 6, 50, 5, ['zzzzzzzz']),
-				editOp(5, 11, 6, 16, 60, 22, ['1', '2', '3', '4'])
-			],
-			editOp(1, 5, 6, 16, 4, 78, [
-				' text',
-				'some more text',
-				'some more textno more lines',
-				'asd',
-				'asd',
-				'asd',
-				'zzzzzzzz empt1',
-				'2',
-				'3',
-				'4'
-			])
-		);
-	});
-
-	test('advanced', () => {
-		testSimpleApplyEdits(
-			[
-				' {       "d": [',
-				'             null',
-				'        ] /*comment*/',
-				'        ,"e": /*comment*/ [null] }',
-			],
-			[
-				editOp(1, 1, 1, 2, 0, 1, ['']),
-				editOp(1, 3, 1, 10, 2, 7, ['', '  ']),
-				editOp(1, 16, 2, 14, 15, 14, ['', '    ']),
-				editOp(2, 18, 3, 9, 33, 9, ['', '  ']),
-				editOp(3, 22, 4, 9, 55, 9, ['']),
-				editOp(4, 10, 4, 10, 65, 0, ['', '  ']),
-				editOp(4, 28, 4, 28, 83, 0, ['', '    ']),
-				editOp(4, 32, 4, 32, 87, 0, ['', '  ']),
-				editOp(4, 33, 4, 34, 88, 1, ['', ''])
-			],
-			editOp(1, 1, 4, 34, 0, 89, [
-				'{',
-				'  "d": [',
-				'    null',
-				'  ] /*comment*/,',
-				'  "e": /*comment*/ [',
-				'    null',
-				'  ]',
-				''
-			])
-		);
-	});
-
-	test('advanced simplified', () => {
-		testSimpleApplyEdits(
-			[
-				'   abc',
-				' ,def'
-			],
-			[
-				editOp(1, 1, 1, 4, 0, 3, ['']),
-				editOp(1, 7, 2, 2, 6, 2, ['']),
-				editOp(2, 3, 2, 3, 9, 0, ['', ''])
-			],
-			editOp(1, 1, 2, 3, 0, 9, [
-				'abc,',
-				''
-			])
-		);
-	});
-});
+import assert from 'assert';
+import { IDisposable } from '../../../../base/common/lifecycle.js';
+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
+import { ISingleEditOperation } from '../../../common/core/editOperation.js';
+import { Range } from '../../../common/core/range.js';
+import { EndOfLinePreference, EndOfLineSequence } from '../../../common/model.js';
+import { MirrorTextModel } from '../../../common/model/mirrorTextModel.js';
+import { IModelContentChangedEvent } from '../../../common/textModelEvents.js';
+import { assertSyncedModels, testApplyEditsWithSyncedModels } from './editableTextModelTestUtils.js';
+import { createTextModel } from '../testTextModel.js';
 
 suite('EditorModel - EditableTextModel.applyEdits updates mightContainRTL', () => {
 
-	function testApplyEdits(original: string[], edits: IIdentifiedSingleEditOperation[], before: boolean, after: boolean): void {
-		let model = createEditableTextModelFromString(original.join('\n'));
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	function testApplyEdits(original: string[], edits: ISingleEditOperation[], before: boolean, after: boolean): void {
+		const model = createTextModel(original.join('\n'));
 		model.setEOL(EndOfLineSequence.LF);
 
-		assert.equal(model.mightContainRTL(), before);
+		assert.strictEqual(model.mightContainRTL(), before);
 
 		model.applyEdits(edits);
-		assert.equal(model.mightContainRTL(), after);
+		assert.strictEqual(model.mightContainRTL(), after);
 		model.dispose();
 	}
 
-	function editOp(startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number, text: string[]): IIdentifiedSingleEditOperation {
+	function editOp(startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number, text: string[]): ISingleEditOperation {
 		return {
-			identifier: null,
 			range: new Range(startLineNumber, startColumn, endLineNumber, endColumn),
-			text: text.join('\n'),
-			forceMoveMarkers: false
+			text: text.join('\n')
 		};
 	}
 
@@ -575,23 +64,23 @@ suite('EditorModel - EditableTextModel.applyEdits updates mightContainRTL', () =
 
 suite('EditorModel - EditableTextModel.applyEdits updates mightContainNonBasicASCII', () => {
 
-	function testApplyEdits(original: string[], edits: IIdentifiedSingleEditOperation[], before: boolean, after: boolean): void {
-		let model = createEditableTextModelFromString(original.join('\n'));
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	function testApplyEdits(original: string[], edits: ISingleEditOperation[], before: boolean, after: boolean): void {
+		const model = createTextModel(original.join('\n'));
 		model.setEOL(EndOfLineSequence.LF);
 
-		assert.equal(model.mightContainNonBasicASCII(), before);
+		assert.strictEqual(model.mightContainNonBasicASCII(), before);
 
 		model.applyEdits(edits);
-		assert.equal(model.mightContainNonBasicASCII(), after);
+		assert.strictEqual(model.mightContainNonBasicASCII(), after);
 		model.dispose();
 	}
 
-	function editOp(startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number, text: string[]): IIdentifiedSingleEditOperation {
+	function editOp(startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number, text: string[]): ISingleEditOperation {
 		return {
-			identifier: null,
 			range: new Range(startLineNumber, startColumn, endLineNumber, endColumn),
-			text: text.join('\n'),
-			forceMoveMarkers: false
+			text: text.join('\n')
 		};
 	}
 
@@ -619,9 +108,10 @@ suite('EditorModel - EditableTextModel.applyEdits updates mightContainNonBasicAS
 
 suite('EditorModel - EditableTextModel.applyEdits', () => {
 
-	function editOp(startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number, text: string[]): IIdentifiedSingleEditOperation {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	function editOp(startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number, text: string[]): ISingleEditOperation {
 		return {
-			identifier: null,
 			range: new Range(startLineNumber, startColumn, endLineNumber, endColumn),
 			text: text.join('\n'),
 			forceMoveMarkers: false
@@ -723,7 +213,7 @@ suite('EditorModel - EditableTextModel.applyEdits', () => {
 		);
 	});
 
-	test('Bug 19872: Undo is funky', () => {
+	test('Bug 19872: Undo is funky (2)', () => {
 		testApplyEditsWithSyncedModels(
 			[
 				'something',
@@ -1370,8 +860,8 @@ suite('EditorModel - EditableTextModel.applyEdits', () => {
 		);
 	});
 
-	function testApplyEditsFails(original: string[], edits: IIdentifiedSingleEditOperation[]): void {
-		let model = createEditableTextModelFromString(original.join('\n'));
+	function testApplyEditsFails(original: string[], edits: ISingleEditOperation[]): void {
+		const model = createTextModel(original.join('\n'));
 
 		let hasThrown = false;
 		try {
@@ -1499,74 +989,72 @@ suite('EditorModel - EditableTextModel.applyEdits', () => {
 	});
 
 	test('change while emitting events 1', () => {
-
+		let disposable!: IDisposable;
 		assertSyncedModels('Hello', (model, assertMirrorModels) => {
 			model.applyEdits([{
-				identifier: null,
 				range: new Range(1, 6, 1, 6),
 				text: ' world!',
-				forceMoveMarkers: false
+				// forceMoveMarkers: false
 			}]);
 
 			assertMirrorModels();
 
 		}, (model) => {
-			var isFirstTime = true;
-			model.onDidChangeRawContent(() => {
+			let isFirstTime = true;
+			disposable = model.onDidChangeContent(() => {
 				if (!isFirstTime) {
 					return;
 				}
 				isFirstTime = false;
 
 				model.applyEdits([{
-					identifier: null,
 					range: new Range(1, 13, 1, 13),
 					text: ' How are you?',
-					forceMoveMarkers: false
+					// forceMoveMarkers: false
 				}]);
 			});
 		});
+		disposable.dispose();
 	});
 
 	test('change while emitting events 2', () => {
-
+		let disposable!: IDisposable;
 		assertSyncedModels('Hello', (model, assertMirrorModels) => {
 			model.applyEdits([{
-				identifier: null,
 				range: new Range(1, 6, 1, 6),
 				text: ' world!',
-				forceMoveMarkers: false
+				// forceMoveMarkers: false
 			}]);
 
 			assertMirrorModels();
 
 		}, (model) => {
-			var isFirstTime = true;
-			model.onDidChangeContent((e: IModelContentChangedEvent) => {
+			let isFirstTime = true;
+			disposable = model.onDidChangeContent((e: IModelContentChangedEvent) => {
 				if (!isFirstTime) {
 					return;
 				}
 				isFirstTime = false;
 
 				model.applyEdits([{
-					identifier: null,
 					range: new Range(1, 13, 1, 13),
 					text: ' How are you?',
-					forceMoveMarkers: false
+					// forceMoveMarkers: false
 				}]);
 			});
 		});
+		disposable.dispose();
 	});
 
 	test('issue #1580: Changes in line endings are not correctly reflected in the extension host, leading to invalid offsets sent to external refactoring tools', () => {
-		let model = createEditableTextModelFromString('Hello\nWorld!');
-		assert.equal(model.getEOL(), '\n');
+		const model = createTextModel('Hello\nWorld!');
+		assert.strictEqual(model.getEOL(), '\n');
 
-		let mirrorModel2 = new MirrorModel(null, model.getLinesContent(), model.getEOL(), model.getVersionId());
+		const mirrorModel2 = new MirrorTextModel(null!, model.getLinesContent(), model.getEOL(), model.getVersionId());
 		let mirrorModel2PrevVersionId = model.getVersionId();
 
-		model.onDidChangeContent((e: IModelContentChangedEvent) => {
-			let versionId = e.versionId;
+		const disposable = model.onDidChangeContent((e: IModelContentChangedEvent) => {
+			const versionId = e.versionId;
 			if (versionId < mirrorModel2PrevVersionId) {
 				console.warn('Model version id did not advance between edits (2)');
 			}
@@ -1574,15 +1062,179 @@ suite('EditorModel - EditableTextModel.applyEdits', () => {
 			mirrorModel2.onEvents(e);
 		});
 
-		let assertMirrorModels = () => {
-			assert.equal(mirrorModel2.getText(), model.getValue(), 'mirror model 2 text OK');
-			assert.equal(mirrorModel2.version, model.getVersionId(), 'mirror model 2 version OK');
+		const assertMirrorModels = () => {
+			assert.strictEqual(mirrorModel2.getText(), model.getValue(), 'mirror model 2 text OK');
+			assert.strictEqual(mirrorModel2.version, model.getVersionId(), 'mirror model 2 version OK');
 		};
 
 		model.setEOL(EndOfLineSequence.CRLF);
 		assertMirrorModels();
 
+		disposable.dispose();
 		model.dispose();
 		mirrorModel2.dispose();
+	});
+
+	test('issue #47733: Undo mangles unicode characters', () => {
+		const model = createTextModel('\'👁\'');
+
+		model.applyEdits([
+			{ range: new Range(1, 1, 1, 1), text: '"' },
+			{ range: new Range(1, 2, 1, 2), text: '"' },
+		]);
+
+		assert.strictEqual(model.getValue(EndOfLinePreference.LF), '"\'"👁\'');
+
+		assert.deepStrictEqual(model.validateRange(new Range(1, 3, 1, 4)), new Range(1, 3, 1, 4));
+
+		model.applyEdits([
+			{ range: new Range(1, 1, 1, 2), text: null },
+			{ range: new Range(1, 3, 1, 4), text: null },
+		]);
+
+		assert.strictEqual(model.getValue(EndOfLinePreference.LF), '\'👁\'');
+
+		model.dispose();
+	});
+
+	test('issue #48741: Broken undo stack with move lines up with multiple cursors', () => {
+		const model = createTextModel([
+			'line1',
+			'line2',
+			'line3',
+			'',
+		].join('\n'));
+
+		const undoEdits = model.applyEdits([
+			{ range: new Range(4, 1, 4, 1), text: 'line3', },
+			{ range: new Range(3, 1, 3, 6), text: null, },
+			{ range: new Range(2, 1, 3, 1), text: null, },
+			{ range: new Range(3, 6, 3, 6), text: '\nline2' }
+		], true);
+
+		model.applyEdits(undoEdits);
+
+		assert.deepStrictEqual(model.getValue(), 'line1\nline2\nline3\n');
+
+		model.dispose();
+	});
+});
+
+suite('CRLF edit normalization', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('edit ending with \\r followed by \\n in buffer should strip trailing \\r', () => {
+		// Document: "abc\r\ndef\r\n"
+		// Edit: Replace range (1,1)-(1,4) "abc" with "xyz\r"
+		// The \r at end of replacement should be stripped since next char is \n
+		const model = createTextModel('abc\r\ndef\r\n');
+		model.setEOL(EndOfLineSequence.CRLF);
+
+		assert.strictEqual(model.getEOL(), '\r\n');
+		assert.strictEqual(model.getLineCount(), 3);
+		assert.strictEqual(model.getLineContent(1), 'abc');
+		assert.strictEqual(model.getLineContent(2), 'def');
+
+		model.applyEdits([
+			{ range: new Range(1, 1, 1, 4), text: 'xyz\r' }
+		]);
+
+		// The trailing \r should be stripped, so we get "xyz" not "xyz\r"
+		assert.strictEqual(model.getLineContent(1), 'xyz');
+		assert.strictEqual(model.getLineContent(2), 'def');
+		assert.strictEqual(model.getLineCount(), 3);
+
+		model.dispose();
+	});
+
+	test('edit ending with \\r\\n should NOT be modified', () => {
+		// Document: "abc\r\ndef\r\n"
+		// Edit: Replace range (1,1)-(1,4) "abc" with "xyz\r\n"
+		// This is a proper CRLF so should not be modified
+		const model = createTextModel('abc\r\ndef\r\n');
+		model.setEOL(EndOfLineSequence.CRLF);
+
+		model.applyEdits([
+			{ range: new Range(1, 1, 1, 4), text: 'xyz\r\n' }
+		]);
+
+		// Should add a new line
+		assert.strictEqual(model.getLineContent(1), 'xyz');
+		assert.strictEqual(model.getLineContent(2), '');
+		assert.strictEqual(model.getLineContent(3), 'def');
+		assert.strictEqual(model.getLineCount(), 4);
+
+		model.dispose();
+	});
+
+	test('edit ending with \\r NOT followed by \\n should NOT be modified', () => {
+		// Document: "abcdef" (no newline after)
+		// Edit: Replace range (1,1)-(1,4) "abc" with "xyz\r"
+		// Since there's no \n after the range, the \r should stay
+		const model = createTextModel('abcdef');
+		model.setEOL(EndOfLineSequence.CRLF);
+
+		model.applyEdits([
+			{ range: new Range(1, 1, 1, 4), text: 'xyz\r' }
+		]);
+
+		// The \r should cause a new line since buffer normalizes EOL
+		// Actually since buffer uses CRLF, the lone \r will be normalized to \r\n
+		assert.strictEqual(model.getLineCount(), 2);
+
+		model.dispose();
+	});
+
+	test('edit in LF buffer should NOT strip trailing \\r', () => {
+		// Document with LF: "abc\ndef\n"
+		// Edit: Replace range (1,1)-(1,4) "abc" with "xyz\r"
+		// Since buffer is LF, no special handling needed
+		const model = createTextModel('abc\ndef\n');
+		model.setEOL(EndOfLineSequence.LF);
+
+		assert.strictEqual(model.getEOL(), '\n');
+		assert.strictEqual(model.getLineCount(), 3);
+
+		model.applyEdits([
+			{ range: new Range(1, 1, 1, 4), text: 'xyz\r' }
+		]);
+
+		// The \r will be normalized to \n (buffer's EOL)
+		assert.strictEqual(model.getLineCount(), 4);
+
+		model.dispose();
+	});
+
+	test('LSP include sorting scenario - edit ending with \\r should be normalized', () => {
+		// This is the real-world scenario from the issue
+		// Document: "#include \"a.h\"\r\n#include \"c.h\"\r\n#include \"b.h\"\r\n"
+		// Edit: Replace lines 1-3 with reordered includes ending with \r
+		const model = createTextModel('#include "a.h"\r\n#include "c.h"\r\n#include "b.h"\r\n');
+		model.setEOL(EndOfLineSequence.CRLF);
+
+		assert.strictEqual(model.getEOL(), '\r\n');
+		assert.strictEqual(model.getLineCount(), 4);
+		assert.strictEqual(model.getLineContent(1), '#include "a.h"');
+		assert.strictEqual(model.getLineContent(2), '#include "c.h"');
+		assert.strictEqual(model.getLineContent(3), '#include "b.h"');
+
+		// Edit: replace range (1,1)-(3,16) with text ending in \r
+		// Range covers: #include "a.h"\r\n#include "c.h"\r\n#include "b.h"
+		// Note: line 3 col 16 is after the last char "h" but before the \r\n
+		model.applyEdits([
+			{
+				range: new Range(1, 1, 3, 16),
+				text: '#include "a.h"\r\n#include "b.h"\r\n#include "c.h"\r'
+			}
+		]);
+
+		// The trailing \r should be stripped because the next char after range is \n
+		assert.strictEqual(model.getLineCount(), 4);
+		assert.strictEqual(model.getLineContent(1), '#include "a.h"');
+		assert.strictEqual(model.getLineContent(2), '#include "b.h"');
+		assert.strictEqual(model.getLineContent(3), '#include "c.h"');
+		assert.strictEqual(model.getLineContent(4), '');
+
+		model.dispose();
 	});
 });

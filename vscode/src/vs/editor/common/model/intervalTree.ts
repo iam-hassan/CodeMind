@@ -2,34 +2,23 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import { ModelDecorationOptions } from 'vs/editor/common/model/textModelWithDecorations';
-import { Range } from 'vs/editor/common/core/range';
-import { IModelDecoration } from 'vs/editor/common/editorCommon';
+import { Range } from '../core/range.js';
+import { TrackedRangeStickiness, TrackedRangeStickiness as ActualTrackedRangeStickiness } from '../model.js';
+import { ModelDecorationOptions } from './textModel.js';
 
 //
 // The red-black tree is based on the "Introduction to Algorithms" by Cormen, Leiserson and Rivest.
 //
 
-/**
- * The class name sort order must match the severity order. Highest severity last.
- */
-export const ClassName = {
-	EditorInfoDecoration: 'squiggly-a-info',
-	EditorWarningDecoration: 'squiggly-b-warning',
-	EditorErrorDecoration: 'squiggly-c-error'
-};
-
-/**
- * Describes the behavior of decorations when typing/editing near their edges.
- * Note: Please do not edit the values, as they very carefully match `DecorationRangeBehavior`
- */
-export const enum TrackedRangeStickiness {
-	AlwaysGrowsWhenTypingAtEdges = 0,
-	NeverGrowsWhenTypingAtEdges = 1,
-	GrowsOnlyWhenTypingBefore = 2,
-	GrowsOnlyWhenTypingAfter = 3,
+export const enum ClassName {
+	EditorHintDecoration = 'squiggly-hint',
+	EditorInfoDecoration = 'squiggly-info',
+	EditorWarningDecoration = 'squiggly-warning',
+	EditorErrorDecoration = 'squiggly-error',
+	EditorUnnecessaryDecoration = 'squiggly-unnecessary',
+	EditorUnnecessaryInlineDecoration = 'squiggly-inline-unnecessary',
+	EditorDeprecatedInlineDecoration = 'squiggly-inline-deprecated'
 }
 
 export const enum NodeColor {
@@ -50,13 +39,21 @@ const enum Constants {
 	IsForValidationMaskInverse = 0b11111011,
 	IsForValidationOffset = 2,
 
-	IsInOverviewRulerMask = 0b00001000,
-	IsInOverviewRulerMaskInverse = 0b11110111,
-	IsInOverviewRulerOffset = 3,
+	StickinessMask = 0b00011000,
+	StickinessMaskInverse = 0b11100111,
+	StickinessOffset = 3,
 
-	StickinessMask = 0b00110000,
-	StickinessMaskInverse = 0b11001111,
-	StickinessOffset = 4,
+	CollapseOnReplaceEditMask = 0b00100000,
+	CollapseOnReplaceEditMaskInverse = 0b11011111,
+	CollapseOnReplaceEditOffset = 5,
+
+	IsMarginMask = 0b01000000,
+	IsMarginMaskInverse = 0b10111111,
+	IsMarginOffset = 6,
+
+	AffectsFontMask = 0b10000000,
+	AffectsFontMaskInverse = 0b01111111,
+	AffectsFontOffset = 7,
 
 	/**
 	 * Due to how deletion works (in order to avoid always walking the right subtree of the deleted node),
@@ -105,24 +102,43 @@ function setNodeIsForValidation(node: IntervalNode, value: boolean): void {
 		(node.metadata & Constants.IsForValidationMaskInverse) | ((value ? 1 : 0) << Constants.IsForValidationOffset)
 	);
 }
-export function getNodeIsInOverviewRuler(node: IntervalNode): boolean {
-	return ((node.metadata & Constants.IsInOverviewRulerMask) >>> Constants.IsInOverviewRulerOffset) === 1;
+function getNodeIsInGlyphMargin(node: IntervalNode): boolean {
+	return ((node.metadata & Constants.IsMarginMask) >>> Constants.IsMarginOffset) === 1;
 }
-function setNodeIsInOverviewRuler(node: IntervalNode, value: boolean): void {
+function setNodeIsInGlyphMargin(node: IntervalNode, value: boolean): void {
 	node.metadata = (
-		(node.metadata & Constants.IsInOverviewRulerMaskInverse) | ((value ? 1 : 0) << Constants.IsInOverviewRulerOffset)
+		(node.metadata & Constants.IsMarginMaskInverse) | ((value ? 1 : 0) << Constants.IsMarginOffset)
+	);
+}
+function getNodeAffectsFont(node: IntervalNode): boolean {
+	return ((node.metadata & Constants.AffectsFontMask) >>> Constants.AffectsFontOffset) === 1;
+}
+function setNodeAffectsFont(node: IntervalNode, value: boolean): void {
+	node.metadata = (
+		(node.metadata & Constants.AffectsFontMaskInverse) | ((value ? 1 : 0) << Constants.AffectsFontOffset)
 	);
 }
 function getNodeStickiness(node: IntervalNode): TrackedRangeStickiness {
 	return ((node.metadata & Constants.StickinessMask) >>> Constants.StickinessOffset);
 }
-function setNodeStickiness(node: IntervalNode, stickiness: TrackedRangeStickiness): void {
+function _setNodeStickiness(node: IntervalNode, stickiness: TrackedRangeStickiness): void {
 	node.metadata = (
 		(node.metadata & Constants.StickinessMaskInverse) | (stickiness << Constants.StickinessOffset)
 	);
 }
+function getCollapseOnReplaceEdit(node: IntervalNode): boolean {
+	return ((node.metadata & Constants.CollapseOnReplaceEditMask) >>> Constants.CollapseOnReplaceEditOffset) === 1;
+}
+function setCollapseOnReplaceEdit(node: IntervalNode, value: boolean): void {
+	node.metadata = (
+		(node.metadata & Constants.CollapseOnReplaceEditMaskInverse) | ((value ? 1 : 0) << Constants.CollapseOnReplaceEditOffset)
+	);
+}
+export function setNodeStickiness(node: IntervalNode, stickiness: ActualTrackedRangeStickiness): void {
+	_setNodeStickiness(node, <number>stickiness);
+}
 
-export class IntervalNode implements IModelDecoration {
+export class IntervalNode {
 
 	/**
 	 * contains binary encoded information for color, visited, isForValidation and stickiness.
@@ -145,14 +161,14 @@ export class IntervalNode implements IModelDecoration {
 	public cachedVersionId: number;
 	public cachedAbsoluteStart: number;
 	public cachedAbsoluteEnd: number;
-	public range: Range;
+	public range: Range | null;
 
 	constructor(id: string, start: number, end: number) {
 		this.metadata = 0;
 
-		this.parent = null;
-		this.left = null;
-		this.right = null;
+		this.parent = this;
+		this.left = this;
+		this.right = this;
 		setNodeColor(this, NodeColor.Red);
 
 		this.start = start;
@@ -163,10 +179,12 @@ export class IntervalNode implements IModelDecoration {
 
 		this.id = id;
 		this.ownerId = 0;
-		this.options = null;
+		this.options = null!;
 		setNodeIsForValidation(this, false);
-		setNodeStickiness(this, TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges);
-		setNodeIsInOverviewRuler(this, false);
+		setNodeIsInGlyphMargin(this, false);
+		_setNodeStickiness(this, TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges);
+		setCollapseOnReplaceEdit(this, false);
+		setNodeAffectsFont(this, false);
 
 		this.cachedVersionId = 0;
 		this.cachedAbsoluteStart = start;
@@ -188,14 +206,16 @@ export class IntervalNode implements IModelDecoration {
 
 	public setOptions(options: ModelDecorationOptions) {
 		this.options = options;
-		let className = this.options.className;
+		const className = this.options.className;
 		setNodeIsForValidation(this, (
 			className === ClassName.EditorErrorDecoration
 			|| className === ClassName.EditorWarningDecoration
 			|| className === ClassName.EditorInfoDecoration
 		));
-		setNodeStickiness(this, <number>this.options.stickiness);
-		setNodeIsInOverviewRuler(this, this.options.overviewRuler.color ? true : false);
+		setNodeIsInGlyphMargin(this, this.options.glyphMarginClassName !== null);
+		_setNodeStickiness(this, <number>this.options.stickiness);
+		setCollapseOnReplaceEdit(this, this.options.collapseOnReplaceEdit);
+		setNodeAffectsFont(this, this.options.affectsFont ?? false);
 	}
 
 	public setCachedOffsets(absoluteStart: number, absoluteEnd: number, cachedVersionId: number): void {
@@ -208,13 +228,13 @@ export class IntervalNode implements IModelDecoration {
 	}
 
 	public detach(): void {
-		this.parent = null;
-		this.left = null;
-		this.right = null;
+		this.parent = null!;
+		this.left = null!;
+		this.right = null!;
 	}
 }
 
-export const SENTINEL: IntervalNode = new IntervalNode(null, 0, 0);
+export const SENTINEL: IntervalNode = new IntervalNode(null!, 0, 0);
 SENTINEL.parent = SENTINEL;
 SENTINEL.left = SENTINEL;
 SENTINEL.right = SENTINEL;
@@ -230,18 +250,18 @@ export class IntervalTree {
 		this.requestNormalizeDelta = false;
 	}
 
-	public intervalSearch(start: number, end: number, filterOwnerId: number, filterOutValidation: boolean, cachedVersionId: number): IntervalNode[] {
+	public intervalSearch(start: number, end: number, filterOwnerId: number, filterOutValidation: boolean, filterFontDecorations: boolean, cachedVersionId: number, onlyMarginDecorations: boolean): IntervalNode[] {
 		if (this.root === SENTINEL) {
 			return [];
 		}
-		return intervalSearch(this, start, end, filterOwnerId, filterOutValidation, cachedVersionId);
+		return intervalSearch(this, start, end, filterOwnerId, filterOutValidation, filterFontDecorations, cachedVersionId, onlyMarginDecorations);
 	}
 
-	public search(filterOwnerId: number, filterOutValidation: boolean, cachedVersionId: number): IntervalNode[] {
+	public search(filterOwnerId: number, filterOutValidation: boolean, filterFontDecorations: boolean, cachedVersionId: number, onlyMarginDecorations: boolean): IntervalNode[] {
 		if (this.root === SENTINEL) {
 			return [];
 		}
-		return search(this, filterOwnerId, filterOutValidation, cachedVersionId);
+		return search(this, filterOwnerId, filterOutValidation, filterFontDecorations, cachedVersionId, onlyMarginDecorations);
 	}
 
 	/**
@@ -313,7 +333,7 @@ export class IntervalTree {
 	}
 
 	public getAllInOrder(): IntervalNode[] {
-		return search(this, 0, false, 0);
+		return search(this, 0, false, false, 0, false);
 	}
 
 	private _normalizeDeltaIfNecessary(): void {
@@ -393,7 +413,7 @@ function adjustMarkerBeforeColumn(markerOffset: number, markerStickToPreviousCha
  * This is a lot more complicated than strictly necessary to maintain the same behaviour
  * as when decorations were implemented using two markers.
  */
-function nodeAcceptEdit(node: IntervalNode, start: number, end: number, textLength: number, forceMoveMarkers: boolean): void {
+export function nodeAcceptEdit(node: IntervalNode, start: number, end: number, textLength: number, forceMoveMarkers: boolean): void {
 	const nodeStickiness = getNodeStickiness(node);
 	const startStickToPreviousCharacter = (
 		nodeStickiness === TrackedRangeStickiness.AlwaysGrowsWhenTypingAtEdges
@@ -413,6 +433,15 @@ function nodeAcceptEdit(node: IntervalNode, start: number, end: number, textLeng
 
 	const nodeEnd = node.end;
 	let endDone = false;
+
+	if (start <= nodeStart && nodeEnd <= end && getCollapseOnReplaceEdit(node)) {
+		// This edit encompasses the entire decoration range
+		// and the decoration has asked to become collapsed
+		node.start = start;
+		startDone = true;
+		node.end = start;
+		endDone = true;
+	}
 
 	{
 		const moveSemantics = forceMoveMarkers ? MarkerMoveSemantics.ForceMove : (deletingCnt > 0 ? MarkerMoveSemantics.ForceStay : MarkerMoveSemantics.MarkerDefined);
@@ -450,11 +479,9 @@ function nodeAcceptEdit(node: IntervalNode, start: number, end: number, textLeng
 	const deltaColumn = (insertingCnt - deletingCnt);
 	if (!startDone) {
 		node.start = Math.max(0, nodeStart + deltaColumn);
-		startDone = true;
 	}
 	if (!endDone) {
 		node.end = Math.max(0, nodeEnd + deltaColumn);
-		endDone = true;
 	}
 
 	if (node.start > node.end) {
@@ -474,7 +501,7 @@ function searchForEditing(T: IntervalTree, start: number, end: number): Interval
 	let nodeMaxEnd = 0;
 	let nodeStart = 0;
 	let nodeEnd = 0;
-	let result: IntervalNode[] = [];
+	const result: IntervalNode[] = [];
 	let resultLen = 0;
 	while (node !== SENTINEL) {
 		if (getNodeIsVisited(node)) {
@@ -610,7 +637,7 @@ function noOverlapReplace(T: IntervalTree, start: number, end: number, textLengt
 
 function collectNodesFromOwner(T: IntervalTree, ownerId: number): IntervalNode[] {
 	let node = T.root;
-	let result: IntervalNode[] = [];
+	const result: IntervalNode[] = [];
 	let resultLen = 0;
 	while (node !== SENTINEL) {
 		if (getNodeIsVisited(node)) {
@@ -648,7 +675,7 @@ function collectNodesFromOwner(T: IntervalTree, ownerId: number): IntervalNode[]
 
 function collectNodesPostOrder(T: IntervalTree): IntervalNode[] {
 	let node = T.root;
-	let result: IntervalNode[] = [];
+	const result: IntervalNode[] = [];
 	let resultLen = 0;
 	while (node !== SENTINEL) {
 		if (getNodeIsVisited(node)) {
@@ -681,12 +708,12 @@ function collectNodesPostOrder(T: IntervalTree): IntervalNode[] {
 	return result;
 }
 
-function search(T: IntervalTree, filterOwnerId: number, filterOutValidation: boolean, cachedVersionId: number): IntervalNode[] {
+function search(T: IntervalTree, filterOwnerId: number, filterOutValidation: boolean, filterFontDecorations: boolean, cachedVersionId: number, onlyMarginDecorations: boolean): IntervalNode[] {
 	let node = T.root;
 	let delta = 0;
 	let nodeStart = 0;
 	let nodeEnd = 0;
-	let result: IntervalNode[] = [];
+	const result: IntervalNode[] = [];
 	let resultLen = 0;
 	while (node !== SENTINEL) {
 		if (getNodeIsVisited(node)) {
@@ -719,6 +746,13 @@ function search(T: IntervalTree, filterOwnerId: number, filterOutValidation: boo
 		if (filterOutValidation && getNodeIsForValidation(node)) {
 			include = false;
 		}
+		if (filterFontDecorations && getNodeAffectsFont(node)) {
+			include = false;
+		}
+		if (onlyMarginDecorations && !getNodeIsInGlyphMargin(node)) {
+			include = false;
+		}
+
 		if (include) {
 			result[resultLen++] = node;
 		}
@@ -738,7 +772,7 @@ function search(T: IntervalTree, filterOwnerId: number, filterOutValidation: boo
 	return result;
 }
 
-function intervalSearch(T: IntervalTree, intervalStart: number, intervalEnd: number, filterOwnerId: number, filterOutValidation: boolean, cachedVersionId: number): IntervalNode[] {
+function intervalSearch(T: IntervalTree, intervalStart: number, intervalEnd: number, filterOwnerId: number, filterOutValidation: boolean, filterFontDecorations: boolean, cachedVersionId: number, onlyMarginDecorations: boolean): IntervalNode[] {
 	// https://en.wikipedia.org/wiki/Interval_tree#Augmented_tree
 	// Now, it is known that two intervals A and B overlap only when both
 	// A.low <= B.high and A.high >= B.low. When searching the trees for
@@ -751,7 +785,7 @@ function intervalSearch(T: IntervalTree, intervalStart: number, intervalEnd: num
 	let nodeMaxEnd = 0;
 	let nodeStart = 0;
 	let nodeEnd = 0;
-	let result: IntervalNode[] = [];
+	const result: IntervalNode[] = [];
 	let resultLen = 0;
 	while (node !== SENTINEL) {
 		if (getNodeIsVisited(node)) {
@@ -802,6 +836,12 @@ function intervalSearch(T: IntervalTree, intervalStart: number, intervalEnd: num
 				include = false;
 			}
 			if (filterOutValidation && getNodeIsForValidation(node)) {
+				include = false;
+			}
+			if (filterFontDecorations && getNodeAffectsFont(node)) {
+				include = false;
+			}
+			if (onlyMarginDecorations && !getNodeIsInGlyphMargin(node)) {
 				include = false;
 			}
 
@@ -987,7 +1027,7 @@ function rbTreeDelete(T: IntervalTree, z: IntervalNode): void {
 		return;
 	}
 
-	let yWasRed = (getNodeColor(y) === NodeColor.Red);
+	const yWasRed = (getNodeColor(y) === NodeColor.Red);
 
 	if (y === y.parent.left) {
 		y.parent.left = x;

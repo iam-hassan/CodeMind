@@ -3,54 +3,105 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
+import { Color } from '../../../../base/common/color.js';
+import { Emitter, Event } from '../../../../base/common/event.js';
+import { IconContribution } from '../../common/iconRegistry.js';
+import { ColorScheme } from '../../common/theme.js';
+import { IColorTheme, IFileIconTheme, IProductIconTheme, IThemeService, IFontTokenOptions, ITokenStyle } from '../../common/themeService.js';
 
-import Event, { Emitter } from 'vs/base/common/event';
-import { IThemeService, ITheme, DARK } from 'vs/platform/theme/common/themeService';
-import { Color } from 'vs/base/common/color';
+export class TestColorTheme implements IColorTheme {
 
-export class TestTheme implements ITheme {
+	public readonly label = 'test';
 
-	constructor(private colors: { [id: string]: string; } = {}, public type = DARK) {
-	}
+	constructor(
+		private colors: { [id: string]: string | undefined } = {},
+		public type = ColorScheme.DARK,
+		public readonly semanticHighlighting = false
+	) { }
 
-	getColor(color: string, useDefault?: boolean): Color {
-		let value = this.colors[color];
+	getColor(color: string, useDefault?: boolean): Color | undefined {
+		const value = this.colors[color];
 		if (value) {
 			return Color.fromHex(value);
 		}
-		return void 0;
+		return undefined;
 	}
 
 	defines(color: string): boolean {
 		throw new Error('Method not implemented.');
 	}
+
+	getTokenStyleMetadata(type: string, modifiers: string[], modelLanguage: string): ITokenStyle | undefined {
+		return undefined;
+	}
+
+	get tokenColorMap(): string[] {
+		return [];
+	}
+
+	get tokenFontMap(): IFontTokenOptions[] {
+		return [];
+	}
+}
+
+class TestFileIconTheme implements IFileIconTheme {
+	hasFileIcons = false;
+	hasFolderIcons = false;
+	hidesExplorerArrows = false;
+}
+
+class UnthemedProductIconTheme implements IProductIconTheme {
+	getIcon(contribution: IconContribution) {
+		return undefined;
+	}
 }
 
 export class TestThemeService implements IThemeService {
 
-	_serviceBrand: any;
-	_theme: ITheme;
-	_onThemeChange = new Emitter<ITheme>();
+	declare readonly _serviceBrand: undefined;
+	_colorTheme: IColorTheme;
+	_fileIconTheme: IFileIconTheme;
+	_productIconTheme: IProductIconTheme;
+	_onThemeChange = new Emitter<IColorTheme>();
+	_onFileIconThemeChange = new Emitter<IFileIconTheme>();
+	_onProductIconThemeChange = new Emitter<IProductIconTheme>();
 
-	constructor(theme = new TestTheme()) {
-		this._theme = theme;
+	constructor(theme: IColorTheme = new TestColorTheme(), fileIconTheme: IFileIconTheme = new TestFileIconTheme(), productIconTheme: IProductIconTheme = new UnthemedProductIconTheme()) {
+		this._colorTheme = theme;
+		this._fileIconTheme = fileIconTheme;
+		this._productIconTheme = productIconTheme;
 	}
 
-	getTheme(): ITheme {
-		return this._theme;
+	getColorTheme(): IColorTheme {
+		return this._colorTheme;
 	}
 
-	setTheme(theme: ITheme) {
-		this._theme = theme;
+	setTheme(theme: IColorTheme) {
+		this._colorTheme = theme;
 		this.fireThemeChange();
 	}
 
 	fireThemeChange() {
-		this._onThemeChange.fire(this._theme);
+		this._onThemeChange.fire(this._colorTheme);
 	}
 
-	public get onThemeChange(): Event<ITheme> {
+	public get onDidColorThemeChange(): Event<IColorTheme> {
 		return this._onThemeChange.event;
+	}
+
+	getFileIconTheme(): IFileIconTheme {
+		return this._fileIconTheme;
+	}
+
+	public get onDidFileIconThemeChange(): Event<IFileIconTheme> {
+		return this._onFileIconThemeChange.event;
+	}
+
+	getProductIconTheme(): IProductIconTheme {
+		return this._productIconTheme;
+	}
+
+	public get onDidProductIconThemeChange(): Event<IProductIconTheme> {
+		return this._onProductIconThemeChange.event;
 	}
 }

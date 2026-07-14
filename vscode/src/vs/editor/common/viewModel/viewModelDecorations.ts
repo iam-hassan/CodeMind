@@ -2,47 +2,38 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import { IDisposable } from 'vs/base/common/lifecycle';
-import { Range } from 'vs/editor/common/core/range';
-import { Position } from 'vs/editor/common/core/position';
-import * as editorCommon from 'vs/editor/common/editorCommon';
-import { InlineDecoration, ViewModelDecoration, ICoordinatesConverter, InlineDecorationType } from 'vs/editor/common/viewModel/viewModel';
-import { IViewModelLinesCollection } from 'vs/editor/common/viewModel/splitLinesCollection';
-
-export interface IDecorationsViewportData {
-	/**
-	 * decorations in the viewport.
-	 */
-	readonly decorations: ViewModelDecoration[];
-	/**
-	 * inline decorations grouped by each line in the viewport.
-	 */
-	readonly inlineDecorations: InlineDecoration[][];
-}
+import { IDisposable } from '../../../base/common/lifecycle.js';
+import { Range } from '../core/range.js';
+import { IEditorConfiguration } from '../config/editorConfiguration.js';
+import { ITextModel } from '../model.js';
+import { IViewModelLines } from './viewModelLines.js';
+import { ViewModelDecoration } from './viewModelDecoration.js';
+import { IViewDecorationsCollection, IInlineModelDecorationsComputerContext, InlineModelDecorationsComputer } from './inlineDecorations.js';
+import { ICoordinatesConverter } from '../coordinatesConverter.js';
+import { filterFontDecorations, filterValidationDecorations } from '../config/editorOptions.js';
 
 export class ViewModelDecorations implements IDisposable {
 
 	private readonly editorId: number;
-	private readonly model: editorCommon.IModel;
-	private readonly configuration: editorCommon.IConfiguration;
-	private readonly _linesCollection: IViewModelLinesCollection;
-	private readonly _coordinatesConverter: ICoordinatesConverter;
+	private readonly configuration: IEditorConfiguration;
+	private readonly _linesCollection: IViewModelLines;
 
-	private _decorationsCache: { [decorationId: string]: ViewModelDecoration; };
+	private readonly _inlineDecorationsComputer: InlineModelDecorationsComputer;
 
-	private _cachedModelDecorationsResolver: IDecorationsViewportData;
-	private _cachedModelDecorationsResolverViewRange: Range;
+	private _cachedModelDecorationsResolver: IViewDecorationsCollection | null;
+	private _cachedModelDecorationsResolverViewRange: Range | null;
 
-	constructor(editorId: number, model: editorCommon.IModel, configuration: editorCommon.IConfiguration, linesCollection: IViewModelLinesCollection, coordinatesConverter: ICoordinatesConverter) {
+	constructor(editorId: number, model: ITextModel, configuration: IEditorConfiguration, linesCollection: IViewModelLines, coordinatesConverter: ICoordinatesConverter) {
 		this.editorId = editorId;
-		this.model = model;
 		this.configuration = configuration;
 		this._linesCollection = linesCollection;
-		this._coordinatesConverter = coordinatesConverter;
-		this._decorationsCache = Object.create(null);
-		this._clearCachedModelDecorationsResolver();
+		const context: IInlineModelDecorationsComputerContext = {
+			getModelDecorations: (viewRange: Range, onlyMinimapDecorations: boolean, onlyMarginDecorations: boolean) => this._linesCollection.getDecorationsInRange(viewRange, this.editorId, filterValidationDecorations(this.configuration.options), filterFontDecorations(this.configuration.options), onlyMinimapDecorations, onlyMarginDecorations)
+		};
+		this._inlineDecorationsComputer = new InlineModelDecorationsComputer(context, model, coordinatesConverter);
+		this._cachedModelDecorationsResolver = null;
+		this._cachedModelDecorationsResolverViewRange = null;
 	}
 
 	private _clearCachedModelDecorationsResolver(): void {
@@ -51,110 +42,42 @@ export class ViewModelDecorations implements IDisposable {
 	}
 
 	public dispose(): void {
-		this._decorationsCache = null;
+		this._inlineDecorationsComputer.reset();
 		this._clearCachedModelDecorationsResolver();
 	}
 
 	public reset(): void {
-		this._decorationsCache = Object.create(null);
+		this._inlineDecorationsComputer.reset();
 		this._clearCachedModelDecorationsResolver();
 	}
 
 	public onModelDecorationsChanged(): void {
-		this._decorationsCache = Object.create(null);
+		this._inlineDecorationsComputer.onModelDecorationsChanged();
 		this._clearCachedModelDecorationsResolver();
 	}
 
 	public onLineMappingChanged(): void {
-		this._decorationsCache = Object.create(null);
+		this._inlineDecorationsComputer.onLineMappingChanged();
 
 		this._clearCachedModelDecorationsResolver();
 	}
 
-	private _getOrCreateViewModelDecoration(modelDecoration: editorCommon.IModelDecoration): ViewModelDecoration {
-		const id = modelDecoration.id;
-		let r = this._decorationsCache[id];
-		if (!r) {
-			const modelRange = modelDecoration.range;
-			const options = modelDecoration.options;
-			let viewRange: Range;
-			if (options.isWholeLine) {
-				const start = this._coordinatesConverter.convertModelPositionToViewPosition(new Position(modelRange.startLineNumber, 1));
-				const end = this._coordinatesConverter.convertModelPositionToViewPosition(new Position(modelRange.endLineNumber, this.model.getLineMaxColumn(modelRange.endLineNumber)));
-				viewRange = new Range(start.lineNumber, start.column, end.lineNumber, end.column);
-			} else {
-				viewRange = this._coordinatesConverter.convertModelRangeToViewRange(modelRange);
-			}
-			r = new ViewModelDecoration(viewRange, options);
-			this._decorationsCache[id] = r;
-		}
-		return r;
+	public getMinimapDecorationsInRange(range: Range): ViewModelDecoration[] {
+		return this._inlineDecorationsComputer.getDecorations(range, true, false).decorations;
 	}
 
-	public getDecorationsViewportData(viewRange: Range): IDecorationsViewportData {
-		var cacheIsValid = true;
-		cacheIsValid = cacheIsValid && (this._cachedModelDecorationsResolver !== null);
+	public getDecorationsViewportData(viewRange: Range): IViewDecorationsCollection {
+		let cacheIsValid = (this._cachedModelDecorationsResolver !== null);
 		cacheIsValid = cacheIsValid && (viewRange.equalsRange(this._cachedModelDecorationsResolverViewRange));
 		if (!cacheIsValid) {
-			this._cachedModelDecorationsResolver = this._getDecorationsViewportData(viewRange);
+			this._cachedModelDecorationsResolver = this._inlineDecorationsComputer.getDecorations(viewRange, false, false);
 			this._cachedModelDecorationsResolverViewRange = viewRange;
 		}
-		return this._cachedModelDecorationsResolver;
+		return this._cachedModelDecorationsResolver!;
 	}
 
-	private _getDecorationsViewportData(viewportRange: Range): IDecorationsViewportData {
-		const modelDecorations = this._linesCollection.getDecorationsInRange(viewportRange, this.editorId, this.configuration.editor.readOnly);
-		const startLineNumber = viewportRange.startLineNumber;
-		const endLineNumber = viewportRange.endLineNumber;
-
-		let decorationsInViewport: ViewModelDecoration[] = [], decorationsInViewportLen = 0;
-		let inlineDecorations: InlineDecoration[][] = [];
-		for (let j = startLineNumber; j <= endLineNumber; j++) {
-			inlineDecorations[j - startLineNumber] = [];
-		}
-
-		for (let i = 0, len = modelDecorations.length; i < len; i++) {
-			let modelDecoration = modelDecorations[i];
-			let decorationOptions = modelDecoration.options;
-
-			let viewModelDecoration = this._getOrCreateViewModelDecoration(modelDecoration);
-			let viewRange = viewModelDecoration.range;
-
-			decorationsInViewport[decorationsInViewportLen++] = viewModelDecoration;
-
-			if (decorationOptions.inlineClassName) {
-				let inlineDecoration = new InlineDecoration(viewRange, decorationOptions.inlineClassName, InlineDecorationType.Regular);
-				let intersectedStartLineNumber = Math.max(startLineNumber, viewRange.startLineNumber);
-				let intersectedEndLineNumber = Math.min(endLineNumber, viewRange.endLineNumber);
-				for (let j = intersectedStartLineNumber; j <= intersectedEndLineNumber; j++) {
-					inlineDecorations[j - startLineNumber].push(inlineDecoration);
-				}
-			}
-			if (decorationOptions.beforeContentClassName) {
-				if (startLineNumber <= viewRange.startLineNumber && viewRange.startLineNumber <= endLineNumber) {
-					let inlineDecoration = new InlineDecoration(
-						new Range(viewRange.startLineNumber, viewRange.startColumn, viewRange.startLineNumber, viewRange.startColumn),
-						decorationOptions.beforeContentClassName,
-						InlineDecorationType.Before
-					);
-					inlineDecorations[viewRange.startLineNumber - startLineNumber].push(inlineDecoration);
-				}
-			}
-			if (decorationOptions.afterContentClassName) {
-				if (startLineNumber <= viewRange.endLineNumber && viewRange.endLineNumber <= endLineNumber) {
-					let inlineDecoration = new InlineDecoration(
-						new Range(viewRange.endLineNumber, viewRange.endColumn, viewRange.endLineNumber, viewRange.endColumn),
-						decorationOptions.afterContentClassName,
-						InlineDecorationType.After
-					);
-					inlineDecorations[viewRange.endLineNumber - startLineNumber].push(inlineDecoration);
-				}
-			}
-		}
-
-		return {
-			decorations: decorationsInViewport,
-			inlineDecorations: inlineDecorations
-		};
+	public getDecorationsOnLine(lineNumber: number, onlyMinimapDecorations: boolean = false, onlyMarginDecorations: boolean = false): IViewDecorationsCollection {
+		const range = new Range(lineNumber, this._linesCollection.getViewLineMinColumn(lineNumber), lineNumber, this._linesCollection.getViewLineMaxColumn(lineNumber));
+		return this._inlineDecorationsComputer.getDecorations(range, onlyMinimapDecorations, onlyMarginDecorations);
 	}
 }

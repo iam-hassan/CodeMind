@@ -2,13 +2,12 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 /**
  * Extracted from json.ts to keep json nls free.
  */
-import { localize } from 'vs/nls';
-import { ParseErrorCode } from './json';
+import { localize } from '../../nls.js';
+import { ParseErrorCode } from './json.js';
 
 export function getParseErrorMessage(errorCode: ParseErrorCode): string {
 	switch (errorCode) {

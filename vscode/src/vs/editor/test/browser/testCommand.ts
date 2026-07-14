@@ -2,67 +2,79 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import * as assert from 'assert';
-import { Range } from 'vs/editor/common/core/range';
-import { Selection } from 'vs/editor/common/core/selection';
-import * as editorCommon from 'vs/editor/common/editorCommon';
-import { Model } from 'vs/editor/common/model/model';
-import { LanguageIdentifier } from 'vs/editor/common/modes';
-import { withTestCodeEditor } from 'vs/editor/test/browser/testCodeEditor';
+import assert from 'assert';
+import { IRange } from '../../common/core/range.js';
+import { Selection, ISelection } from '../../common/core/selection.js';
+import { ICommand, IEditOperationBuilder } from '../../common/editorCommon.js';
+import { ITextModel } from '../../common/model.js';
+import { instantiateTestCodeEditor, createCodeEditorServices } from './testCodeEditor.js';
+import { instantiateTextModel } from '../common/testTextModel.js';
+import { ServicesAccessor } from '../../../platform/instantiation/common/instantiation.js';
+import { DisposableStore } from '../../../base/common/lifecycle.js';
+import { ISingleEditOperation } from '../../common/core/editOperation.js';
 
 export function testCommand(
 	lines: string[],
-	languageIdentifier: LanguageIdentifier,
+	languageId: string | null,
 	selection: Selection,
-	commandFactory: (selection: Selection) => editorCommon.ICommand,
+	commandFactory: (accessor: ServicesAccessor, selection: Selection) => ICommand,
 	expectedLines: string[],
-	expectedSelection: Selection
+	expectedSelection: Selection,
+	forceTokenization?: boolean,
+	prepare?: (accessor: ServicesAccessor, disposables: DisposableStore) => void
 ): void {
-	let model = Model.createFromString(lines.join('\n'), undefined, languageIdentifier);
-	withTestCodeEditor(null, { model: model }, (editor, cursor) => {
+	const disposables = new DisposableStore();
+	const instantiationService = createCodeEditorServices(disposables);
+	if (prepare) {
+		instantiationService.invokeFunction(prepare, disposables);
+	}
+	const model = disposables.add(instantiateTextModel(instantiationService, lines.join('\n'), languageId));
+	const editor = disposables.add(instantiateTestCodeEditor(instantiationService, model));
+	const viewModel = editor.getViewModel()!;
 
-		cursor.setSelections('tests', [selection]);
+	if (forceTokenization) {
+		model.tokenization.forceTokenization(model.getLineCount());
+	}
 
-		cursor.trigger('tests', editorCommon.Handler.ExecuteCommand, commandFactory(cursor.getSelection()));
+	viewModel.setSelections('tests', [selection]);
 
-		assert.deepEqual(model.getLinesContent(), expectedLines);
+	const command = instantiationService.invokeFunction((accessor) => commandFactory(accessor, viewModel.getSelection()));
+	viewModel.executeCommand(command, 'tests');
 
-		let actualSelection = cursor.getSelection();
-		assert.deepEqual(actualSelection.toString(), expectedSelection.toString());
+	assert.deepStrictEqual(model.getLinesContent(), expectedLines);
 
-	});
-	model.dispose();
+	const actualSelection = viewModel.getSelection();
+	assert.deepStrictEqual(actualSelection.toString(), expectedSelection.toString());
+
+	disposables.dispose();
 }
 
 /**
  * Extract edit operations if command `command` were to execute on model `model`
  */
-export function getEditOperation(model: editorCommon.IModel, command: editorCommon.ICommand): editorCommon.IIdentifiedSingleEditOperation[] {
-	var operations: editorCommon.IIdentifiedSingleEditOperation[] = [];
-	var editOperationBuilder: editorCommon.IEditOperationBuilder = {
-		addEditOperation: (range: Range, text: string) => {
+export function getEditOperation(model: ITextModel, command: ICommand): ISingleEditOperation[] {
+	const operations: ISingleEditOperation[] = [];
+	const editOperationBuilder: IEditOperationBuilder = {
+		addEditOperation: (range: IRange, text: string, forceMoveMarkers: boolean = false) => {
 			operations.push({
-				identifier: null,
 				range: range,
 				text: text,
-				forceMoveMarkers: false
+				forceMoveMarkers: forceMoveMarkers
 			});
 		},
 
-		addTrackedEditOperation: (range: Range, text: string) => {
+		addTrackedEditOperation: (range: IRange, text: string, forceMoveMarkers: boolean = false) => {
 			operations.push({
-				identifier: null,
 				range: range,
 				text: text,
-				forceMoveMarkers: false
+				forceMoveMarkers: forceMoveMarkers
 			});
 		},
 
 
-		trackSelection: (selection: Selection) => {
-			return null;
+		trackSelection: (selection: ISelection) => {
+			return '';
 		}
 	};
 	command.getEditOperations(model, editOperationBuilder);
