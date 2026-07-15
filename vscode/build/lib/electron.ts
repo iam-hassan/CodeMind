@@ -143,7 +143,7 @@ export const config = {
 	version: electronVersion,
 	productAppName: product.nameLong,
 	companyName: 'CodeMind',
-	copyright: 'Copyright (C) 2026 CodeMind. All rights reserved',
+	copyright: 'Copyright (C) 2026 Microsoft Corporation. All rights reserved. CodeMind modifications Copyright (C) 2026 CodeMind.',
 	darwinExecutable: product.nameShort,
 	darwinIcon: 'resources/darwin/code.icns',
 	darwinBundleIdentifier: product.darwinBundleIdentifier,
