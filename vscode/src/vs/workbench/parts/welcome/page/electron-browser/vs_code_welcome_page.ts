@@ -7,14 +7,11 @@
 import { escape } from 'vs/base/common/strings';
 import { localize } from 'vs/nls';
 
-export function used() {
-}
-
 export default () => `
 <div class="welcomePageContainer">
 	<div class="welcomePage">
 		<div class="title">
-			<h1 class="caption">${escape(localize('welcomePage.vscode', "Visual Studio Code"))}</h1>
+			<h1 class="caption">${escape(localize('welcomePage.vscode', "CodeMind"))}</h1>
 			<p class="subtitle detail">${escape(localize({ key: 'welcomePage.editingEvolved', comment: ['Shown as subtitle on the Welcome page.'] }, "Editing evolved"))}</p>
 		</div>
 		<div class="row">
@@ -43,7 +40,7 @@ export default () => `
 						<li><a href="command:workbench.action.openIntroductoryVideosUrl">${escape(localize('welcomePage.introductoryVideos', "Introductory videos"))}</a></li>
 						<li><a href="command:workbench.action.openTipsAndTricksUrl">${escape(localize('welcomePage.tipsAndTricks', "Tips and Tricks"))}</a></li>
 						<li><a href="command:workbench.action.openDocumentationUrl">${escape(localize('welcomePage.productDocumentation', "Product documentation"))}</a></li>
-						<li><a href="https://github.com/Microsoft/vscode">${escape(localize('welcomePage.gitHubRepository', "GitHub repository"))}</a></li>
+						<li><a href="https://github.com/iam-hassan/CodeMind">${escape(localize('welcomePage.gitHubRepository', "GitHub repository"))}</a></li>
 						<li><a href="http://stackoverflow.com/questions/tagged/vscode?sort=votes&pageSize=50">${escape(localize('welcomePage.stackOverflow', "Stack Overflow"))}</a></li>
 					</ul>
 				</div>

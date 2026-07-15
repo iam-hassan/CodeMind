@@ -1,9 +1,9 @@
 {
-  "name": "code-oss-dev",
+  "name": "codemind",
   "version": "1.128.0",
   "distro": "a78eb8284ce7699e371b36071b579f557406f153",
   "author": {
-    "name": "Microsoft Corporation"
+    "name": "CodeMind"
   },
   "license": "MIT",
   "main": "./out/main.js",
@@ -277,10 +277,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/microsoft/vscode.git"
+    "url": "https://github.com/iam-hassan/CodeMind.git"
   },
   "bugs": {
-    "url": "https://github.com/microsoft/vscode/issues"
+    "url": "https://github.com/iam-hassan/CodeMind/issues"
   },
   "optionalDependencies": {
     "windows-foreground-love": "0.6.1"
