@@ -40,7 +40,6 @@ import { IWorkspaceIdentifier, getWorkspaceLabel, ISingleFolderWorkspaceIdentifi
 import { IEditorInputFactory, EditorInput } from 'vs/workbench/common/editor';
 import { getIdAndVersionFromLocalExtensionId } from 'vs/platform/extensionManagement/node/extensionManagementUtil';
 
-used();
 
 const configurationKey = 'workbench.startupEditor';
 const oldConfigurationKey = 'workbench.welcome.enabled';
