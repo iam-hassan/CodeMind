@@ -11,8 +11,8 @@
 	</description>
 	<screenshots>
 		<screenshot type="default">
-			<image>https://github.com/iam-hassan/CodeMind/raw/main/resources/screenshot.png</image>
-			<caption>Editing code in CodeMind</caption>
+			<image>https://code.visualstudio.com/home/home-screenshot-linux-lg.png</image>
+			<caption>Editing TypeScript and searching for extensions</caption>
 		</screenshot>
 	</screenshots>
 </component>
