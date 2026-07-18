@@ -22,7 +22,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 const _linkProvider = new class implements vscode.DocumentLinkProvider {
 
-	private _cachedResult: { key: string; links: vscode.DocumentLink[] };
+	private _cachedResult?: { key: string; links: vscode.DocumentLink[] };
 	private _linkPattern = /[^!]\[.*?\]\(#(.*?)\)/g;
 
 	async provideDocumentLinks(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<vscode.DocumentLink[]> {
@@ -41,7 +41,7 @@ const _linkProvider = new class implements vscode.DocumentLinkProvider {
 		const lookUp = await ast.createNamedNodeLookUp(text);
 
 		this._linkPattern.lastIndex = 0;
-		let match: RegExpMatchArray;
+		let match: RegExpExecArray | null;
 		while ((match = this._linkPattern.exec(text))) {
 
 			const offset = lookUp(match[1]);

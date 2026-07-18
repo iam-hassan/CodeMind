@@ -52,7 +52,7 @@ export class GitContentProvider {
 			return;
 		}
 
-		this._onDidChange.fire(toGitUri(uri, '', true));
+		this._onDidChange.fire(toGitUri(uri, '', { replaceFileExtension: true }));
 	}
 
 	@debounce(1100)
