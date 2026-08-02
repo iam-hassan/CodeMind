@@ -1,25 +1,67 @@
-# Node
-node_modules/
-npm-debug.log*
-yarn-error.log
+# ---------------------------------------------------------------------------
+# Fetched or built, never stored
+# ---------------------------------------------------------------------------
 
-# Build outputs
+# The Microsoft VS Code checkout that VSCodium builds against. Its commit is
+# pinned in vscodium/upstream/stable.json, scripts/setup.sh fetches it with
+# vscodium/get_repo.sh, and vscodium/src/stable is overlaid on top of it — so it
+# is reproducible from what is in this repository and is not committed.
+/vscodium/vscode/
+
+# Installed by scripts/setup.sh: the workbench's own dependencies and the Claude
+# Agent SDK the engine imports from claude-code/node_modules.
+node_modules/
+
+# Compiled output.
 out/
 out-*/
+dist/
+*.tsbuildinfo
+.build/
 
-# OS files
+# ---------------------------------------------------------------------------
+# Local only
+# ---------------------------------------------------------------------------
+
+# The CDP verification harness. It drives a live build over the DevTools
+# protocol; its logs, probe output and user-data profile hold whichever endpoint,
+# model and workspace the person who ran it was using.
+/verify/
+
+# Working documents: the task specifications the panel was built from, and the
+# verification report — the report names the API endpoint used for testing.
+/CODEMIND_GUI_TASK.md
+/CODEMIND_UI_REDESIGN.md
+/CODEMIND_VERIFY_TASK.md
+/CODEMIND_GITHUB_PUSH.md
+/CODEMIND_VERIFICATION_REPORT.md
+
+# Claude Code's per-machine permission list: the exact commands approved on one
+# machine, which can include an API key inside a remembered command.
+.claude/settings.local.json
+
+# ---------------------------------------------------------------------------
+# Credentials
+# ---------------------------------------------------------------------------
+# The panel keeps the Anthropic API key in the editor's own secret storage and
+# never writes it into the workspace, so nothing here should ever be needed —
+# which is the point of having it.
+.env
+.env.*
+*.key
+*.pem
+*.secret
+
+# ---------------------------------------------------------------------------
+# Logs, editor and OS noise
+# ---------------------------------------------------------------------------
+*.log
+npm-debug.log*
+yarn-error.log
+/.vscode/
 .DS_Store
 Thumbs.db
 *.swp
 *.swo
 *~
-
-# IDE
-.vscode/
-
-# Environment
-.env
-.env.local
-
-# Backup
 *.bak

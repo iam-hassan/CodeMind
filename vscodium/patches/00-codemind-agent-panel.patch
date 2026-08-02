@@ -1,0 +1,25 @@
+diff --git a/src/vs/workbench/workbench.desktop.main.ts b/src/vs/workbench/workbench.desktop.main.ts
+--- a/src/vs/workbench/workbench.desktop.main.ts
++++ b/src/vs/workbench/workbench.desktop.main.ts
+@@ -185,4 +185,8 @@
+ // Chat
+ import './contrib/chat/electron-browser/chat.contribution.js';
+
++// CodeMind Agent — renderer-side engine service (drives the node utility worker)
++import './contrib/codemindAgent/electron-sandbox/codeMindAgentEngineService.js';
++// CodeMind Agent — hardcoded core panel (right-side Secondary Side Bar)
++import './contrib/codemindAgent/browser/codemindAgent.contribution.js';
+ // Copilot Voice
+diff --git a/build/gulpfile.vscode.ts b/build/gulpfile.vscode.ts
+--- a/build/gulpfile.vscode.ts
++++ b/build/gulpfile.vscode.ts
+@@ -93,6 +93,9 @@
+ 	// Accessibility Signals
+ 	'out-build/vs/platform/accessibilitySignal/browser/media/*.mp3',
+
++	// CodeMind Agent
++	'out-build/vs/workbench/contrib/codemindAgent/browser/media/**/*.{js,css,svg,png}',
++
+ 	// Welcome
+ 	'out-build/vs/workbench/contrib/welcomeGettingStarted/common/media/**/*.{svg,png}',
+ 	'out-build/vs/workbench/contrib/welcomeOnboarding/browser/media/*.svg',

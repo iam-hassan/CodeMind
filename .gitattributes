@@ -1,0 +1,22 @@
+# Line endings.
+#
+# Everything git recognises as text is stored with LF and checked out in the
+# platform's own convention, except where a file only works one way:
+#
+#   .sh   bash reads a trailing CR as part of the command, so a CRLF script
+#         fails outright on Linux and macOS. Keep these LF everywhere; Git Bash
+#         on Windows reads LF scripts fine, and VSCodium's whole build is bash.
+#   .bat  cmd.exe is the opposite case and expects CRLF.
+#
+# The VSCodium patches under vscodium/patches are deliberately left to the
+# normal text handling: they are stored LF and applied to a checkout that git
+# gave the same treatment, so the two always agree.
+
+* text=auto
+
+*.sh text eol=lf
+*.bash text eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

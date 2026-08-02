@@ -1,0 +1,3616 @@
+/* CodeMind Agent — Claude Code GUI
+ * Calm, focused, native-to-VS-Code chat surface. Indigo accent used sparingly.
+ */
+
+:root {
+	--cm-bg: var(--vscode-editor-background);
+	--cm-fg: var(--vscode-editor-foreground);
+	--cm-sidebar-bg: var(--vscode-sideBar-background);
+	/* Where a registered colour can be missing, the fallback is mixed from one that cannot
+	   be (Section 10: no literal colours anywhere in this sheet). A wash of the foreground
+	   is what a border or a code surface is in a theme that leaves them undefined. */
+	--cm-border: var(--vscode-panel-border, color-mix(in srgb, var(--cm-fg) 20%, transparent));
+	--cm-input-bg: var(--vscode-input-background);
+	--cm-input-fg: var(--vscode-input-foreground);
+	--cm-input-border: var(--vscode-input-border, transparent);
+	--cm-input-placeholder: var(--vscode-input-placeholderForeground);
+	--cm-button-bg: var(--vscode-button-background);
+	/* The fallback chain is the same question asked three ways: what does a theme put on top
+	   of an accent fill? A selected list row answers it when the button colours do not, and
+	   the editor's own background answers it last — on a coloured fill that is the far end of
+	   the theme's own contrast pair. */
+	--cm-button-fg: var(--vscode-button-foreground, var(--vscode-list-activeSelectionForeground, var(--cm-bg)));
+	--cm-button-hover: var(--vscode-button-hoverBackground);
+	--cm-focus: var(--vscode-focusBorder);
+	--cm-link: var(--vscode-textLink-foreground);
+	--cm-accent: var(--vscode-textLink-foreground, var(--vscode-focusBorder));
+	--cm-accent-soft: color-mix(in srgb, var(--cm-accent) 14%, transparent);
+	--cm-accent-line: color-mix(in srgb, var(--cm-accent) 30%, transparent);
+	--cm-user-bg: color-mix(in srgb, var(--cm-accent) 10%, transparent);
+	--cm-assistant-bg: var(--vscode-sideBar-background);
+	--cm-code-bg: var(--vscode-textCodeBlock-background, color-mix(in srgb, var(--cm-fg) 8%, transparent));
+	--cm-scrollbar: var(--vscode-scrollbarSlider-background);
+	--cm-scrollbar-hover: var(--vscode-scrollbarSlider-hoverBackground);
+	--cm-scrollbar-active: var(--vscode-scrollbarSlider-activeBackground);
+	--cm-error-fg: var(--vscode-errorForeground, var(--vscode-editorError-foreground, currentColor));
+	--cm-error-bg: var(--vscode-errorBackground, color-mix(in srgb, var(--cm-error-fg) 12%, transparent));
+	/* Success and warning are used as *text* (the MCP connection chip, a tool card's
+	   status line, a task's badge), so they need a colour a theme tuned for text, not for
+	   an icon: Light Modern's `testing.iconPassed` is the dark theme's pale green and
+	   scores 2.0 on white, and `testing.iconQueued` is undefined in high-contrast light,
+	   which lands on a literal orange that is just as unreadable. The git decoration
+	   foregrounds are text colours in every theme — the same source the diff rows below
+	   already use — with the testing icons kept as a second choice. */
+	--cm-success: var(--vscode-gitDecoration-addedResourceForeground, var(--vscode-testing-iconPassed, var(--vscode-charts-green, currentColor)));
+	--cm-warning: var(--vscode-gitDecoration-modifiedResourceForeground, var(--vscode-testing-iconQueued, var(--vscode-charts-orange, currentColor)));
+	--cm-desc: var(--vscode-descriptionForeground);
+	/* Four weights of the description colour, for the labels that sit a step below secondary
+	   text: a turn's duration, the session's token total, a code block's language name and the
+	   thinking row's elapsed time, and a system notice. All four fade in the colour rather than
+	   by `opacity`, so the fade-in animations still own that channel, and all four are tokens
+	   rather than inline mixes so that the high-contrast override below has one place to undo
+	   them.
+	   Section 1 asks for 55% and 45% for the first two, and neither survives Step 9's 3.0:1
+	   floor: in Dark Modern `descriptionForeground` is #9D9D9D on a #1F1F1F bubble, so 55%
+	   composites to rgb(100,100,100) = 2.80:1 and 45% to 2.31:1. 3.0 needs at least 59% there,
+	   and 55% measured exactly 3.00 in Light Modern — no margin either. So the pair is raised to
+	   the nearest weights that clear the floor in every theme with room to spare (dark: 3.82 and
+	   3.57), the hierarchy the section asked for is kept, and each token is named for the weight
+	   it actually holds. */
+	--cm-desc-72: color-mix(in srgb, var(--cm-desc) 72%, transparent);
+	--cm-desc-70: color-mix(in srgb, var(--cm-desc) 70%, transparent);
+	--cm-desc-66: color-mix(in srgb, var(--cm-desc) 66%, transparent);
+	--cm-desc-60: color-mix(in srgb, var(--cm-desc) 60%, transparent);
+	--cm-toolbar-hover: var(--vscode-toolbar-hoverBackground, color-mix(in srgb, var(--cm-fg) 12%, transparent));
+	/* Section 3.3 asks for the section-header border at 30%: a band that reads as a seam
+	   rather than as a rule drawn under the title. */
+	--cm-header-line: color-mix(in srgb, var(--vscode-sideBarSectionHeader-border, var(--cm-border)) 30%, transparent);
+	/* Toolbar glyphs have their own registered colour, which is not the editor's text colour
+	   in every theme; the header's two buttons are toolbar buttons. */
+	--cm-icon-fg: var(--vscode-icon-foreground, var(--cm-fg));
+	/* Section 3.3 names `--vscode-foreground` for the logo, not the editor's text colour. The two
+	   are the same value in Dark Modern and diverge in themes that tint the editor separately, and
+	   the header is workbench chrome — so it takes the workbench colour. */
+	--cm-header-fg: var(--vscode-foreground, var(--cm-fg));
+	/* Section 2.1 wants the strip's one border at 40%: the seam has to say where the composer
+	   starts without drawing a line across the panel. */
+	--cm-input-line-soft: color-mix(in srgb, var(--vscode-input-border, var(--cm-border)) 40%, transparent);
+	/* Section 2.2. The model pill is a badge held back to 60% at rest so it reads as a control
+	   rather than as a count, and taken to 90% under the pointer. */
+	--cm-badge-bg: var(--vscode-badge-background);
+	--cm-badge-fg: var(--vscode-badge-foreground);
+	--cm-badge-bg-rest: color-mix(in srgb, var(--cm-badge-bg) 60%, transparent);
+	--cm-badge-bg-hover: color-mix(in srgb, var(--cm-badge-bg) 90%, transparent);
+	/* The model menu is a dropdown, so it takes the dropdown's own two colours — a theme tunes
+	   those for a list that floats over content, which is exactly what this is. */
+	--cm-dropdown-bg: var(--vscode-dropdown-background, var(--cm-sidebar-bg));
+	--cm-dropdown-line: var(--vscode-dropdown-border, var(--cm-border));
+	/* Section 2.4: the group's own edge at 50%, one step softer than the strip's. */
+	--cm-input-line-mid: color-mix(in srgb, var(--vscode-input-border, var(--cm-border)) 50%, transparent);
+
+	/* ---------------------------------------------------------------------------------
+	 * Typography, spacing, radius and motion scale.
+	 *
+	 * Every size, spacing and duration in this file resolves through one of the names
+	 * below — there are no bare px or ms literals past this block. The first group of
+	 * each section is the scale proper; everything after it is a value the old sheet
+	 * used that does not land on a step, expressed as a calc() of the nearest one so
+	 * that moving a step moves everything derived from it.
+	 * --------------------------------------------------------------------------------- */
+
+	/* Text sizes. 13px is the panel's reading size, 11px its secondary labels, 10px its
+	   smallest metadata, 12px the size code is set at. */
+	--cm-text-base: 13px;
+	--cm-text-sm: 11px;
+	--cm-text-xs: 10px;
+	--cm-text-code: 12px;
+	--cm-text-title: calc(var(--cm-text-base) + var(--cm-space-1));   /* 17px — the empty state's headline is the one place that outranks body text */
+	--cm-text-modal: calc(var(--cm-text-base) + 3px);                 /* 16px — a modal's own heading */
+	--cm-text-panel: calc(var(--cm-text-base) + 2px);                 /* 15px — a panel window's heading, one step under a modal's */
+	--cm-text-code-lg: calc(var(--cm-text-code) + 0.5px);             /* 12.5px — a question prompt is code-sized but reads as prose, so it takes half a step more */
+	--cm-text-sm-lg: calc(var(--cm-text-sm) + 0.5px);                 /* 11.5px — half a step over a label, for rows that carry file paths */
+	--cm-text-xs-lg: calc(var(--cm-text-xs) + 0.5px);                 /* 10.5px — half a step over metadata, for chips that must stay legible */
+	--cm-text-2xs: calc(var(--cm-text-xs) - 0.5px);                   /* 9.5px — half a step under metadata */
+	--cm-text-3xs: calc(var(--cm-text-xs) - 1px);                     /* 9px — the smallest thing on screen: a disclosure triangle, a dot's label */
+	--cm-text-4xs: calc(var(--cm-text-xs) - 2px);                     /* 8px — a reasoning row's triangle, which is a hint rather than a glyph to read */
+
+	/* Line heights. Unitless, so they scale with whatever font size they land on. */
+	--cm-lh-base: 1.55;
+	--cm-lh-code: 1.5;
+	--cm-lh-loose: calc(var(--cm-lh-base) + 0.05);                    /* 1.6 — long prose, where the extra leading is worth the height */
+	--cm-lh-tight: calc(var(--cm-lh-code) - 0.05);                    /* 1.45 */
+	--cm-lh-snug: calc(var(--cm-lh-code) - 0.1);                      /* 1.4 — a two-line label that should read as one block */
+	--cm-lh-art: calc(var(--cm-lh-code) - 0.45);                      /* 1.05 — ASCII art has to close up or its rows come apart */
+	--cm-lh-none: 1;                                                  /* an icon button's line box is exactly its glyph: the identity, not a step */
+
+	/* Spacing. Four steps of four; anything between them is written as a calc() of the
+	   step it sits next to. */
+	--cm-space-1: 4px;
+	--cm-space-2: 8px;
+	--cm-space-3: 12px;
+	--cm-space-4: 16px;
+	--cm-hairline: calc(var(--cm-space-1) / 4);                       /* 1px — a border is a device hairline, not a unit of spacing */
+	--cm-space-2px: calc(var(--cm-space-1) / 2);                      /* 2px */
+	--cm-space-3px: calc(var(--cm-space-1) - 1px);                    /* 3px */
+	--cm-space-5px: calc(var(--cm-space-1) + 1px);                    /* 5px */
+	--cm-space-6px: calc(var(--cm-space-2) - 2px);                    /* 6px */
+	--cm-space-7px: calc(var(--cm-space-2) - 1px);                     /* 7px */
+	--cm-space-9px: calc(var(--cm-space-2) + 1px);                    /* 9px */
+	--cm-space-10px: calc(var(--cm-space-2) + 2px);                   /* 10px */
+	--cm-space-11px: calc(var(--cm-space-3) - 1px);                   /* 11px */
+	--cm-space-13px: calc(var(--cm-space-3) + 1px);                   /* 13px */
+	--cm-space-14px: calc(var(--cm-space-4) - 2px);                   /* 14px */
+	--cm-space-15px: calc(var(--cm-space-4) - 1px);                   /* 15px */
+	--cm-space-18px: calc(var(--cm-space-4) + 2px);                   /* 18px */
+	--cm-space-20px: calc(var(--cm-space-4) + var(--cm-space-1));     /* 20px */
+	--cm-space-22px: calc(var(--cm-space-4) + var(--cm-space-2) - 2px); /* 22px */
+	--cm-space-24px: calc(var(--cm-space-3) * 2);                     /* 24px */
+	--cm-space-26px: calc(var(--cm-space-3) * 2 + 2px);               /* 26px */
+	--cm-space-28px: calc(var(--cm-space-4) + var(--cm-space-3));     /* 28px */
+	--cm-space-34px: calc(var(--cm-space-4) * 2 + 2px);               /* 34px */
+	--cm-space-36px: calc(var(--cm-space-4) * 2 + var(--cm-space-1)); /* 36px */
+	--cm-space-52px: calc(var(--cm-space-4) * 3 + var(--cm-space-1)); /* 52px */
+	--cm-space-60px: calc(var(--cm-space-20px) * 3);                  /* 60px — a modal's shadow blurs three times as far as it lifts */
+	--cm-space-68px: calc(var(--cm-space-4) * 4 + var(--cm-space-1)); /* 68px */
+
+	/* Fixed extents — column widths, dialog widths, scroll ceilings. Multiples of the
+	   largest step, so the whole set moves together if that step ever changes. */
+	--cm-size-130px: calc(var(--cm-space-4) * 8 + 2px);
+	--cm-size-160px: calc(var(--cm-space-4) * 10);
+	--cm-size-180px: calc(var(--cm-space-4) * 11 + var(--cm-space-1));
+	--cm-size-200px: calc(var(--cm-space-4) * 12 + var(--cm-space-2));
+	--cm-size-240px: calc(var(--cm-space-4) * 15);
+	--cm-size-268px: calc(var(--cm-space-4) * 16 + var(--cm-space-3));
+	--cm-size-280px: calc(var(--cm-space-4) * 17 + var(--cm-space-2));
+	--cm-size-300px: calc(var(--cm-space-4) * 18 + var(--cm-space-3));
+	--cm-size-320px: calc(var(--cm-space-4) * 20);
+	--cm-size-340px: calc(var(--cm-space-4) * 21 + var(--cm-space-1));
+	--cm-size-420px: calc(var(--cm-space-4) * 26 + var(--cm-space-1));
+	--cm-size-480px: calc(var(--cm-space-4) * 30);
+	--cm-size-540px: calc(var(--cm-space-4) * 33 + var(--cm-space-3));
+	--cm-size-560px: calc(var(--cm-space-4) * 35);
+	--cm-size-600px: calc(var(--cm-size-300px) * 2);                  /* the ceiling a disclosure animates up to before it goes back to its own height */
+
+	/* Radii. */
+	--cm-radius-sm: 6px;
+	--cm-radius-md: 10px;
+	--cm-radius-pill: 100px;                                          /* a pill only needs a radius past half its height; nothing here is 200px tall */
+	--cm-radius-2px: calc(var(--cm-radius-sm) - 4px);                 /* 2px */
+	--cm-radius-3px: calc(var(--cm-radius-sm) - 3px);                 /* 3px */
+	--cm-radius-4px: calc(var(--cm-radius-sm) - 2px);                 /* 4px */
+	--cm-radius-5px: calc(var(--cm-radius-sm) - 1px);                 /* 5px */
+	--cm-radius-7px: calc(var(--cm-radius-sm) + 1px);                 /* 7px */
+	--cm-radius-8px: calc(var(--cm-radius-sm) + 2px);                 /* 8px */
+	--cm-radius-9px: calc(var(--cm-radius-md) - 1px);                 /* 9px */
+	--cm-radius-12px: calc(var(--cm-radius-md) + 2px);                /* 12px */
+	--cm-radius-14px: calc(var(--cm-radius-md) + var(--cm-space-1));  /* 14px */
+	--cm-radius: var(--cm-radius-12px);                               /* the original name, kept so the message bubble keeps reading well */
+
+	/* Motion. Fast is a press, base is a state change, slow is something opening. */
+	--cm-duration-fast: 80ms;
+	--cm-duration-base: 150ms;
+	--cm-duration-slow: 220ms;
+	--cm-duration-press: calc(var(--cm-duration-fast) + 20ms);        /* 100ms — the dip under :active */
+	--cm-duration-slide: calc(var(--cm-duration-fast) + 40ms);        /* 120ms — a bar or a menu travelling a short distance */
+	--cm-duration-modal: calc(var(--cm-duration-base) + 30ms);       /* 180ms */
+	--cm-duration-med: calc(var(--cm-duration-slow) - 20ms);          /* 200ms — focus rings and border colour, slow enough to notice */
+	--cm-duration-fade: calc(var(--cm-duration-slow) + 20ms);         /* 240ms */
+	--cm-duration-enter: var(--cm-duration-modal);                    /* 180ms — a message bubble arriving (Section 6.1), on the same beat a window opens */
+	--cm-duration-dialog: calc(var(--cm-duration-base) + 10ms);       /* 160ms — a dialog and its backdrop (Section 6.10) */
+	--cm-duration-dismiss: var(--cm-duration-press);                  /* 100ms — the reverse, which is always quicker than the entry */
+	--cm-duration-instant: 0.01ms;                                    /* what every duration collapses to under prefers-reduced-motion: not zero, so `animationend` still fires */
+	/* Section 6.9's stagger: one step per row, and the steps stop after five. */
+	--cm-stagger-row: 15ms;
+	--cm-stagger-cap: calc(var(--cm-stagger-row) * 5);                /* 75ms — where every row past the fifth comes in */
+	--cm-loop: calc(var(--cm-duration-slow) * 5 - 100ms);             /* 1s — the ambient beat; the cursor blink, the spinner and the pulses are all multiples of it */
+
+	/* Relative measures. The one part of the scale that is deliberately not in pixels:
+	   these have to follow the font size or the window rather than the device grid, so a
+	   px step would be the wrong unit rather than the wrong number. */
+	--cm-text-inline: 0.9em;                                          /* inline code inside prose stays nine tenths of whatever it sits in */
+	--cm-track-label: 0.04em;                                         /* the small uppercase labels; em, so tracking follows the text size */
+	--cm-track-logo: 0.02em;                                          /* the product name is tracked half as wide as a label: enough to settle it, not enough to read as a caption */
+	--cm-track-label-wide: calc(var(--cm-track-label) + 0.01em);      /* 0.05em */
+	--cm-track-label-wider: calc(var(--cm-track-label) + 0.02em);     /* 0.06em */
+	--cm-size-30ch: 30ch;                                             /* a hint line wraps by character count, which is what makes it readable */
+	--cm-size-40ch: 40ch;                                             /* a tool row's argument is cut to forty characters, so its box is forty wide */
+	--cm-size-11ch: 11ch;                                             /* a numeric column is as wide as its widest number */
+	--cm-vh-panel: 60vh;                                              /* a scroll ceiling is a share of the window, not a fixed height */
+	--cm-vh-modal: 80vh;
+	--cm-vh-sheet: calc(var(--cm-vh-modal) + 2vh);                    /* 82vh */
+	--cm-vw-sheet: 92vw;                                              /* a sheet keeps a margin of viewport on either side */
+
+	/* Diff rows — derived from the git decoration colours so they track the theme. */
+	--cm-diff-add-fg: var(--vscode-gitDecoration-addedResourceForeground, var(--cm-success));
+	--cm-diff-del-fg: var(--vscode-gitDecoration-deletedResourceForeground, var(--cm-error-fg));
+	--cm-diff-add-bg: color-mix(in srgb, var(--cm-diff-add-fg) 14%, transparent);
+	--cm-diff-del-bg: color-mix(in srgb, var(--cm-diff-del-fg) 14%, transparent);
+
+	/* Syntax tokens. The theme's editor token colours are not exposed to webviews,
+	 * so these borrow the closest registered colours (debug values, symbol icons). */
+	/* A comment is dimmer than the code around it but it is still content the reader reads, so
+	   it is derived from the editor foreground rather than borrowed from a chrome colour.
+	   editorCodeLens.foreground was the obvious donor and is the wrong one: code lens is meant
+	   to recede, and in Light Modern it is #919191, which measures 2.97 against the code
+	   block — under the 3.0 floor. 68% of the editor foreground is softer than code in every
+	   theme and inherits the foreground's own readability. */
+	--cm-tok-cmt: color-mix(in srgb, var(--cm-fg) 68%, transparent);
+	--cm-tok-str: var(--vscode-debugTokenExpression-string, var(--cm-diff-add-fg));
+	--cm-tok-num: var(--vscode-debugTokenExpression-number, var(--cm-warning));
+	--cm-tok-kw: var(--vscode-symbolIcon-keywordForeground, var(--cm-accent));
+	--cm-tok-fn: var(--vscode-symbolIcon-functionForeground, var(--cm-link));
+}
+
+/* ---------- Theme-conditional tokens ----------
+   Light themes tune `errorForeground` for white — it is #F85149 in Light Modern — while every
+   error surface here paints it on a 12–22% tint of itself. The tint lifts the backdrop enough
+   to drop the pair to 2.7:1 on the permission dialog's No button and 2.9:1 on a failed tool's
+   output, both under the 3.0 floor. gitDecoration.deletedResourceForeground is the same theme's
+   own answer for "this is wrong" in body text (#AD0707 in Light Modern, ~6.5:1 on the tint),
+   and it is borrowed only where the theme is light: the dark themes' error red already clears
+   the floor, and swapping it there would change a colour the rest of the redesign was drawn
+   against for no accessibility gain. */
+body.vscode-light {
+	--cm-error-fg: var(--vscode-gitDecoration-deletedResourceForeground, var(--vscode-editorError-foreground, var(--vscode-errorForeground)));
+}
+
+/* The high-contrast themes are the one place where `descriptionForeground` is itself
+   translucent — rgba(41,41,41,0.7) in High Contrast Light, rgba(255,255,255,0.7) in the dark
+   one — so fading it again multiplies the two alphas. On white that puts the session total at
+   2.75:1, a system notice at 2.47:1 and a code block's language label and the thinking row's
+   elapsed time at 2.96:1, with the turn duration at 3.08:1 sitting inside the measurement noise
+   of the floor. Fading a colour the theme has already faded is the wrong instinct in a theme
+   whose whole premise is that nothing recedes, so here every weight collapses to the
+   description colour unmodified. Those labels are still dimmer than body text — that is what
+   `--cm-desc` is for, and it is the hierarchy Section 1 asked for — without a second reduction
+   on top. */
+body.vscode-high-contrast,
+body.vscode-high-contrast-light {
+	--cm-desc-72: var(--cm-desc);
+	--cm-desc-70: var(--cm-desc);
+	--cm-desc-66: var(--cm-desc);
+	--cm-desc-60: var(--cm-desc);
+	/* Same instinct, same mistake one line over: the badge pair a high-contrast theme ships is
+	   exact — white on #0f4a85 is 8.98:1 in High Contrast Light — and holding the background
+	   back to 60% composites it against the panel until that pair reads 3.24:1. Above the floor,
+	   but it is the theme's own colour thinned by two thirds for a stylistic reason that does not
+	   apply here. Both weights take the background as the theme set it. */
+	--cm-badge-bg-rest: var(--cm-badge-bg);
+	--cm-badge-bg-hover: var(--cm-badge-bg);
+}
+
+/* With both weights equal the two composer pills would lose their hover feedback, so they take
+   the border a high-contrast theme keeps for exactly that purpose. */
+body.vscode-high-contrast .model-pill:hover,
+body.vscode-high-contrast-light .model-pill:hover {
+	outline: var(--cm-hairline) solid var(--vscode-contrastActiveBorder, var(--cm-focus));
+	outline-offset: calc(var(--cm-space-2px) * -1);
+}
+
+/* ---------- Reduced motion (Section 6) ----------
+ * Every animation in this sheet is decorative: something arriving, something opening,
+ * something still working. A reader who has asked the system for less movement gets the
+ * end state immediately instead — and 0.01ms rather than 0 because the animations that are
+ * timed by their own `animationend` (a bubble's entry class, a menu's close) still have to
+ * finish for the JavaScript behind them to run.
+ */
+@media (prefers-reduced-motion: reduce) {
+	*, *::before, *::after {
+		animation-duration: var(--cm-duration-instant) !important;
+		transition-duration: var(--cm-duration-instant) !important;
+	}
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html, body {
+	height: 100%;
+	margin: 0;
+	padding: 0;
+	font-family: var(--vscode-font-family, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+	font-size: var(--vscode-font-size, var(--cm-text-base));
+	color: var(--cm-fg);
+	/* The panel is a view container, so its ground is the side bar's colour — the same one
+	   the header and the composer already stand on. Section 4.1 then puts an answer on the
+	   editor's background, one shade off the ground, which is what makes a bubble a bubble
+	   without a border around it. */
+	background: var(--cm-sidebar-bg);
+	line-height: var(--cm-lh-loose);
+	-webkit-font-smoothing: antialiased;
+}
+
+body {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+/* ---------- Header (Section 3) ----------
+   "Minimal. It is not the primary interaction surface." A fixed 36px band holding the product
+   name and two buttons; everything else that used to live here is either in the input bar now
+   or reachable from Settings. */
+.header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	/* Height is the rule, not padding: the band has to measure 36px whether or not the session
+	   name pill is showing next to the logo. */
+	height: var(--cm-space-36px);
+	flex-shrink: 0;
+	padding: 0 var(--cm-space-3);
+	background: var(--cm-sidebar-bg);
+	border-bottom: var(--cm-hairline) solid var(--cm-header-line);
+	gap: var(--cm-space-10px);
+}
+
+.header-left {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-2);
+	min-width: 0;
+}
+
+.logo {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-7px);
+	font-weight: 600;
+	font-size: var(--cm-text-base);
+	color: var(--cm-header-fg);
+	white-space: nowrap;
+	letter-spacing: var(--cm-track-logo);
+}
+
+.logo svg {
+	color: var(--cm-accent);
+	flex-shrink: 0;
+}
+
+/* Session name set by /rename, shown next to the product name. */
+.session-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--cm-text-sm);
+	font-weight: 500;
+	padding: var(--cm-space-2px) var(--cm-space-7px);
+	border-radius: var(--cm-radius-pill);
+	background: var(--cm-input-bg);
+	border: var(--cm-hairline) solid var(--cm-border);
+	color: var(--cm-desc);
+}
+
+/* /color tints the name pill too, so the session is identifiable at a glance. */
+.session-name.accented {
+	border-color: var(--cm-accent-line);
+	background: var(--cm-accent-soft);
+	color: var(--cm-fg);
+}
+
+/* Tags set by /tag. */
+.session-tags {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--cm-text-sm);
+	color: var(--cm-desc);
+	opacity: 0.85;
+}
+
+.header-right {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-6px);
+	flex-shrink: 0;
+}
+
+.header-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-2px);
+}
+
+/* Turn status, in the composer footer since Section 3.2 (it is not one of the header's two
+   buttons). Here it is a footer label rather than a chip: no border, no fill, the same size and
+   colour as the rest of the line. */
+.status-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--cm-space-5px);
+	min-width: 0;
+	max-width: var(--cm-size-240px);
+	margin-right: auto;
+	font-size: var(--cm-text-xs-lg);
+	color: var(--cm-desc);
+	overflow: hidden;
+	white-space: nowrap;
+}
+
+/* `setStatus` writes text for a running turn and for an error and leaves it empty otherwise,
+   so an idle panel would carry a lone dot on a line of hints. The whole chip goes instead —
+   including the dot — which is what "idle is silent" already meant in the header. */
+.status-pill:not(:has(#statusText:not(:empty))) {
+	display: none;
+}
+
+#statusText {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.status-dot {
+	width: var(--cm-space-7px);
+	height: var(--cm-space-7px);
+	border-radius: 50%;
+	background: var(--cm-success);
+	flex-shrink: 0;
+	transition: background var(--cm-duration-med) ease;
+}
+
+.status-dot.busy {
+	background: var(--cm-warning);
+	animation: pulse calc(var(--cm-loop) * 1.2) ease-in-out infinite;
+}
+
+.status-dot.error {
+	background: var(--cm-error-fg);
+}
+
+@keyframes pulse {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.4; }
+}
+
+.icon-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--cm-space-26px);
+	height: var(--cm-space-26px);
+	border: none;
+	border-radius: var(--cm-radius-sm);
+	background: transparent;
+	color: var(--cm-fg);
+	cursor: pointer;
+	opacity: 0.7;
+	transition: opacity var(--cm-duration-base), background var(--cm-duration-base);
+}
+
+.icon-btn:hover {
+	opacity: 1;
+	background: var(--cm-toolbar-hover);
+}
+
+.icon-btn:active {
+	transform: scale(0.94);
+}
+
+.icon-btn:focus-visible {
+	outline: var(--cm-hairline) solid var(--cm-focus);
+	outline-offset: calc(var(--cm-hairline) * -1);
+	opacity: 1;
+}
+
+/* Section 3.3. `.icon-btn` is the panel's generic small button; the header's two are toolbar
+   buttons, so they take the toolbar glyph colour at full strength — dimming a colour the theme
+   already tuned for a toolbar only makes it wrong — and a 5px radius. The hover needs its own
+   selector rather than inheriting `.icon-btn:hover`: at equal specificity the later rule wins,
+   and `background: none` above would otherwise take the hover away. */
+.header .icon-btn {
+	width: var(--cm-space-26px);
+	height: var(--cm-space-26px);
+	border-radius: var(--cm-radius-5px);
+	color: var(--cm-icon-fg);
+	background: none;
+	opacity: 1;
+}
+
+.header .icon-btn:hover {
+	background: var(--cm-toolbar-hover);
+}
+
+/* ---------- Chat scroll ---------- */
+.chat-scroll {
+	flex: 1;
+	overflow-y: auto;
+	overflow-x: hidden;
+}
+
+.messages {
+	padding: var(--cm-space-3) var(--cm-space-3) var(--cm-space-2);
+	display: flex;
+	flex-direction: column;
+	/* Section 4.1: the space between messages is each message's own bottom margin, not a
+	   flex gap. A gap would also apply to the two zero-height markers the window leaves
+	   above the thread, which would then push the transcript down by two gaps of nothing. */
+	min-height: 100%;
+}
+
+/* ---------- Empty state ---------- */
+.empty-state {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: var(--cm-space-14px);
+	flex: 1;
+	padding: var(--cm-space-28px) var(--cm-space-20px) var(--cm-space-36px);
+	text-align: center;
+	color: var(--cm-desc);
+	min-height: var(--cm-vh-panel);
+}
+
+.empty-state .logo-mark {
+	width: var(--cm-space-52px);
+	height: var(--cm-space-52px);
+	color: var(--cm-accent);
+	opacity: 0.85;
+}
+
+.empty-state h2 {
+	margin: 0;
+	font-size: var(--cm-text-title);
+	font-weight: 600;
+	color: var(--cm-fg);
+	letter-spacing: calc(var(--cm-hairline) * 0.2);
+}
+
+.empty-state p {
+	margin: 0;
+	max-width: var(--cm-size-280px);
+	font-size: var(--cm-text-base);
+	line-height: var(--cm-lh-base);
+}
+
+.hints {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: var(--cm-space-2);
+	margin-top: var(--cm-space-6px);
+	max-width: var(--cm-size-300px);
+}
+
+.hint-chip {
+	padding: var(--cm-space-7px) var(--cm-space-13px);
+	border-radius: var(--cm-radius-pill);
+	background: var(--cm-input-bg);
+	border: var(--cm-hairline) solid var(--cm-border);
+	color: var(--cm-fg);
+	font-size: var(--cm-text-code);
+	font-family: inherit;
+	cursor: pointer;
+	transition: background var(--cm-duration-base), border-color var(--cm-duration-base), transform var(--cm-duration-press);
+}
+
+.hint-chip:hover {
+	background: var(--cm-toolbar-hover);
+	border-color: var(--cm-accent-line);
+}
+
+.hint-chip:active {
+	transform: scale(0.97);
+}
+
+/* ---------- Messages ----------
+ * Section 4.1: a message is as tall as what it says. The bubble is a background shift of
+ * one shade rather than a card — no border, no shadow — and the space between two of them
+ * is eight pixels, which is close enough that a turn and its answer read as one exchange.
+ */
+.message {
+	display: flex;
+	gap: var(--cm-space-2);
+	margin-bottom: var(--cm-space-2);
+	max-width: 100%;
+}
+
+/* Section 6.1: a bubble that has just arrived rises six pixels into place. Only that one —
+   the class is put on by the render that first draws the message and taken off when the
+   animation ends, so a redraw mid-turn does not replay it and a transcript loaded from
+   history does not animate at all. */
+.message.cm-message-enter {
+	animation: cm-message-in var(--cm-duration-enter) ease;
+}
+
+/* The user's own line is right-aligned, so the row runs the other way and the bubble takes
+   only the width it needs. Anything wider than most of the thread reads as a document
+   rather than as something someone typed. */
+.message.user {
+	flex-direction: row-reverse;
+}
+
+@keyframes cm-message-in {
+	from { opacity: 0; transform: translateY(var(--cm-space-6px)); }
+	to { opacity: 1; transform: translateY(0); }
+}
+
+.message-avatar {
+	width: var(--cm-space-24px);
+	height: var(--cm-space-24px);
+	border-radius: var(--cm-radius-sm);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	margin-top: var(--cm-space-2px);
+}
+
+.message.user .message-avatar {
+	background: var(--cm-user-bg);
+	color: var(--cm-accent);
+}
+
+.message.assistant .message-avatar {
+	background: var(--cm-assistant-bg);
+	border: var(--cm-hairline) solid var(--cm-border);
+	color: var(--cm-accent);
+}
+
+.message.error .message-avatar {
+	background: var(--cm-error-bg);
+	color: var(--cm-error-fg);
+}
+
+/* Shell-mode turns borrow the terminal's colours, avatar included. */
+.message.shell .message-avatar {
+	background: var(--vscode-terminal-background, var(--cm-code-bg));
+	border: var(--cm-hairline) solid var(--cm-border);
+	color: var(--vscode-terminal-foreground, var(--cm-fg));
+}
+
+.message-avatar svg {
+	width: var(--cm-space-14px);
+	height: var(--cm-space-14px);
+}
+
+.message-content {
+	position: relative;
+	flex: 1;
+	min-width: 0;
+	border-radius: var(--cm-radius-md);
+	/* Ten over, eight under: the header sits closer to the top edge than the last line of
+	   an answer does to the bottom, which is what keeps a one-line reply from looking
+	   bottom-heavy. */
+	padding: var(--cm-space-10px) var(--cm-space-3) var(--cm-space-2);
+	border: var(--cm-hairline) solid transparent;
+}
+
+.message.user .message-content {
+	flex: 0 1 auto;
+	max-width: 85%;
+	padding: var(--cm-space-2) var(--cm-space-3);
+	background: var(--cm-input-bg);
+}
+
+.message.assistant .message-content {
+	background: var(--cm-bg);
+	/* Room for the duration label (Section 1.3), held from the first token so the number
+	   arriving at the end of the turn is not a layout change. */
+	padding-bottom: var(--cm-space-18px);
+}
+
+.message.error .message-content {
+	background: var(--cm-error-bg);
+	border-color: var(--cm-error-fg);
+}
+
+.message.shell .message-content {
+	background: var(--cm-bg);
+}
+
+/* Where the side bar and the editor share a background — high contrast, and a few light
+   themes — a shade of difference is no difference, so the bubble takes an outline instead. */
+body.vscode-high-contrast .message.assistant .message-content,
+body.vscode-high-contrast-light .message.assistant .message-content,
+body.vscode-high-contrast .message.user .message-content,
+body.vscode-high-contrast-light .message.user .message-content {
+	border-color: var(--cm-border);
+}
+
+/* A system line is a note about the session rather than a turn in it: no bubble, no
+   avatar, centred, and quiet enough to skim past (Section 4.1). Only the one-line notices
+   are drawn this way — a slash command's reply is content the user asked to read, so it
+   keeps a full-width readable block. */
+.message.system.is-notice {
+	justify-content: center;
+}
+
+.message.system.is-notice .message-avatar,
+.message.system.is-notice .message-header {
+	display: none;
+}
+
+.message.system.is-notice .message-content {
+	flex: 0 1 auto;
+	padding: 0;
+	border-color: transparent;
+	text-align: center;
+	font-size: var(--cm-text-sm);
+	color: var(--cm-desc-60);
+}
+
+/* The notice's own text is still a `<pre>`, which the code-block rule (Section 4.4) would
+   otherwise draw as a surface — background, hairline and all. A notice has no box, so the
+   pre gives all of that back and keeps only the wrapping. */
+.message.system.is-notice .plain-output {
+	font-family: inherit;
+	font-size: inherit;
+	color: inherit;
+	background: none;
+	border: none;
+	padding: 0;
+	border-radius: 0;
+}
+
+.message-header {
+	display: flex;
+	align-items: baseline;
+	gap: var(--cm-space-2);
+	margin-bottom: var(--cm-space-1);
+	font-size: var(--cm-text-sm);
+	color: var(--cm-desc);
+	flex-wrap: wrap;
+}
+
+.message-role {
+	font-weight: 600;
+	color: var(--cm-fg);
+}
+
+.message-role .intent {
+	font-weight: 400;
+	color: var(--cm-accent);
+}
+
+.message-time {
+	font-size: var(--cm-text-xs-lg);
+	opacity: 0.75;
+	margin-left: auto;
+	white-space: nowrap;
+}
+
+/* Not `pre-wrap`. Every part of a body that needs raw newlines kept already asks for it
+   itself — `.stream-tail` for the block still being typed, `.plain-output` for verbatim
+   system and shell output — and parsed markdown never does: `renderMarkdown` turns a soft
+   line break into a `<br>` and leaves the newlines *between* blocks in the markup for
+   readability. Under `pre-wrap` each of those became a real line box, so every list item
+   and every code block carried an extra blank line of the body's own leading (Section 4.1). */
+.message-body {
+	word-wrap: break-word;
+	overflow-wrap: anywhere;
+}
+
+.message-body p {
+	margin: 0 0 var(--cm-space-2);
+}
+
+.message-body p:last-child {
+	margin-bottom: 0;
+}
+
+/* Section 4.4: a code block is a surface, not a box. The outline is the editor's own
+   line-highlight border at 40% — present enough to say where the code ends, faint enough
+   that a paragraph with three snippets in it does not read as a stack of frames. */
+.message-body pre {
+	background: var(--cm-code-bg);
+	border-radius: var(--cm-radius-sm);
+	padding: var(--cm-space-10px) var(--cm-space-3);
+	overflow-x: auto;
+	margin: var(--cm-space-2) 0;
+	border: var(--cm-hairline) solid color-mix(in srgb, var(--vscode-editor-lineHighlightBorder, var(--cm-border)) 40%, transparent);
+	position: relative;
+}
+
+.message-body code {
+	font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Consolas, monospace);
+	font-size: var(--cm-text-inline);
+}
+
+/* Links in rendered markdown — the theme's own link colour, underlined only on hover
+   so a paragraph full of citations stays readable. */
+.message-body a,
+.tool-markdown a {
+	color: var(--cm-link);
+	text-decoration: none;
+}
+
+.message-body a:hover,
+.tool-markdown a:hover {
+	color: var(--vscode-textLink-activeForeground);
+	text-decoration: underline;
+}
+
+.message-body pre code {
+	background: transparent;
+	padding: 0;
+	display: block;
+	/* Twelve pixels, the size code is set at, rather than nine tenths of the prose around it:
+	   a block is read as code and should be measured against the editor, not the sentence
+	   that introduced it. */
+	font-size: var(--cm-text-code);
+	line-height: var(--cm-lh-code);
+	/* The webview's own stylesheet colours every `code` with `textPreformat.foreground`,
+	   which is only meant to sit on `textPreformat.background`. A code block uses the
+	   editor pair instead, so highlighted spans and plain lines share one base colour. */
+	color: var(--vscode-editor-foreground, var(--cm-fg));
+}
+
+.message-body :not(pre) > code {
+	/* Both halves of the theme's inline-code pair. Overriding only the background breaks
+	   it: Default High Contrast Light defines textPreformat.foreground as #ffffff against
+	   a dark blue background, which on our own light code background is invisible. */
+	background: var(--vscode-textPreformat-background, var(--cm-code-bg));
+	color: var(--vscode-textPreformat-foreground, var(--cm-fg));
+	padding: var(--cm-hairline) var(--cm-space-5px);
+	border-radius: var(--cm-radius-4px);
+}
+
+.message-body ul,
+.message-body ol {
+	margin: var(--cm-space-9px) 0;
+	padding-left: var(--cm-space-22px);
+}
+
+.message-body li {
+	margin: var(--cm-space-3px) 0;
+}
+
+.message-body blockquote {
+	border-left: var(--cm-space-3px) solid var(--cm-accent-line);
+	padding-left: var(--cm-space-11px);
+	margin: var(--cm-space-9px) 0;
+	color: var(--cm-desc);
+	font-style: italic;
+}
+
+.message-body a {
+	color: var(--cm-link);
+	text-decoration: none;
+}
+
+.message-body a:hover {
+	text-decoration: underline;
+}
+
+/* ---------- Code blocks ----------
+ * Section 4.4: the language is a caption, not a title bar, and the copy button is a corner
+ * affordance that only appears when the pointer is on the block. What is left when nothing
+ * is hovered is the code and a hairline.
+ */
+.code-block {
+	position: relative;
+	margin: var(--cm-space-2) 0;
+}
+
+.code-block .code-bar {
+	display: flex;
+	align-items: center;
+	/* Tall enough to hold the copy button that is pinned to its right end, and padded on
+	   that side so a long language name never runs underneath it. */
+	min-height: var(--cm-space-20px);
+	padding: 0 var(--cm-space-20px) var(--cm-space-1) var(--cm-space-2px);
+	background: transparent;
+	border: none;
+	font-size: var(--cm-text-xs);
+	letter-spacing: var(--cm-track-label);
+	color: var(--cm-desc-70);
+	font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.code-block .code-bar:empty::before {
+	content: 'text';
+}
+
+.code-block pre {
+	margin: 0;
+	border-radius: var(--cm-radius-sm);
+}
+
+.copy-btn {
+	position: absolute;
+	top: 0;
+	right: 0;
+	width: var(--cm-space-20px);
+	height: var(--cm-space-20px);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	border: none;
+	border-radius: var(--cm-radius-5px);
+	background: transparent;
+	color: var(--cm-desc);
+	font-size: var(--cm-text-sm);
+	font-family: inherit;
+	cursor: pointer;
+	/* Absent rather than faint: the button is discoverable by pointing at the block, and a
+	   keyboard reveals it by focusing it. `opacity` alone is animated, so revealing it moves
+	   nothing around it. */
+	opacity: 0;
+	transition: background var(--cm-duration-base), color var(--cm-duration-base), opacity var(--cm-duration-base);
+}
+
+.code-block:hover .copy-btn,
+.copy-btn:focus-visible,
+.copy-btn.copied {
+	opacity: 1;
+}
+
+.copy-btn:hover {
+	background: var(--cm-toolbar-hover);
+	color: var(--cm-fg);
+	opacity: 1;
+}
+
+.copy-btn.copied {
+	color: var(--cm-success);
+}
+
+.copy-btn svg {
+	width: var(--cm-space-4);
+	height: var(--cm-space-4);
+}
+
+/* Streaming cursor (Section 6.2). A two-by-fourteen bar in the workbench's own text colour,
+   held at seven tenths so it reads as a caret rather than as a character. The 70% lives in
+   the element and in the blink's own last step, so the bar is still at 70% when a reader who
+   has asked for reduced motion gets the end state instead of the loop. */
+.streaming-cursor {
+	display: inline-block;
+	width: var(--cm-space-2px);
+	height: var(--cm-space-14px);
+	background: var(--vscode-foreground, var(--cm-fg));
+	opacity: 0.7;
+	margin-left: var(--cm-space-2px);
+	vertical-align: text-bottom;
+	animation: cm-caret-blink var(--cm-loop) step-end infinite;
+}
+
+@keyframes cm-caret-blink {
+	50% { opacity: 0; }
+	100% { opacity: 0.7; }
+}
+
+/* Live answer, drawn in two halves (Section 5). `.stream-blocks` holds the markdown
+   that is already complete, parsed once per block; `.stream-tail` holds the block still
+   being typed, as raw text a delta is appended to. Neither has a box of its own — the
+   two together have to read as one continuous answer. */
+.stream-blocks:empty {
+	display: none;
+}
+
+.stream-tail {
+	white-space: pre-wrap;
+	word-wrap: break-word;
+	overflow-wrap: anywhere;
+}
+
+/* `.message-body p:last-child` closes the gap under the final paragraph, which is right
+   for a finished answer and wrong here: the paragraph above the tail is not the last one,
+   the tail is still being written under it. */
+.stream-blocks > p:last-child {
+	margin-bottom: var(--cm-space-2);
+}
+
+/* Windowing (Section 5): the bubbles above the live window are one spacer of the height
+   they measured at, so the scrollbar keeps the length the transcript really has. The
+   sentinel below it is what reveals twenty more when the reader reaches the top. */
+.thread-spacer {
+	flex: 0 0 auto;
+}
+
+.thread-sentinel {
+	height: var(--cm-hairline);
+	flex: 0 0 auto;
+}
+
+/* ---------- Thinking block ----------
+ * Section 4.2: reasoning is an aside, so closed it is one 24px row — a triangle, what it is,
+ * and how long it took — with no border and no fill. Opened, the text gets an indent-guide
+ * rule down its left edge instead of a box, which reads as a quotation rather than a panel.
+ */
+.thinking {
+	margin: 0 0 var(--cm-space-2);
+	font-size: var(--cm-text-code);
+}
+
+.thinking > summary {
+	cursor: pointer;
+	/* The row is a fixed 24px whether or not it carries a duration, so a reasoning block
+	   appearing mid-turn never nudges the text under it. */
+	height: var(--cm-space-24px);
+	padding: 0;
+	color: var(--cm-desc);
+	font-size: var(--cm-text-sm);
+	list-style: none;
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-6px);
+	user-select: none;
+}
+
+.thinking > summary::-webkit-details-marker {
+	display: none;
+}
+
+.thinking > summary::before {
+	content: '▸';
+	font-size: var(--cm-text-4xs);
+	transition: transform var(--cm-duration-base);
+}
+
+.thinking[open] > summary::before {
+	transform: rotate(90deg);
+}
+
+/* How long it thought for, pushed to the far end of the row. */
+.thinking-elapsed {
+	margin-left: auto;
+	font-variant-numeric: tabular-nums;
+	color: var(--cm-desc-70);
+}
+
+.thinking-body {
+	padding: 0 0 var(--cm-space-2) var(--cm-space-10px);
+	border-left: var(--cm-space-2px) solid var(--vscode-editorIndentGuide-background, var(--cm-border));
+	color: var(--cm-desc);
+	line-height: var(--cm-lh-loose);
+	white-space: pre-wrap;
+	word-wrap: break-word;
+}
+
+/* ---------- Disclosure animation (Section 6) ----------
+ * `::details-content` is the box a `<details>` reveals, which is what lets the slide be pure
+ * CSS while the element stays a real `<details>` — the thing Ctrl+O drives and the thing a
+ * screen reader already knows how to announce.
+ *
+ * The ceiling is a ceiling for the animation only: `max-height` reverts to `none` when the
+ * animation ends, so a 900-line output is not left clipped at 600px. `overflow: hidden`
+ * stays, and clips nothing once the box is its own height again.
+ */
+.thinking::details-content,
+.tool-card::details-content {
+	overflow: hidden;
+}
+
+@keyframes cm-disclose {
+	from { max-height: 0; }
+	to { max-height: var(--cm-size-600px); }
+}
+
+.thinking[open].is-opening::details-content {
+	animation: cm-disclose var(--cm-duration-med) ease-out;
+}
+
+.tool-card[open].is-opening::details-content {
+	animation: cm-disclose var(--cm-duration-base) ease-out;
+}
+
+/* ---------- Tool cards ----------
+ * Section 4.3: at rest a call is one 28px row — what ran, and what it ran on. The row is a
+ * disclosure and the detail underneath it is attached to it, so opening one reads as the row
+ * growing rather than as a second card appearing.
+ */
+.tool-card {
+	border: none;
+	border-radius: var(--cm-radius-sm);
+	background: color-mix(in srgb, var(--vscode-list-hoverBackground, var(--cm-code-bg)) 30%, transparent);
+	margin: var(--cm-space-2) 0;
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--cm-text-sm);
+}
+
+.tool-card > summary {
+	cursor: pointer;
+	/* Twenty-eight tall, with the two ends of the row hard against the padding: the mark and
+	   the name on the left, the argument on the right. */
+	height: var(--cm-space-28px);
+	padding: 0 var(--cm-space-2);
+	font-weight: 400;
+	color: color-mix(in srgb, var(--cm-fg) 80%, transparent);
+	list-style: none;
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-6px);
+	user-select: none;
+}
+
+.tool-card > summary::-webkit-details-marker {
+	display: none;
+}
+
+/* No triangle: the mark on the left already says whether the row has anything under it,
+   and a second glyph in a 28px row is one too many. */
+.tool-card > summary:hover {
+	background: var(--cm-toolbar-hover);
+	border-radius: var(--cm-radius-sm);
+}
+
+.tool-card .tool-name {
+	color: inherit;
+	flex-shrink: 0;
+}
+
+/* The left mark: a spinner while the call runs, then how it ended. Both live in the same
+   12px slot so the row does not reflow when the call finishes. */
+.tool-mark {
+	width: var(--cm-space-3);
+	height: var(--cm-space-3);
+	flex-shrink: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	font-size: var(--cm-text-xs);
+	line-height: var(--cm-lh-none);
+}
+
+.tool-mark.is-ok { color: var(--cm-success); }
+.tool-mark.is-error { color: var(--cm-error-fg); }
+.tool-mark.is-ok::before { content: '✓'; }
+.tool-mark.is-error::before { content: '✕'; }
+
+.tool-mark .spinner {
+	width: var(--cm-space-3);
+	height: var(--cm-space-3);
+	box-sizing: border-box;
+	border: var(--cm-space-2px) solid var(--cm-input-border, var(--cm-border));
+	border-top-color: var(--vscode-progressBar-background, var(--cm-accent));
+	border-radius: 50%;
+	animation: cm-spin calc(var(--cm-loop) * 0.7) linear infinite;
+}
+
+@keyframes cm-spin {
+	to { transform: rotate(360deg); }
+}
+
+/* The status word and the duration the resting row has no space for. First line of the
+   body, so nothing is lost — only moved behind the click that asks for it. */
+.tool-outcome {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-6px);
+	font-size: var(--cm-text-xs);
+	color: var(--cm-desc);
+}
+
+.tool-card-body {
+	padding: 0 var(--cm-space-2) var(--cm-space-2);
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-6px);
+	background: var(--cm-bg);
+	border-radius: 0 0 var(--cm-radius-sm) var(--cm-radius-sm);
+}
+
+.tool-card-body pre {
+	margin: 0;
+	background: var(--cm-code-bg);
+	border: var(--cm-hairline) solid color-mix(in srgb, var(--vscode-editor-lineHighlightBorder, var(--cm-border)) 40%, transparent);
+	border-radius: var(--cm-radius-sm);
+	padding: var(--cm-space-2) var(--cm-space-10px);
+	overflow-x: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.tool-card-body .tool-label {
+	font-size: var(--cm-text-xs);
+	text-transform: uppercase;
+	letter-spacing: calc(var(--cm-hairline) / 2);
+	color: var(--cm-desc);
+}
+
+/* The one-line subject of the call — a path, a query, a todo count. Right-aligned, and cut
+   to forty characters by the renderer; the box is forty wide so the cut is where the text
+   ends rather than where the panel happens to be. */
+.tool-card .tool-target {
+	margin-left: auto;
+	max-width: var(--cm-size-40ch);
+	color: var(--cm-desc);
+	font-weight: 400;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* A failed call keeps a mark of its own down the left edge — the one case where the row
+   should read as wrong before it is read at all. */
+.tool-card.is-error {
+	box-shadow: inset var(--cm-space-2px) 0 0 var(--cm-error-fg);
+}
+
+.tool-note {
+	color: var(--cm-desc);
+	font-family: var(--vscode-font-family, sans-serif);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.tool-empty {
+	color: var(--cm-desc);
+	font-style: italic;
+}
+
+/* Captured output. Long results are clipped by the renderer; this caps the rest. */
+.tool-card-body .tool-output {
+	max-height: var(--cm-size-320px);
+	overflow: auto;
+	font-size: var(--cm-text-sm);
+	line-height: var(--cm-lh-code);
+}
+
+.tool-card-body .tool-output.is-error {
+	border-color: var(--cm-error-fg);
+	color: var(--cm-error-fg);
+	background: var(--cm-error-bg);
+}
+
+.tool-card-body .tool-output.is-terminal {
+	background: var(--vscode-terminal-background, var(--cm-bg));
+	color: var(--vscode-terminal-foreground, var(--cm-fg));
+}
+
+/* A clipped block: the visible part, then the control that reveals the rest. The
+   expanded state gets a taller box, since at that point the content is the point. */
+.clip {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--cm-space-2px);
+}
+
+.clip.is-expanded .tool-output,
+.clip.is-expanded pre {
+	max-height: var(--cm-vh-panel);
+}
+
+.clip-toggle {
+	background: none;
+	border: none;
+	padding: var(--cm-hairline) 0;
+	font-family: inherit;
+	font-size: var(--cm-text-sm);
+	color: var(--cm-link);
+	cursor: pointer;
+}
+
+.clip-toggle:hover {
+	color: var(--vscode-textLink-activeForeground);
+	text-decoration: underline;
+}
+
+.clip-toggle:focus-visible {
+	outline: var(--cm-hairline) solid var(--vscode-focusBorder, var(--cm-link));
+	outline-offset: var(--cm-space-2px);
+}
+
+.tool-markdown {
+	font-family: var(--vscode-font-family, sans-serif);
+}
+
+.tool-markdown > :first-child { margin-top: 0; }
+.tool-markdown > :last-child { margin-bottom: 0; }
+
+/* Web search hits: one title link per row with its host underneath, in place of the
+   raw `Links: [{…}]` JSON the tool answers with. */
+.search-hits {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-2);
+}
+
+.search-hit {
+	padding-left: var(--cm-space-2);
+	border-left: var(--cm-space-2px) solid var(--vscode-panel-border, transparent);
+}
+
+.search-title {
+	display: block;
+	font-size: var(--cm-text-code);
+	color: var(--vscode-textLink-foreground);
+	text-decoration: none;
+}
+
+.search-title:hover {
+	color: var(--vscode-textLink-activeForeground);
+	text-decoration: underline;
+}
+
+.search-host,
+.search-snippet {
+	font-size: var(--cm-text-sm);
+	color: var(--cm-desc);
+	word-break: break-all;
+}
+
+.search-snippet {
+	margin-top: var(--cm-space-2px);
+	word-break: normal;
+}
+
+/* A collapsible extra inside a card (a sub-agent's instructions, say). */
+.tool-subblock > summary {
+	cursor: pointer;
+	color: var(--cm-desc);
+	font-size: var(--cm-text-sm);
+	list-style: none;
+	user-select: none;
+}
+
+.tool-subblock > summary::-webkit-details-marker { display: none; }
+
+.tool-subblock > summary::before {
+	content: '▸ ';
+	font-size: var(--cm-text-3xs);
+}
+
+.tool-subblock[open] > summary::before { content: '▾ '; }
+
+/* What a sub-agent said, shown inside the Task card that spawned it. */
+.tool-agent-text {
+	border-left: var(--cm-space-2px) solid var(--cm-accent-line);
+	padding-left: var(--cm-space-9px);
+	color: var(--cm-fg);
+	font-family: var(--vscode-font-family, sans-serif);
+}
+
+.tool-agent-text > :first-child { margin-top: 0; }
+.tool-agent-text > :last-child { margin-bottom: 0; }
+
+/* AskUserQuestion — the one tool card the user is meant to act on, so its options are
+   real buttons. Sized and coloured like the composer's own chips rather than like the
+   permission modal: this is part of the conversation, not an interruption of it. */
+.ask-block {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-11px);
+	font-family: var(--vscode-font-family, sans-serif);
+}
+
+.ask-question {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-6px);
+}
+
+.ask-header {
+	font-size: var(--cm-text-xs);
+	text-transform: uppercase;
+	letter-spacing: var(--cm-track-label-wider);
+	color: var(--cm-desc);
+}
+
+.ask-prompt {
+	/* Section 4.5: the question is body text — the same size as the answer it is asking for,
+	   and no heavier. */
+	font-size: var(--cm-text-base);
+	font-weight: 400;
+	color: var(--cm-fg);
+	line-height: var(--cm-lh-tight);
+}
+
+.ask-options {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--cm-space-6px);
+}
+
+/* Section 4.5: a pill, 26px tall, transparent until it is hovered or picked. The label and
+   its description share the one line — a description is what tells two similar options
+   apart, so it is shortened rather than dropped, and the full text stays in the tooltip. */
+/* Section 4.5's edge is `button.secondaryBackground`, which is a *fill* colour: Dark Modern
+   sets it to `rgba(0,0,0,0)`, so the `var()` fallback never fires (the variable is defined,
+   just transparent) and the pill would have no visible edge at all. The inset ring is the
+   floor under it — a hairline of the foreground that no theme can make disappear. Where the
+   theme does give secondaryBackground a colour, the border paints over the ring on the same
+   rect and the theme's colour is what shows. */
+.ask-option {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--cm-space-6px);
+	height: var(--cm-space-26px);
+	max-width: 100%;
+	padding: 0 var(--cm-space-10px);
+	border: var(--cm-hairline) solid var(--vscode-button-secondaryBackground, var(--cm-border));
+	box-shadow: inset 0 0 0 var(--cm-hairline) color-mix(in srgb, var(--cm-fg) 20%, transparent);
+	border-radius: var(--cm-radius-sm);
+	background: transparent;
+	color: var(--cm-fg);
+	font-family: inherit;
+	font-size: var(--cm-text-sm);
+	white-space: nowrap;
+	text-align: left;
+	cursor: pointer;
+	transition: background var(--cm-duration-base), border-color var(--cm-duration-base), color var(--cm-duration-base), transform var(--cm-duration-press);
+}
+
+.ask-option:hover:not(:disabled) {
+	background: var(--vscode-list-hoverBackground, var(--cm-toolbar-hover));
+	border-color: var(--cm-accent-line);
+}
+
+.ask-option:active:not(:disabled) { transform: scale(0.98); }
+
+.ask-option:focus-visible {
+	outline: var(--cm-hairline) solid var(--cm-focus);
+	outline-offset: var(--cm-hairline);
+}
+
+/* A picked pill is a fill, and the ring under it would read as a rim around the accent. */
+.ask-option.is-picked {
+	background: var(--cm-button-bg);
+	border-color: var(--cm-button-bg);
+	box-shadow: none;
+	color: var(--cm-button-fg);
+}
+
+.ask-option:disabled {
+	cursor: default;
+	opacity: 0.6;
+}
+
+.ask-option-label { font-weight: 500; flex-shrink: 0; }
+
+.ask-option-desc {
+	font-size: var(--cm-text-xs);
+	color: var(--cm-desc);
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* On a filled pill the description has to come off the same colour as the label, since
+   descriptionForeground was chosen against the panel and not against the accent. */
+.ask-option.is-picked .ask-option-desc {
+	color: inherit;
+	opacity: 0.8;
+}
+
+.ask-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-2);
+}
+
+.ask-send {
+	padding: var(--cm-space-5px) var(--cm-space-13px);
+	border: var(--cm-hairline) solid transparent;
+	border-radius: var(--cm-radius-sm);
+	background: var(--cm-button-bg);
+	color: var(--cm-button-fg);
+	font-family: inherit;
+	font-size: var(--cm-text-code);
+	cursor: pointer;
+}
+
+.ask-send:hover:not(:disabled) { background: var(--cm-button-hover); }
+
+.ask-send:disabled {
+	cursor: default;
+	opacity: 0.5;
+}
+
+.ask-hint,
+.ask-sent {
+	font-size: var(--cm-text-sm);
+	color: var(--cm-desc);
+}
+
+/* Sub-agent tool calls, nested inside their Task's card. */
+.tool-children {
+	display: flex;
+	flex-direction: column;
+	border-left: var(--cm-hairline) dashed var(--cm-border);
+	padding-left: var(--cm-space-9px);
+}
+
+/* A sub-agent's own calls, nested in the Task card that made them: one step tighter and with
+   no fill, so the nesting is what the dashed rule says and not a second box. */
+.tool-children .tool-card {
+	margin: var(--cm-space-1) 0;
+	background: transparent;
+}
+
+.tool-children .tool-card > summary {
+	height: var(--cm-space-24px);
+	padding: 0 var(--cm-space-6px);
+}
+
+/* ---------- Todo checklist ---------- */
+.todo-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-2px);
+	font-family: var(--vscode-font-family, sans-serif);
+}
+
+.todo-list li {
+	display: flex;
+	gap: var(--cm-space-7px);
+	align-items: baseline;
+}
+
+.todo-mark {
+	flex-shrink: 0;
+	width: var(--cm-space-3);
+	text-align: center;
+	font-size: var(--cm-text-xs);
+}
+
+.todo-done {
+	color: var(--cm-desc);
+	text-decoration: line-through;
+}
+
+.todo-done .todo-mark { color: var(--cm-success); text-decoration: none; }
+.todo-active { color: var(--cm-fg); font-weight: 600; }
+.todo-active .todo-mark { color: var(--cm-accent); }
+.todo-todo { color: var(--cm-desc); }
+
+/* ---------- Diffs ---------- */
+.diff {
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-sm);
+	overflow: hidden;
+	background: var(--cm-bg);
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--cm-text-sm-lg);
+}
+
+.diff-summary {
+	padding: var(--cm-space-3px) var(--cm-space-9px);
+	background: var(--cm-code-bg);
+	border-bottom: var(--cm-hairline) solid var(--cm-border);
+	font-size: var(--cm-text-xs-lg);
+	color: var(--cm-desc);
+}
+
+.diff-body {
+	max-height: var(--cm-size-340px);
+	overflow: auto;
+}
+
+.diff-body > div {
+	white-space: pre-wrap;
+	word-break: break-word;
+	padding: 0 var(--cm-space-9px) 0 0;
+	line-height: var(--cm-lh-code);
+}
+
+.diff-sign {
+	display: inline-block;
+	width: var(--cm-space-4);
+	text-align: center;
+	user-select: none;
+	opacity: 0.75;
+}
+
+.diff-add { background: var(--cm-diff-add-bg); color: var(--cm-diff-add-fg); }
+.diff-del { background: var(--cm-diff-del-bg); color: var(--cm-diff-del-fg); }
+.diff-ctx { color: var(--cm-desc); }
+
+.diff-fold {
+	padding: var(--cm-space-2px) var(--cm-space-9px);
+	background: var(--cm-code-bg);
+	color: var(--cm-desc);
+	font-size: var(--cm-text-xs-lg);
+	text-align: center;
+	user-select: none;
+}
+
+/* ---------- Markdown tables ---------- */
+.md-table {
+	border-collapse: collapse;
+	margin: var(--cm-space-9px) 0;
+	display: block;
+	overflow-x: auto;
+	max-width: 100%;
+	font-size: var(--cm-text-code);
+}
+
+.md-table th,
+.md-table td {
+	border: var(--cm-hairline) solid var(--cm-border);
+	padding: var(--cm-space-1) var(--cm-space-9px);
+	text-align: left;
+	vertical-align: top;
+}
+
+.md-table th {
+	background: var(--cm-code-bg);
+	font-weight: 600;
+}
+
+.md-table tbody tr:nth-child(even) {
+	background: color-mix(in srgb, var(--cm-code-bg) 45%, transparent);
+}
+
+.ta-left { text-align: left; }
+.ta-center { text-align: center; }
+.ta-right { text-align: right; }
+
+/* ---------- Syntax tokens ---------- */
+.tok-cmt { color: var(--cm-tok-cmt); font-style: italic; }
+.tok-str { color: var(--cm-tok-str); }
+.tok-num { color: var(--cm-tok-num); }
+.tok-kw { color: var(--cm-tok-kw); }
+.tok-fn { color: var(--cm-tok-fn); }
+
+/* Raw text of a slash command or engine reply, kept as typed. */
+.plain-output {
+	margin: 0;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--cm-text-code);
+	color: var(--cm-fg);
+}
+
+/* What a `!` shell-mode line printed, in the terminal's own colours. */
+.plain-output.is-terminal {
+	max-height: var(--cm-size-320px);
+	overflow: auto;
+	padding: var(--cm-space-7px) var(--cm-space-9px);
+	border-radius: var(--cm-radius-5px);
+	background: var(--vscode-terminal-background, var(--cm-code-bg));
+	color: var(--vscode-terminal-foreground, var(--cm-fg));
+}
+
+/* ---------- How long the turn took (Section 1.3) ---------- */
+/* The whole footer is gone; what is left is one number in the corner of the bubble it
+   belongs to. It is positioned rather than laid out, and the assistant bubble reserves the
+   room for it from the first token, so the label arriving at the end of a turn moves
+   nothing — not the text above it, not the messages below. */
+.message-duration {
+	position: absolute;
+	right: var(--cm-space-3);
+	bottom: var(--cm-space-6px);
+	font-size: var(--cm-text-xs);
+	line-height: 1;
+	color: var(--cm-desc-72);
+	animation: cm-duration-in var(--cm-duration-med) ease;
+}
+
+@keyframes cm-duration-in {
+	from { opacity: 0; }
+	to { opacity: 1; }
+}
+
+/* A turn the user stopped: the partial answer above is all there is. */
+.interrupted-note {
+	margin-top: var(--cm-space-6px);
+	font-size: var(--cm-text-xs-lg);
+	font-style: italic;
+	color: var(--cm-warning);
+}
+
+/* ---------- Input area ---------- */
+.input-area {
+	flex-shrink: 0;
+	/* The strip owns its own border and background now (Section 2.1), so the container is
+	   only a gutter and an anchor for what floats above it. */
+	padding: var(--cm-space-10px) var(--cm-space-3) var(--cm-space-3);
+	background: var(--cm-sidebar-bg);
+	/* Anchor for the slash / mention menus, which overlay the chat above. */
+	position: relative;
+}
+
+/* ---------- Input strip (Section 2) ----------
+   Two rows in one surface: the controls line, then the entry line. One border on the top
+   edge, radiused only where it meets the transcript, and nothing between the rows. */
+.composer {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	background: var(--cm-input-bg);
+	border-top: var(--cm-hairline) solid var(--cm-input-line-soft);
+	border-radius: var(--cm-radius-md) var(--cm-radius-md) 0 0;
+	padding: 0 var(--cm-space-6px) var(--cm-space-6px);
+}
+
+/* Plan mode's whole presence in the composer (Section 2.3): the Plan segment is lit and the
+   strip carries a modified-file edge. It replaces the full-width banner. */
+body.plan-mode .composer {
+	border-left: var(--cm-space-2px) solid var(--cm-warning);
+	padding-left: calc(var(--cm-space-6px) - var(--cm-space-2px));
+}
+
+.composer-controls {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--cm-space-6px);
+	height: var(--cm-space-28px);
+	flex-shrink: 0;
+}
+
+.composer-controls-left {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-6px);
+	min-width: 0;
+}
+
+.composer-controls-right {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-1);
+	flex-shrink: 0;
+}
+
+/* Section 2.5: colour is the whole affordance — no plate, no border, at rest or on hover. */
+.composer-icon {
+	width: var(--cm-space-24px);
+	height: var(--cm-space-24px);
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	border: none;
+	background: none;
+	border-radius: var(--cm-radius-5px);
+	color: var(--cm-desc);
+	cursor: pointer;
+	transition: color var(--cm-duration-base);
+}
+
+.composer-icon:hover {
+	color: var(--cm-fg);
+}
+
+.composer-icon:focus-visible {
+	outline: var(--cm-hairline) solid var(--cm-focus);
+	outline-offset: var(--cm-space-2px);
+}
+
+.composer-entry {
+	display: flex;
+	align-items: flex-end;
+	gap: var(--cm-space-6px);
+}
+
+/*
+ * The banner the composer shows while the line starts with `!` or `#`, standing
+ * in for the CLI's changed prompt.
+ */
+.input-mode {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-6px);
+	margin-bottom: var(--cm-space-6px);
+	padding: var(--cm-space-1) var(--cm-space-9px);
+	border-radius: var(--cm-radius-5px);
+	background: var(--cm-accent-soft);
+	color: var(--cm-desc);
+	font-size: var(--cm-text-sm);
+}
+
+/* Shell and memory lines are monospaced so a command reads like a command. */
+#input.is-shell-mode,
+#input.is-memory-mode {
+	font-family: var(--vscode-editor-font-family, monospace);
+}
+
+/* Prompts typed during a turn, waiting their turn. */
+.prompt-queue {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-1);
+	margin-bottom: var(--cm-space-6px);
+}
+
+.queued-prompt {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-7px);
+	padding: var(--cm-space-1) var(--cm-space-2);
+	border: var(--cm-hairline) dashed var(--cm-border);
+	border-radius: var(--cm-radius-5px);
+	background: var(--cm-code-bg);
+	font-size: var(--cm-text-sm-lg);
+	color: var(--cm-desc);
+}
+
+.queued-index {
+	flex-shrink: 0;
+	min-width: var(--cm-space-14px);
+	text-align: center;
+	color: var(--cm-accent);
+	font-variant-numeric: tabular-nums;
+}
+
+.queued-text {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.queued-remove {
+	flex-shrink: 0;
+	padding: 0 var(--cm-space-1);
+	border: none;
+	border-radius: var(--cm-radius-3px);
+	background: transparent;
+	color: var(--cm-desc);
+	cursor: pointer;
+	font-size: var(--cm-text-base);
+	line-height: var(--cm-lh-none);
+}
+
+.queued-remove:hover {
+	background: var(--cm-toolbar-hover);
+	color: var(--cm-fg);
+}
+
+/* ---------- Background tasks (footer pill + its list) ---------- */
+
+.bg-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--cm-space-5px);
+	flex-shrink: 0;
+	padding: var(--cm-hairline) var(--cm-space-7px);
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-pill);
+	background: transparent;
+	color: var(--cm-desc);
+	font-family: inherit;
+	font-size: var(--cm-text-xs-lg);
+	line-height: var(--cm-space-15px);
+	cursor: pointer;
+}
+
+.bg-pill:hover,
+.bg-pill[aria-expanded="true"] {
+	background: var(--cm-toolbar-hover);
+	color: var(--cm-fg);
+}
+
+.bg-pill-dot {
+	width: var(--cm-space-6px);
+	height: var(--cm-space-6px);
+	border-radius: 50%;
+	background: var(--cm-warning);
+	/* Slow breathing rather than a spinner: these tasks are alive but not the
+	   thing the user is waiting on, so the footer should not compete for attention. */
+	animation: cm-bg-pulse calc(var(--cm-loop) * 2.4) ease-in-out infinite;
+}
+
+@keyframes cm-bg-pulse {
+	0%, 100% { opacity: 0.45; }
+	50% { opacity: 1; }
+}
+
+.bg-tasks {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-1);
+	margin-bottom: var(--cm-space-6px);
+}
+
+.bg-task {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-7px);
+	padding: var(--cm-space-1) var(--cm-space-2);
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-5px);
+	background: var(--cm-code-bg);
+	font-size: var(--cm-text-sm-lg);
+	color: var(--cm-desc);
+}
+
+.bg-task-kind {
+	flex-shrink: 0;
+	color: var(--cm-warning);
+}
+
+.bg-task-label {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-family: var(--vscode-editor-font-family, monospace);
+	color: var(--cm-fg);
+}
+
+.bg-task-elapsed {
+	flex-shrink: 0;
+	font-variant-numeric: tabular-nums;
+}
+
+.bg-task-action {
+	flex-shrink: 0;
+	padding: var(--cm-hairline) var(--cm-space-6px);
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-4px);
+	background: transparent;
+	color: var(--cm-desc);
+	font-family: inherit;
+	font-size: var(--cm-text-xs-lg);
+	cursor: pointer;
+}
+
+.bg-task-action:hover {
+	background: var(--cm-toolbar-hover);
+	color: var(--cm-fg);
+}
+
+.bg-task-forget {
+	flex-shrink: 0;
+	padding: 0 var(--cm-space-1);
+	border: none;
+	border-radius: var(--cm-radius-3px);
+	background: transparent;
+	color: var(--cm-desc);
+	cursor: pointer;
+	font-size: var(--cm-text-base);
+	line-height: var(--cm-lh-none);
+}
+
+.bg-task-forget:hover {
+	background: var(--cm-toolbar-hover);
+	color: var(--cm-fg);
+}
+
+.bg-tasks-note {
+	padding: 0 var(--cm-space-2px);
+	font-size: var(--cm-text-xs-lg);
+	color: var(--cm-desc);
+	opacity: 0.85;
+}
+
+/* Companion (CLI: buddy/CompanionSprite.tsx). The sprite sits at the right edge of
+ * the composer with its bubble to the left, which is the CLI's arrangement rotated
+ * into the space a panel actually has. */
+.buddy {
+	display: flex;
+	align-items: flex-end;
+	justify-content: flex-end;
+	gap: var(--cm-space-2);
+	margin-bottom: var(--cm-space-1);
+}
+
+.buddy-bubble {
+	/* The CLI wraps the bubble at 30 columns inside a 34-wide box; a character-based
+	   max-width is the same limit expressed the way CSS can hold it. */
+	max-width: var(--cm-size-30ch);
+	padding: var(--cm-space-1) var(--cm-space-9px);
+	border: var(--cm-hairline) solid var(--cm-accent-line);
+	border-radius: var(--cm-radius-md) var(--cm-radius-md) var(--cm-radius-2px) var(--cm-radius-md);
+	background: var(--cm-accent-soft);
+	color: var(--cm-fg);
+	font-size: var(--cm-text-sm-lg);
+	line-height: var(--cm-lh-snug);
+	cursor: pointer;
+	transition: opacity var(--cm-duration-fade) linear;
+}
+
+.buddy-sprite {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--cm-hairline);
+	flex-shrink: 0;
+	padding: var(--cm-space-2px) var(--cm-space-5px);
+	border: var(--cm-hairline) solid transparent;
+	border-radius: var(--cm-radius-sm);
+	background: transparent;
+	color: var(--cm-desc);
+	cursor: pointer;
+}
+
+.buddy-sprite:hover {
+	background: var(--cm-toolbar-hover);
+	color: var(--cm-fg);
+}
+
+.buddy-sprite.excited {
+	color: var(--cm-accent);
+}
+
+.buddy-art {
+	margin: 0;
+	white-space: pre;
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--cm-text-xs);
+	line-height: var(--cm-lh-art);
+}
+
+.buddy-name {
+	font-size: var(--cm-text-2xs);
+	letter-spacing: var(--cm-track-label);
+}
+
+/* The card `/buddy` opens: a widget over the chat, positioned like the slash menu so
+ * the two can never fight for the same strip of screen. */
+.buddy-card {
+	position: absolute;
+	right: var(--cm-space-3);
+	bottom: 100%;
+	margin-bottom: var(--cm-space-6px);
+	z-index: 20;
+	width: var(--cm-size-268px);
+	max-width: calc(100% - var(--cm-space-24px));
+	padding: var(--cm-space-10px);
+	background: var(--vscode-editorWidget-background, var(--cm-sidebar-bg));
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-left: var(--cm-space-2px) solid var(--cm-desc);
+	border-radius: var(--cm-radius-md);
+	box-shadow: 0 var(--cm-space-6px) var(--cm-space-20px) var(--vscode-widget-shadow, var(--vscode-scrollbar-shadow, color-mix(in srgb, var(--cm-border) 70%, transparent)));
+}
+
+/* Rarity is the one thing the card says with colour rather than words. */
+.buddy-card[data-rarity="uncommon"] { border-left-color: var(--cm-success); }
+.buddy-card[data-rarity="rare"] { border-left-color: var(--cm-link); }
+.buddy-card[data-rarity="epic"] { border-left-color: var(--cm-accent); }
+.buddy-card[data-rarity="legendary"] { border-left-color: var(--cm-warning); }
+
+.buddy-card-head {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--cm-space-9px);
+}
+
+.buddy-card-art {
+	margin: 0;
+	flex-shrink: 0;
+	white-space: pre;
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--cm-text-3xs);
+	line-height: var(--cm-lh-art);
+	color: var(--cm-fg);
+}
+
+.buddy-card-id {
+	flex: 1;
+	min-width: 0;
+}
+
+.buddy-card-name {
+	font-size: var(--cm-text-base);
+	color: var(--cm-fg);
+}
+
+.buddy-card-kind,
+.buddy-card-hat,
+.buddy-card-hatched {
+	font-size: var(--cm-text-xs-lg);
+	color: var(--cm-desc);
+}
+
+.buddy-stars {
+	color: var(--cm-warning);
+}
+
+.buddy-shiny {
+	color: var(--cm-accent);
+}
+
+.buddy-card-close {
+	flex-shrink: 0;
+	padding: 0 var(--cm-space-1);
+	border: none;
+	border-radius: var(--cm-radius-3px);
+	background: transparent;
+	color: var(--cm-desc);
+	font-size: var(--cm-text-base);
+	line-height: var(--cm-lh-none);
+	cursor: pointer;
+}
+
+.buddy-card-close:hover {
+	background: var(--cm-toolbar-hover);
+	color: var(--cm-fg);
+}
+
+.buddy-card-personality {
+	margin: var(--cm-space-7px) 0;
+	font-size: var(--cm-text-sm-lg);
+	font-style: italic;
+	line-height: var(--cm-lh-snug);
+	color: var(--cm-fg);
+}
+
+.buddy-stats {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-3px);
+}
+
+.buddy-stat {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-6px);
+	font-size: var(--cm-text-xs);
+	color: var(--cm-desc);
+}
+
+.buddy-stat-name {
+	width: var(--cm-space-68px);
+	flex-shrink: 0;
+	letter-spacing: var(--cm-track-label);
+}
+
+.buddy-stat-bar {
+	flex: 1;
+	height: var(--cm-space-1);
+	border-radius: var(--cm-radius-pill);
+	background: var(--cm-code-bg);
+	overflow: hidden;
+}
+
+.buddy-stat-fill {
+	display: block;
+	height: 100%;
+	background: var(--cm-accent);
+}
+
+.buddy-stat-value {
+	width: var(--cm-space-22px);
+	flex-shrink: 0;
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.buddy-card-foot {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: var(--cm-space-6px);
+	margin-top: var(--cm-space-9px);
+}
+
+.buddy-card-action {
+	padding: var(--cm-space-2px) var(--cm-space-2);
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-4px);
+	background: transparent;
+	color: var(--cm-desc);
+	font-family: inherit;
+	font-size: var(--cm-text-xs-lg);
+	cursor: pointer;
+}
+
+.buddy-card-action:hover {
+	background: var(--cm-toolbar-hover);
+	color: var(--cm-fg);
+}
+
+.buddy-card-danger:hover {
+	background: var(--cm-error-bg);
+	color: var(--cm-error-fg);
+	border-color: var(--cm-error-fg);
+}
+
+/* ---------- Model pill (Section 2.2) ----------
+   The model is named in exactly one place now, and that place is also how it is changed. The
+   badge fill is held back at rest so the pill reads as a control rather than as a count. */
+.model-pill-wrap {
+	position: relative;
+	display: flex;
+	align-items: center;
+	min-width: 0;
+}
+
+.model-pill {
+	height: var(--cm-space-24px);
+	max-width: var(--cm-size-130px);
+	padding: 0 var(--cm-space-6px);
+	border: none;
+	border-radius: var(--cm-radius-sm);
+	background: var(--cm-badge-bg-rest);
+	color: var(--cm-badge-fg);
+	font-family: inherit;
+	font-size: var(--cm-text-sm);
+	line-height: 1;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	cursor: pointer;
+	transition: background var(--cm-duration-base);
+}
+
+.model-pill:hover {
+	background: var(--cm-badge-bg-hover);
+}
+
+.model-pill:focus-visible {
+	outline: var(--cm-hairline) solid var(--cm-focus);
+	outline-offset: var(--cm-space-2px);
+}
+
+/* Section 2.2: the menu is pinned to the pill's top edge and grows upward, always — the
+   composer sits on the floor of the panel, so downward has nowhere to go. */
+.model-menu {
+	position: absolute;
+	bottom: calc(100% + var(--cm-space-1));
+	left: 0;
+	z-index: 20;
+	min-width: var(--cm-size-160px);
+	max-height: var(--cm-size-200px);
+	overflow-y: auto;
+	padding: var(--cm-space-1) 0;
+	background: var(--cm-dropdown-bg);
+	border: var(--cm-hairline) solid var(--cm-dropdown-line);
+	border-radius: var(--cm-radius-8px);
+	box-shadow: 0 var(--cm-space-6px) var(--cm-space-20px) var(--vscode-widget-shadow, var(--vscode-scrollbar-shadow, color-mix(in srgb, var(--cm-border) 70%, transparent)));
+	animation: cm-dropdown-in var(--cm-duration-slide) ease;
+}
+
+@keyframes cm-dropdown-in {
+	from { opacity: 0; transform: translateY(var(--cm-space-1)); }
+	to { opacity: 1; transform: translateY(0); }
+}
+
+/* Closing runs the same four pixels the other way, faster and easing in rather than out
+   (Section 6.6). `display: none` cannot be animated, so the menu is not hidden until this
+   has finished — `.is-closing` is both the animation and the wait. */
+.model-menu.is-closing {
+	animation: cm-dropdown-out var(--cm-duration-fast) ease-in forwards;
+	/* Eighty milliseconds is long enough to click a row that is already leaving. */
+	pointer-events: none;
+}
+
+@keyframes cm-dropdown-out {
+	from { opacity: 1; transform: translateY(0); }
+	to { opacity: 0; transform: translateY(var(--cm-space-1)); }
+}
+
+.model-menu-item {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-6px);
+	height: var(--cm-space-28px);
+	padding: 0 var(--cm-space-10px);
+	color: var(--cm-fg);
+	font-size: var(--cm-text-sm);
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.model-menu-item:hover {
+	background: var(--cm-toolbar-hover);
+}
+
+.model-menu-name {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* The check is the whole selected state — no fill, so the list stays a list. */
+.model-menu-check {
+	width: var(--cm-space-10px);
+	height: var(--cm-space-10px);
+	flex-shrink: 0;
+	color: var(--cm-accent);
+}
+
+.model-menu-check svg {
+	width: 100%;
+	height: 100%;
+	display: block;
+}
+
+.model-menu-item[aria-selected="false"] .model-menu-check {
+	visibility: hidden;
+}
+
+/* ---------- Mode pill (Section 2.3) ----------
+   One menu rather than three segments. Everything visual is the model pill's own — the two
+   sit side by side in the strip and should not read as two different kinds of control — so
+   the mode control carries both class names and only the differences live here. */
+.mode-pill {
+	max-width: var(--cm-size-130px);
+	flex-shrink: 0;
+}
+
+/* A mode that is not the asks-first default is worth seeing without opening the menu, which
+   is the one thing the sliding thumb did that a plain label would lose. */
+.mode-pill[data-mode="acceptEdits"],
+.mode-pill[data-mode="plan"] {
+	background: var(--cm-accent-soft);
+	color: var(--cm-accent);
+}
+
+.mode-pill[data-mode="bypassPermissions"] {
+	background: color-mix(in srgb, var(--cm-error-fg) 16%, transparent);
+	color: var(--cm-error-fg);
+}
+
+/* Four rows, each one line of name over one line of what it does: the segments could only
+   carry that in a tooltip, and the mode a turn runs in is not a detail to hide. */
+.mode-menu {
+	min-width: var(--cm-size-240px);
+	max-height: none;
+}
+
+.mode-menu-item {
+	height: auto;
+	align-items: flex-start;
+	padding: var(--cm-space-6px) var(--cm-space-10px);
+}
+
+.mode-menu-item .model-menu-name {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-2px);
+	white-space: normal;
+}
+
+.mode-menu-detail {
+	color: var(--cm-desc);
+	font-size: var(--cm-text-xs);
+	line-height: 1.35;
+}
+
+.mode-menu-item .model-menu-check {
+	margin-top: var(--cm-space-3px);
+}
+
+/* ---------- Entry line (Section 2.6) ---------- */
+#input {
+	flex: 1;
+	min-width: 0;
+	/* One line at rest, six before it scrolls: the cap is the line box six times over plus
+	   the padding, so it stays exactly six lines whatever the type scale says. */
+	min-height: calc(var(--cm-text-base) * var(--cm-lh-code) + var(--cm-space-6px) * 2);
+	max-height: calc(var(--cm-text-base) * var(--cm-lh-code) * 6 + var(--cm-space-6px) * 2);
+	overflow-y: auto;
+	padding: var(--cm-space-6px) 0 var(--cm-space-6px) var(--cm-space-2);
+	border: none;
+	outline: none;
+	background: transparent;
+	color: var(--cm-input-fg);
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--cm-text-base);
+	line-height: var(--cm-lh-code);
+	resize: none;
+}
+
+#input::placeholder {
+	color: var(--cm-input-placeholder);
+}
+
+/* ---------- Send / stop (Section 2.4) ----------
+   One 28px slot holds both buttons, absolutely positioned on top of each other, so the swap
+   is a cross-fade in place and the entry row never reflows when a turn starts or ends. */
+.send-slot {
+	position: relative;
+	width: var(--cm-space-28px);
+	height: var(--cm-space-28px);
+	flex-shrink: 0;
+}
+
+.send-btn,
+.stop-btn {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	border: none;
+	border-radius: var(--cm-radius-8px);
+	cursor: pointer;
+	/* Hidden by default and taken out of the tab order only once the fade has finished, so
+	   visibility never cuts the cross-fade short. */
+	opacity: 0;
+	visibility: hidden;
+	transition: opacity var(--cm-duration-slide) ease, visibility 0s linear var(--cm-duration-slide),
+		background var(--cm-duration-base), transform var(--cm-duration-press);
+}
+
+/* Exactly one of the two is live at a time — never both (Section 2.4). */
+.send-slot:not(.is-streaming) .send-btn,
+.send-slot.is-streaming .stop-btn {
+	opacity: 1;
+	visibility: visible;
+	transition: opacity var(--cm-duration-slide) ease, visibility 0s,
+		background var(--cm-duration-base), transform var(--cm-duration-press);
+}
+
+.send-btn {
+	/* Paired deliberately: the text is button.foreground, so the fill has to be
+	   button.background — the one pair every theme guarantees is legible. Falling back
+	   to the accent keeps the old look if a theme somehow omits the button colours. */
+	background: var(--cm-button-bg, var(--cm-accent));
+	color: var(--cm-button-fg);
+}
+
+.send-btn:hover:not(:disabled) {
+	background: var(--vscode-button-hoverBackground, color-mix(in srgb, var(--cm-button-bg, var(--cm-accent)) 85%, var(--cm-fg)));
+}
+
+/* Empty input, or a turn already running. */
+.send-slot:not(.is-streaming) .send-btn:disabled {
+	opacity: 0.3;
+	cursor: default;
+}
+
+.send-btn:active:not(:disabled) {
+	transform: scale(0.93);
+}
+
+/* The stop is the error colour on nothing, so it reads as an interrupt rather than as the
+   primary action whose place it took. */
+.stop-btn {
+	background: transparent;
+	color: var(--cm-error-fg);
+}
+
+.stop-btn:hover {
+	background: var(--cm-error-bg);
+}
+
+.send-btn svg,
+.stop-btn svg {
+	width: var(--cm-space-4);
+	height: var(--cm-space-4);
+}
+
+.input-footer {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: var(--cm-space-6px) var(--cm-space-1) 0;
+	font-size: var(--cm-text-xs-lg);
+	color: var(--cm-desc);
+	min-height: var(--cm-space-4);
+}
+
+/* ---------- Context window meter ---------- */
+.context-meter {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-5px);
+	padding: var(--cm-hairline) var(--cm-space-5px);
+	border: none;
+	border-radius: var(--cm-radius-4px);
+	background: transparent;
+	color: var(--cm-desc);
+	font-family: inherit;
+	font-size: var(--cm-text-xs-lg);
+	cursor: pointer;
+}
+
+.context-meter:hover {
+	background: var(--cm-toolbar-hover);
+	color: var(--cm-fg);
+}
+
+.context-bar {
+	display: block;
+	width: var(--cm-space-34px);
+	height: var(--cm-space-1);
+	border-radius: var(--cm-radius-2px);
+	background: var(--cm-code-bg);
+	overflow: hidden;
+}
+
+.context-bar-fill {
+	display: block;
+	height: 100%;
+	width: 0;
+	border-radius: var(--cm-radius-2px);
+	background: var(--cm-accent);
+	transition: width var(--cm-duration-slide) ease-out;
+}
+
+.context-meter.is-warning {
+	color: var(--cm-warning);
+}
+
+.context-meter.is-warning .context-bar-fill {
+	background: var(--cm-warning);
+}
+
+.context-meter.is-blocked {
+	color: var(--cm-error-fg);
+}
+
+.context-meter.is-blocked .context-bar-fill {
+	background: var(--cm-error-fg);
+}
+
+/* ---------- Modal ---------- */
+/* Section 6.10. The scrim and the dialog are two layers, not one: an overlay that faded as a
+   whole would take the dialog's own opacity down with it and the scale would arrive through a
+   haze. So the overlay itself is transparent and holds the dim in a pseudo-element, and the
+   dialog — which has to be positioned to paint above that pseudo-element — scales up on top. */
+.modal-overlay {
+	position: fixed;
+	inset: 0;
+	background: transparent;
+	display: none;
+	align-items: center;
+	justify-content: center;
+	z-index: 1000;
+	padding: var(--cm-space-20px);
+}
+
+.modal-overlay::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	background: var(--vscode-editor-background, var(--cm-bg));
+	opacity: 0.4;
+	animation: cm-backdrop-in var(--cm-duration-dialog) ease;
+}
+
+.modal-overlay:not(.hidden) {
+	display: flex;
+}
+
+@keyframes cm-backdrop-in {
+	from { opacity: 0; }
+	to { opacity: 0.4; }
+}
+
+/* The panel hosts still fade as one piece — they are a whole surface sliding over the panel
+   rather than a dialog above a dim, and 62% is their own scrim. */
+@keyframes fadeIn {
+	from { opacity: 0; }
+	to { opacity: 1; }
+}
+
+.modal {
+	position: relative;
+	background: var(--cm-sidebar-bg);
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-14px);
+	padding: var(--cm-space-22px);
+	width: 100%;
+	max-width: var(--cm-size-420px);
+	box-shadow: 0 var(--cm-space-20px) var(--cm-space-60px) var(--vscode-widget-shadow, var(--cm-border));
+	animation: cm-dialog-in var(--cm-duration-dialog) ease;
+}
+
+@keyframes cm-dialog-in {
+	from { opacity: 0; transform: scale(0.96); }
+	to { opacity: 1; transform: scale(1); }
+}
+
+/* Dismissal reverses both layers, and quicker: leaving should not take as long as arriving.
+   `.hidden` is `display: none`, which cannot be animated, so nothing is hidden until this has
+   played — `.is-closing` is the animation and the wait for it. It also stops taking clicks the
+   moment it starts leaving: a dialog on its way out is no longer an answerable question. */
+.modal-overlay.is-closing {
+	pointer-events: none;
+}
+
+.modal-overlay.is-closing::before {
+	animation: cm-backdrop-out var(--cm-duration-dismiss) ease-in forwards;
+}
+
+.modal-overlay.is-closing .modal {
+	animation: cm-dialog-out var(--cm-duration-dismiss) ease-in forwards;
+}
+
+@keyframes cm-backdrop-out {
+	from { opacity: 0.4; }
+	to { opacity: 0; }
+}
+
+@keyframes cm-dialog-out {
+	from { opacity: 1; transform: scale(1); }
+	to { opacity: 0; transform: scale(0.96); }
+}
+
+@keyframes modalIn {
+	from { opacity: 0; transform: translateY(var(--cm-space-2)) scale(0.98); }
+	to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal h2 {
+	margin: 0 0 var(--cm-space-2);
+	font-size: var(--cm-text-modal);
+	font-weight: 600;
+}
+
+.modal p {
+	margin: 0 0 var(--cm-space-18px);
+	font-size: var(--cm-text-base);
+	color: var(--cm-desc);
+	line-height: var(--cm-lh-code);
+}
+
+.modal p a {
+	color: var(--cm-link);
+	text-decoration: none;
+}
+
+.modal p a:hover {
+	text-decoration: underline;
+}
+
+.form-group {
+	margin-bottom: var(--cm-space-4);
+}
+
+.form-group label {
+	display: block;
+	margin-bottom: var(--cm-space-6px);
+	font-size: var(--cm-text-code);
+	font-weight: 500;
+	color: var(--cm-fg);
+}
+
+.form-group input {
+	width: 100%;
+	padding: var(--cm-space-9px) var(--cm-space-11px);
+	border: var(--cm-hairline) solid var(--cm-input-border);
+	border-radius: var(--cm-radius-8px);
+	background: var(--cm-input-bg);
+	color: var(--cm-input-fg);
+	font-family: inherit;
+	font-size: var(--cm-text-base);
+	outline: none;
+	transition: border-color var(--cm-duration-med), box-shadow var(--cm-duration-med);
+}
+
+.form-group input:focus {
+	border-color: var(--cm-accent);
+	box-shadow: 0 0 0 var(--cm-hairline) var(--cm-accent-soft);
+}
+
+.modal-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--cm-space-10px);
+	margin-top: var(--cm-space-18px);
+}
+
+.btn {
+	padding: var(--cm-space-2) var(--cm-space-4);
+	border: none;
+	border-radius: var(--cm-radius-8px);
+	font-size: var(--cm-text-base);
+	font-weight: 500;
+	font-family: inherit;
+	cursor: pointer;
+	transition: background var(--cm-duration-base);
+}
+
+.btn-primary {
+	/* Same pairing rule as .send-btn: button.foreground demands button.background. */
+	background: var(--cm-button-bg, var(--cm-accent));
+	color: var(--cm-button-fg);
+}
+
+.btn-primary:hover {
+	background: var(--vscode-button-hoverBackground, color-mix(in srgb, var(--cm-button-bg, var(--cm-accent)) 85%, var(--cm-fg)));
+}
+
+.btn-secondary {
+	background: var(--cm-input-bg);
+	color: var(--cm-input-fg);
+	border: var(--cm-hairline) solid var(--cm-border);
+}
+
+.btn-secondary:hover {
+	background: var(--cm-toolbar-hover);
+}
+
+
+/* Permission modal */
+.permission-modal .perm-tool-name {
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--cm-text-base);
+	font-weight: 600;
+	color: var(--cm-fg);
+	background: var(--cm-code-bg);
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-sm);
+	padding: var(--cm-space-2) var(--cm-space-11px);
+	margin-bottom: var(--cm-space-2);
+}
+
+.permission-modal .perm-input {
+	background: var(--cm-bg);
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-sm);
+	padding: var(--cm-space-2) var(--cm-space-11px);
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--cm-text-sm);
+	color: var(--cm-desc);
+	white-space: pre-wrap;
+	word-break: break-word;
+	overflow-x: auto;
+	margin: 0 0 var(--cm-space-3);
+	max-height: var(--cm-size-180px);
+	overflow-y: auto;
+}
+
+/* Wider than the other modals: the scope labels quote commands and paths. */
+.modal.permission-modal {
+	max-width: var(--cm-size-540px);
+	max-height: var(--cm-vh-sheet);
+	overflow-y: auto;
+}
+
+/* Why the engine asked, when it said — a rule name, or a path outside the cwd. */
+.permission-modal .perm-reason {
+	border-left: var(--cm-space-2px) solid var(--cm-warning);
+	background: color-mix(in srgb, var(--cm-warning) 10%, transparent);
+	border-radius: 0 var(--cm-radius-sm) var(--cm-radius-sm) 0;
+	padding: var(--cm-space-7px) var(--cm-space-10px);
+	margin: 0 0 var(--cm-space-3);
+	font-size: var(--cm-text-code);
+	line-height: var(--cm-lh-tight);
+	color: var(--cm-fg);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.permission-modal .perm-scopes {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-6px);
+	margin: 0 0 var(--cm-space-14px);
+}
+
+/* Each "…and don't ask again" option: the grant on top, where it is kept below. */
+.permission-modal .perm-scope {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--cm-space-2px);
+	width: 100%;
+	padding: var(--cm-space-2) var(--cm-space-11px);
+	text-align: left;
+	line-height: var(--cm-lh-snug);
+}
+
+.permission-modal .perm-scope-label {
+	font-size: var(--cm-text-code);
+	font-weight: 500;
+	word-break: break-word;
+}
+
+.permission-modal .perm-scope-store {
+	font-size: var(--cm-text-xs);
+	font-weight: 400;
+	color: var(--cm-desc);
+	word-break: break-word;
+}
+
+.permission-modal .perm-feedback {
+	margin-bottom: 0;
+}
+
+/* Three buttons, one of them long — let them wrap instead of overflowing. */
+.permission-modal .modal-actions {
+	flex-wrap: wrap;
+}
+
+.btn-danger {
+	background: color-mix(in srgb, var(--cm-error-fg) 12%, transparent);
+	color: var(--cm-error-fg);
+	border: var(--cm-hairline) solid color-mix(in srgb, var(--cm-error-fg) 30%, transparent);
+}
+
+.btn-danger:hover {
+	background: color-mix(in srgb, var(--cm-error-fg) 22%, transparent);
+}
+
+.tool-elapsed {
+	font-size: var(--cm-text-xs);
+	color: var(--cm-desc);
+	opacity: 0.8;
+	margin-left: var(--cm-space-1);
+	font-weight: 400;
+}
+
+
+/* ---------- Panels (settings/MCP/memory/skills/tasks) ---------- */
+.panel-host {
+	position: fixed;
+	inset: 0;
+	z-index: 900;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.panel-host.hidden { display: none; }
+
+.panel-overlay {
+	position: absolute;
+	inset: 0;
+	background: color-mix(in srgb, var(--vscode-editor-background) 62%, transparent);
+	animation: fadeIn var(--cm-duration-base) ease;
+}
+
+.panel-window {
+	position: relative;
+	background: var(--cm-sidebar-bg);
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-14px);
+	width: 92%;
+	max-width: var(--cm-size-560px);
+	max-height: var(--cm-vh-modal);
+	display: flex;
+	flex-direction: column;
+	box-shadow: 0 var(--cm-space-20px) var(--cm-space-60px) var(--vscode-widget-shadow, var(--cm-border));
+	animation: modalIn var(--cm-duration-modal) ease;
+}
+
+.panel-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: var(--cm-space-4) var(--cm-space-20px);
+	border-bottom: var(--cm-hairline) solid var(--cm-border);
+	flex-shrink: 0;
+}
+
+.panel-header h2 {
+	margin: 0;
+	font-size: var(--cm-text-panel);
+	font-weight: 600;
+}
+
+.panel-body {
+	padding: var(--cm-space-18px) var(--cm-space-20px);
+	overflow-y: auto;
+	font-size: var(--cm-text-base);
+}
+
+.panel-body h2 { display: none; }
+
+.panel-body .setting-group {
+	margin-bottom: var(--cm-space-4);
+}
+
+.panel-body .setting-group label {
+	display: block;
+	margin-bottom: var(--cm-space-6px);
+	font-size: var(--cm-text-code);
+	font-weight: 500;
+	color: var(--cm-fg);
+}
+
+.panel-body .setting-group input[type=text],
+.panel-body .setting-group input[type=password],
+.panel-body .setting-group input[type=number],
+.panel-body .setting-group select,
+.panel-body .setting-group textarea {
+	width: 100%;
+	padding: var(--cm-space-9px) var(--cm-space-11px);
+	border: var(--cm-hairline) solid var(--cm-input-border);
+	border-radius: var(--cm-radius-8px);
+	background: var(--cm-input-bg);
+	color: var(--cm-input-fg);
+	font-family: inherit;
+	font-size: var(--cm-text-base);
+	outline: none;
+}
+
+.panel-body .setting-group input:focus,
+.panel-body .setting-group select:focus,
+.panel-body .setting-group textarea:focus {
+	border-color: var(--cm-accent);
+	box-shadow: 0 0 0 var(--cm-hairline) var(--cm-accent-soft);
+}
+
+.panel-body .setting-hint {
+	margin-top: var(--cm-space-5px);
+	font-size: var(--cm-text-sm);
+	color: var(--cm-desc);
+}
+
+/* Section 8. A hint explains the control above it; this says where a control went. So it
+   reads as a statement rather than as small print — the panel's own foreground instead of
+   the description grey, and a rule down its leading edge so it is not mistaken for the
+   label's second line. */
+.panel-body .setting-note {
+	margin-bottom: var(--cm-space-2);
+	padding: var(--cm-space-7px) var(--cm-space-9px);
+	border-left: var(--cm-space-2px) solid var(--cm-accent);
+	border-radius: var(--cm-radius-2px);
+	background: var(--cm-accent-soft);
+	font-size: var(--cm-text-sm);
+	line-height: var(--cm-lh-base);
+	color: var(--cm-fg);
+}
+
+.panel-body .api-key-row {
+	display: flex;
+	gap: var(--cm-space-2);
+}
+
+.panel-body .api-key-row input { flex: 1; }
+
+.panel-body .radio-group {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-6px);
+}
+
+.panel-body .radio-group label {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-7px);
+	margin-bottom: 0;
+	font-weight: 400;
+	cursor: pointer;
+}
+
+.panel-body .mcp-toolbar,
+.panel-body .memory-toolbar,
+.panel-body .tasks-toolbar {
+	display: flex;
+	gap: var(--cm-space-2);
+	margin-bottom: var(--cm-space-3);
+}
+
+.panel-body .mcp-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-7px);
+}
+
+.panel-body .mcp-row {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--cm-space-10px);
+	padding: var(--cm-space-2) var(--cm-space-11px);
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-8px);
+	background: var(--cm-input-bg);
+}
+
+.panel-body .mcp-info { flex: 1; min-width: 0; }
+.panel-body .mcp-name { font-weight: 600; }
+.panel-body .mcp-detail { font-size: var(--cm-text-sm); color: var(--cm-desc); }
+
+.panel-body .mcp-add-form.hidden,
+.panel-body .mcp-http-only.hidden,
+.panel-body .mcp-stdio-only.hidden { display: none; }
+
+.panel-body .mcp-empty {
+	padding: var(--cm-space-18px);
+	text-align: center;
+	color: var(--cm-desc);
+	font-size: var(--cm-text-code);
+	border: var(--cm-hairline) dashed var(--cm-border);
+	border-radius: var(--cm-radius-8px);
+}
+
+.panel-body code {
+	/* Same theme pair as inline code in the transcript, for the same reason. */
+	background: var(--vscode-textPreformat-background, var(--cm-code-bg));
+	color: var(--vscode-textPreformat-foreground, var(--cm-fg));
+	padding: var(--cm-hairline) var(--cm-space-5px);
+	border-radius: var(--cm-radius-4px);
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--cm-text-inline);
+}
+
+/* ---------- Session total (Section 1.4) ---------- */
+/* The only number left outside a message: what the whole session has cost in tokens. It
+   keeps its line whether or not it has something to say, so an update never moves the
+   composer above it. */
+.session-tokens {
+	flex-shrink: 0;
+	min-height: var(--cm-space-13px);
+	padding: 0 var(--cm-space-1);
+	text-align: right;
+	font-size: var(--cm-text-xs);
+	line-height: var(--cm-space-13px);
+	color: var(--cm-desc-66);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* ---------- Autocomplete menus (slash + @-mention) ---------- */
+.slash-menu,
+.mention-menu {
+	position: absolute;
+	left: var(--cm-space-3);
+	right: var(--cm-space-3);
+	bottom: 100%;
+	margin-bottom: var(--cm-space-6px);
+	z-index: 20;
+	max-height: var(--cm-size-240px);
+	overflow-y: auto;
+	padding: var(--cm-space-1);
+	background: var(--vscode-editorWidget-background, var(--cm-sidebar-bg));
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-md);
+	box-shadow: 0 var(--cm-space-6px) var(--cm-space-20px) var(--vscode-widget-shadow, var(--vscode-scrollbar-shadow, color-mix(in srgb, var(--cm-border) 70%, transparent)));
+	/* Section 6.9: the same four pixels the model menu opens with. Both of these sit on the
+	   composer's top edge, so both rise out of it. Coming back from `display: none` restarts
+	   the animation, which is exactly once per opening. */
+	animation: cm-dropdown-in var(--cm-duration-slide) ease;
+}
+
+/* The rows come in behind the menu, one step apart, and the stagger stops after five: a list
+   of thirty files should not take half a second to finish arriving.
+
+   Only on the opening render — `.cm-rows-in` is put on when the menu comes back from hidden
+   and taken off by the next redraw. Both menus redraw their whole list on every keystroke and
+   every arrow key, and replaying a fade on each of those would be a flicker, not an entrance. */
+.slash-menu.cm-rows-in .slash-item,
+.mention-menu.cm-rows-in .mention-item {
+	animation: cm-row-in var(--cm-duration-slide) ease both;
+	animation-delay: var(--cm-stagger-cap);
+}
+
+.slash-menu.cm-rows-in .slash-item:nth-child(1),
+.mention-menu.cm-rows-in .mention-item:nth-child(1) { animation-delay: 0s; }
+
+.slash-menu.cm-rows-in .slash-item:nth-child(2),
+.mention-menu.cm-rows-in .mention-item:nth-child(2) { animation-delay: var(--cm-stagger-row); }
+
+.slash-menu.cm-rows-in .slash-item:nth-child(3),
+.mention-menu.cm-rows-in .mention-item:nth-child(3) { animation-delay: calc(var(--cm-stagger-row) * 2); }
+
+.slash-menu.cm-rows-in .slash-item:nth-child(4),
+.mention-menu.cm-rows-in .mention-item:nth-child(4) { animation-delay: calc(var(--cm-stagger-row) * 3); }
+
+.slash-menu.cm-rows-in .slash-item:nth-child(5),
+.mention-menu.cm-rows-in .mention-item:nth-child(5) { animation-delay: calc(var(--cm-stagger-row) * 4); }
+
+@keyframes cm-row-in {
+	from { opacity: 0; }
+	to { opacity: 1; }
+}
+
+.slash-item,
+.mention-item {
+	display: flex;
+	align-items: baseline;
+	gap: var(--cm-space-7px);
+	padding: var(--cm-space-5px) var(--cm-space-2);
+	border-radius: var(--cm-radius-7px);
+	cursor: pointer;
+	font-size: var(--cm-text-code);
+	white-space: nowrap;
+}
+
+.slash-item:hover,
+.mention-item:hover {
+	background: var(--cm-toolbar-hover);
+}
+
+.slash-item.selected,
+.mention-item.selected {
+	background: var(--vscode-list-activeSelectionBackground, var(--cm-accent-soft));
+	color: var(--vscode-list-activeSelectionForeground, var(--cm-fg));
+}
+
+.slash-name,
+.mention-name {
+	font-weight: 600;
+	color: var(--cm-accent);
+	flex-shrink: 0;
+}
+
+/* Pin the name column so rows do not shift sideways as the filter narrows. */
+.slash-name {
+	min-width: var(--cm-size-11ch);
+}
+
+/* The alias that made a command match, e.g. /exit (quit). */
+.slash-alias {
+	font-weight: 400;
+	font-size: var(--cm-text-sm);
+	opacity: 0.75;
+}
+
+.slash-item.selected .slash-name,
+.mention-item.selected .mention-name {
+	color: inherit;
+}
+
+.slash-args {
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--cm-text-sm);
+	opacity: 0.75;
+	flex-shrink: 0;
+}
+
+.slash-desc,
+.mention-detail {
+	color: var(--cm-desc);
+	font-size: var(--cm-text-sm);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+	flex: 1;
+	text-align: right;
+}
+
+/*
+ * A path is worth clipping from the left, so the mention rows read right-to-left;
+ * a sentence is not — that would put the ellipsis in front of the description and
+ * drag its full stop to the far edge.
+ */
+.mention-detail {
+	direction: rtl;
+}
+
+.slash-item.selected .slash-desc,
+.mention-item.selected .mention-detail {
+	color: inherit;
+	opacity: 0.85;
+}
+
+/* ---------- Attachments (Section 3.4) ---------- */
+.attachments {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--cm-space-5px);
+	padding-bottom: var(--cm-space-7px);
+}
+
+.attachment-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--cm-space-5px);
+	max-width: 100%;
+	padding: var(--cm-space-3px) var(--cm-space-6px) var(--cm-space-3px) var(--cm-space-7px);
+	font-size: var(--cm-text-sm);
+	background: var(--cm-code-bg);
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-pill);
+}
+
+.attachment-kind {
+	flex-shrink: 0;
+	font-size: var(--cm-text-sm);
+	line-height: var(--cm-lh-none);
+}
+
+.attachment-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: var(--cm-size-160px);
+}
+
+.attachment-remove {
+	border: none;
+	background: transparent;
+	color: var(--cm-desc);
+	cursor: pointer;
+	padding: 0 var(--cm-hairline);
+	font-size: var(--cm-text-base);
+	line-height: var(--cm-lh-none);
+	border-radius: var(--cm-radius-4px);
+}
+
+.attachment-remove:hover {
+	color: var(--cm-error-fg);
+	background: var(--cm-toolbar-hover);
+}
+
+/* ---------- Input chrome: mic, vim ---------- */
+/* Attach and mic are `.composer-icon`s now (Section 2.5); recording is the one state that
+   still needs a colour of its own. */
+.mic-btn.recording {
+	color: var(--cm-error-fg);
+	background: var(--cm-error-bg);
+	animation: pulse calc(var(--cm-loop) * 1.4) ease-in-out infinite;
+}
+
+.vim-indicator {
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--cm-text-2xs);
+	font-weight: 700;
+	letter-spacing: var(--cm-track-label-wider);
+	padding: var(--cm-hairline) var(--cm-space-5px);
+	border-radius: var(--cm-radius-4px);
+	color: var(--cm-button-fg);
+	background: var(--cm-desc);
+}
+
+/* What a just-completed slash command expects, in place of the CLI's ghost text. */
+.slash-hint {
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--cm-text-xs-lg);
+	color: var(--cm-desc);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+
+.vim-indicator[data-mode="normal"] { background: var(--cm-accent); }
+.vim-indicator[data-mode="insert"] { background: var(--cm-success); }
+.vim-indicator[data-mode="visual"] { background: var(--cm-warning); }
+
+/* High-contrast themes drop saturated fills on purpose: a bright chip carrying
+   button.foreground text reads at about 2:1 there. Defer to the badge pair, which the
+   theme does guarantee, and let the mode show through the border instead of the fill. */
+body.vscode-high-contrast .vim-indicator,
+body.vscode-high-contrast-light .vim-indicator {
+	background: var(--vscode-badge-background);
+	color: var(--vscode-badge-foreground);
+	border: var(--cm-hairline) solid currentColor;
+	padding: 0 var(--cm-space-1);
+}
+
+body.vscode-high-contrast .vim-indicator[data-mode="normal"],
+body.vscode-high-contrast-light .vim-indicator[data-mode="normal"] { border-color: var(--cm-accent); }
+body.vscode-high-contrast .vim-indicator[data-mode="insert"],
+body.vscode-high-contrast-light .vim-indicator[data-mode="insert"] { border-color: var(--cm-success); }
+body.vscode-high-contrast .vim-indicator[data-mode="visual"],
+body.vscode-high-contrast-light .vim-indicator[data-mode="visual"] { border-color: var(--cm-warning); }
+
+/* Transient composer prompts, e.g. the CLI's "Press Escape again to clear". */
+.composer-hint {
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--cm-text-xs-lg);
+	color: var(--cm-warning);
+	white-space: nowrap;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* The reverse history search prompt is state, not a warning, so it reads quietly. */
+.composer-hint.hint-search {
+	color: var(--vscode-descriptionForeground);
+}
+
+/* ---------- Data panel rows (memory / skills / tasks) ---------- */
+.panel-body .panel-rows {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-6px);
+}
+
+.panel-body .panel-row {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--cm-space-9px);
+	padding: var(--cm-space-9px) var(--cm-space-10px);
+	background: var(--cm-code-bg);
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-8px);
+}
+
+.panel-body .panel-row-openable {
+	cursor: pointer;
+}
+
+.panel-body .panel-row-openable:hover {
+	border-color: var(--cm-accent-line);
+	background: var(--cm-accent-soft);
+}
+
+.panel-body .panel-row-main {
+	flex: 1;
+	min-width: 0;
+}
+
+.panel-body .panel-row-label {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-6px);
+	font-weight: 600;
+	font-size: var(--cm-text-code);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.panel-body .panel-row-badge {
+	font-size: var(--cm-text-2xs);
+	font-weight: 700;
+	letter-spacing: var(--cm-track-label-wide);
+	text-transform: uppercase;
+	padding: var(--cm-hairline) var(--cm-space-5px);
+	border-radius: var(--cm-radius-4px);
+	color: var(--cm-accent);
+	background: var(--cm-accent-soft);
+	border: var(--cm-hairline) solid var(--cm-accent-line);
+}
+
+.panel-body .panel-row-detail,
+.panel-body .panel-row-meta {
+	font-size: var(--cm-text-sm);
+	color: var(--cm-desc);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.panel-body .panel-row-meta {
+	margin-top: var(--cm-space-2px);
+	opacity: 0.8;
+}
+
+.panel-body .panel-row-tools,
+.panel-body .mcp-tools {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--cm-space-1);
+	margin-top: var(--cm-space-5px);
+}
+
+.tool-chip {
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--cm-text-xs);
+	padding: var(--cm-hairline) var(--cm-space-5px);
+	border-radius: var(--cm-radius-4px);
+	color: var(--cm-desc);
+	background: var(--cm-bg);
+	border: var(--cm-hairline) solid var(--cm-border);
+}
+
+.panel-body .panel-row-toggle {
+	margin: var(--cm-space-2px) 0 0;
+	flex-shrink: 0;
+	accent-color: var(--cm-accent);
+}
+
+.panel-body .panel-row-status {
+	flex-shrink: 0;
+	font-size: var(--cm-text-xs);
+	font-weight: 700;
+	letter-spacing: var(--cm-track-label);
+	text-transform: uppercase;
+	padding: var(--cm-space-2px) var(--cm-space-7px);
+	border-radius: var(--cm-radius-pill);
+	cursor: pointer;
+	border: var(--cm-hairline) solid var(--cm-border);
+	background: var(--cm-bg);
+	color: var(--cm-desc);
+}
+
+.panel-body .panel-row-status.status-in_progress {
+	color: var(--cm-warning);
+	border-color: color-mix(in srgb, var(--cm-warning) 45%, transparent);
+}
+
+.panel-body .panel-row-status.status-completed {
+	color: var(--cm-success);
+	border-color: color-mix(in srgb, var(--cm-success) 45%, transparent);
+}
+
+.panel-body .panel-row-delete {
+	flex-shrink: 0;
+	color: var(--cm-desc);
+}
+
+.panel-body .panel-row-delete:hover {
+	color: var(--cm-error-fg);
+}
+
+.panel-body .panel-empty {
+	padding: var(--cm-space-18px);
+	text-align: center;
+	color: var(--cm-desc);
+	font-size: var(--cm-text-code);
+	border: var(--cm-hairline) dashed var(--cm-border);
+	border-radius: var(--cm-radius-8px);
+}
+
+/* ---------- MCP status + row actions ---------- */
+.panel-body .mcp-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-2px);
+	flex-shrink: 0;
+}
+
+.panel-body .mcp-status {
+	flex-shrink: 0;
+	font-size: var(--cm-text-xs);
+	font-weight: 700;
+	letter-spacing: var(--cm-track-label);
+	text-transform: uppercase;
+	padding: var(--cm-space-2px) var(--cm-space-7px);
+	border-radius: var(--cm-radius-pill);
+	border: var(--cm-hairline) solid var(--cm-border);
+	background: var(--cm-bg);
+	color: var(--cm-desc);
+}
+
+.panel-body .mcp-status.status-connected {
+	color: var(--cm-success);
+	border-color: color-mix(in srgb, var(--cm-success) 45%, transparent);
+}
+
+.panel-body .mcp-status.status-error {
+	color: var(--cm-error-fg);
+	border-color: color-mix(in srgb, var(--cm-error-fg) 45%, transparent);
+}
+
+.panel-body .mcp-off {
+	font-size: var(--cm-text-xs);
+	font-weight: 400;
+	color: var(--cm-desc);
+	text-transform: uppercase;
+	letter-spacing: var(--cm-track-label);
+}
+
+/* ---------- Settings toggle rows ---------- */
+.panel-body .toggle-rows {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-7px);
+}
+
+.panel-body .toggle-row {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-2);
+	font-size: var(--cm-text-code);
+	font-weight: 400;
+	text-transform: none;
+	letter-spacing: normal;
+	color: var(--cm-fg);
+	cursor: pointer;
+}
+
+.panel-body .toggle-row input[type="checkbox"] {
+	margin: 0;
+	flex-shrink: 0;
+	accent-color: var(--cm-accent);
+}
+
+/* ---------- Commit review + create sheets ---------- */
+/* `.modal` caps at 420px; a diff-style file list and a commit message need more. */
+.modal.commit-sheet,
+.modal.create-sheet {
+	max-width: min(var(--cm-size-560px), var(--cm-vw-sheet));
+	text-align: left;
+}
+
+/* One line of prose asking before a conversation is thrown away — narrow on purpose,
+   so it reads as a question rather than as one of the wider editing sheets. */
+.modal.confirm-sheet {
+	text-align: left;
+}
+
+.modal.confirm-sheet .sheet-message {
+	margin: 0 0 var(--cm-space-1);
+}
+
+.modal.commit-sheet textarea,
+.modal.create-sheet input[type="text"] {
+	width: 100%;
+	padding: var(--cm-space-2) var(--cm-space-10px);
+	font-size: var(--cm-text-code);
+	color: var(--cm-input-fg);
+	background: var(--cm-input-bg);
+	border: var(--cm-hairline) solid var(--cm-input-border);
+	border-radius: var(--cm-radius-7px);
+	outline: none;
+	resize: vertical;
+}
+
+.modal.commit-sheet textarea {
+	font-family: var(--vscode-editor-font-family, monospace);
+	line-height: var(--cm-lh-code);
+}
+
+.modal.commit-sheet textarea:focus,
+.modal.create-sheet input[type="text"]:focus {
+	border-color: var(--cm-accent);
+}
+
+.modal.create-sheet .radio-group {
+	display: flex;
+	gap: var(--cm-space-14px);
+	align-items: center;
+}
+
+.modal.create-sheet .radio-group label {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--cm-space-6px);
+	font-size: var(--cm-text-code);
+	font-weight: 400;
+	cursor: pointer;
+}
+
+/* ---------- One-setting picker sheet (Alt+P / Alt+T) ---------- */
+/* A vertical radio list: the model list is long enough to scroll on its own. */
+.modal.picker-sheet {
+	max-width: min(var(--cm-size-480px), var(--cm-vw-sheet));
+	text-align: left;
+}
+
+.modal.picker-sheet .radio-group {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-6px);
+	max-height: var(--cm-size-320px);
+	overflow-y: auto;
+}
+
+.modal.picker-sheet .radio-group label {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-7px);
+	font-size: var(--cm-text-code);
+	font-weight: 400;
+	cursor: pointer;
+}
+
+.commit-files {
+	max-height: var(--cm-size-180px);
+	overflow-y: auto;
+	padding: var(--cm-space-6px);
+	background: var(--cm-code-bg);
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-7px);
+}
+
+.commit-file {
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--cm-text-sm-lg);
+	padding: var(--cm-space-2px) var(--cm-space-1);
+	color: var(--cm-fg);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	direction: rtl;
+	text-align: left;
+}
+
+.commit-files .panel-empty {
+	border: none;
+	padding: var(--cm-space-2);
+}
+
+
+/* ---------- Scrollbar ---------- */
+::-webkit-scrollbar {
+	width: var(--cm-space-9px);
+	height: var(--cm-space-9px);
+}
+
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+	background: var(--cm-scrollbar);
+	border-radius: var(--cm-radius-5px);
+	border: var(--cm-space-2px) solid transparent;
+	background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: var(--cm-scrollbar-hover);
+	background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:active {
+	background: var(--cm-scrollbar-active);
+	background-clip: padding-box;
+}
+
+/* ---------- Selection / misc ---------- */
+::selection {
+	background: var(--vscode-editor-selectionBackground);
+}
+
+.hidden {
+	display: none !important;
+}
