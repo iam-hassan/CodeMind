@@ -164,6 +164,7 @@ type WebviewInbound =
 	| { type: 'mcpUpdate'; payload: ICodeMindMcpServer[] }
 	| { type: 'requestMcpServers' }
 	| { type: 'mcpReconnect' }
+	| { type: 'dispatch'; command: string }
 	| { type: 'runCommand'; payload: { name: string; args: string } }
 	| { type: 'requestPanelData'; payload: { panelId: PanelId } }
 	| { type: 'openFile'; payload: { path: string } }
@@ -633,7 +634,7 @@ export class CodeMindAgentViewPane extends ViewPane {
 		this._sessionName = state.sessionName ?? '';
 		this._sessionTags = state.sessionTags ? [...state.sessionTags] : [];
 		this._promptColor = state.promptColor ?? '';
-		this._planMode = state.planMode === true;
+		this._planMode = false;
 		this._todos = state.todos ? state.todos.map(t => ({ ...t })) : [];
 		if (state.pendingContext?.length) {
 			this._pendingContext.push(...state.pendingContext);
@@ -728,6 +729,9 @@ export class CodeMindAgentViewPane extends ViewPane {
 		     field with Save and Test. The status chip moves to the composer footer, where
 		     "Still connecting to …" is next to the box the user is waiting on. -->
 		<div class="header-right header-actions">
+			<button class="icon-btn" id="consensusBtn" title="Consensus Network" aria-label="Open PBFT Consensus">
+				<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z"/></svg>
+			</button>
 			<button class="icon-btn" id="newSessionBtn" title="New Session" aria-label="Start a new session">
 				<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
 			</button>
@@ -776,6 +780,13 @@ export class CodeMindAgentViewPane extends ViewPane {
 					<div class="model-pill-wrap mode-pill-wrap">
 						<button class="model-pill mode-pill" id="modePill" type="button" aria-haspopup="listbox" aria-expanded="false" data-mode="default" title="Agent mode for new turns">Normal</button>
 						<div class="model-menu mode-menu hidden" id="modeMenu" role="listbox" aria-label="Agent mode for new turns"></div>
+					</div>
+					<div class="model-pill-wrap" id="consensusPillWrap" style="display: none; margin-left: 4px; align-items: center;">
+						<label title="Consensus Mode" style="position: relative; display: inline-block; width: 28px; height: 16px; margin: 0; cursor: pointer; display: flex; align-items: center;">
+							<input type="checkbox" id="consensusPillCheckbox" style="opacity: 0; width: 0; height: 0; position: absolute;">
+							<span id="consensusPillSliderBg" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-color: transparent; border: 1px solid var(--cm-accent); border-radius: 16px; transition: .2s; box-sizing: border-box;"></span>
+							<span id="consensusPillSliderKnob" style="position: absolute; height: 10px; width: 10px; left: 2px; top: 50%; transform: translateY(-50%); background-color: var(--cm-accent); border-radius: 50%; transition: .2s;"></span>
+						</label>
 					</div>
 				</div>
 				<div class="composer-controls-right">
@@ -1025,6 +1036,9 @@ export class CodeMindAgentViewPane extends ViewPane {
 			}
 			case 'editComposerInEditor':
 				this._editComposerInEditor(message.payload.text);
+				break;
+			case 'dispatch':
+				this._commandService.executeCommand(message.command).catch(() => { });
 				break;
 		}
 	}

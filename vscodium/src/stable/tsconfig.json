@@ -1,0 +1,18 @@
+{
+	"compilerOptions": {
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"target": "ES2022",
+		"experimentalDecorators": true,
+		"baseUrl": "./src",
+		"paths": {
+			"vs/*": ["./src/vs/*"],
+			"vs/base/*": ["../vscode/src/vs/base/*"],
+			"vs/workbench/*": ["../vscode/src/vs/workbench/*"],
+			"vs/platform/*": ["../vscode/src/vs/platform/*"]
+		}
+	},
+	"include": [
+		"src/**/*"
+	]
+}
