@@ -376,3 +376,28 @@ registerWorkbenchContribution2(ShowCodeMindAgentOnStartupContribution.ID, ShowCo
 
 // Register the slash command registry (Step 6). Runs once at module load.
 registerBuiltinCommands();
+
+import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
+import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+import { CodeMindConsensusPanel } from './codeMindConsensusPanel.js';
+
+registerAction2(class OpenCodeMindConsensusAction extends Action2 {
+	constructor() {
+		super({
+			id: 'workbench.action.openCodeMindConsensus',
+			title: {
+				value: localize('openCodeMindConsensus', 'Open CodeMind Consensus'),
+				original: 'Open CodeMind Consensus'
+			},
+			f1: true
+		});
+	}
+
+	run(accessor: ServicesAccessor): void {
+		const instantiationService = accessor.get(IInstantiationService);
+		const consensusPanel = instantiationService.createInstance(CodeMindConsensusPanel);
+		consensusPanel.show();
+	}
+});
+

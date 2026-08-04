@@ -176,7 +176,7 @@ const HINTS = [
 	{ label: 'Explain the codebase', hint: 'Explain the structure of this codebase and its main components' },
 	{ label: 'Find and fix bugs', hint: 'Find and fix any bugs in the current file' },
 	{ label: 'Refactor code', hint: 'Refactor the selected code to be cleaner and more readable' },
-	{ label: 'Write tests', hint: 'Write unit tests for the selected function' }
+
 ];
 
 function init() {
@@ -317,6 +317,30 @@ function wireComposerControls() {
 	if (modePill) {
 		modePill.addEventListener('click', (e) => { e.stopPropagation(); toggleModeMenu(); });
 		applyModeSelection(currentMode);
+	}
+	const consensusWrap = document.getElementById('consensusPillWrap');
+	const consensusCheckbox = document.getElementById('consensusPillCheckbox');
+	const consensusBg = document.getElementById('consensusPillSliderBg');
+	const consensusKnob = document.getElementById('consensusPillSliderKnob');
+	if (consensusCheckbox) {
+		consensusCheckbox.addEventListener('change', (e) => {
+			if (consensusCheckbox.checked) {
+				consensusKnob.style.left = '14px';
+				consensusBg.style.backgroundColor = 'var(--cm-accent)';
+				consensusKnob.style.backgroundColor = 'var(--cm-bg)';
+				vscode.postMessage({ type: 'dispatch', command: 'workbench.action.openCodeMindConsensus' });
+				setTimeout(() => {
+					consensusCheckbox.checked = false;
+					consensusKnob.style.left = '2px';
+					consensusBg.style.backgroundColor = 'transparent';
+					consensusKnob.style.backgroundColor = 'var(--cm-accent)';
+				}, 1000);
+			} else {
+				consensusKnob.style.left = '2px';
+				consensusBg.style.backgroundColor = 'transparent';
+				consensusKnob.style.backgroundColor = 'var(--cm-accent)';
+			}
+		});
 	}
 	// Clicking anywhere else closes either composer menu without changing anything (Section 2.2).
 	document.addEventListener('click', (e) => {
@@ -529,6 +553,10 @@ function chooseMode(mode) {
 /** Paint the pill. An unknown mode keeps its own name rather than showing as nothing. */
 function applyModeSelection(mode) {
 	currentMode = mode;
+	const consensusWrap = document.getElementById('consensusPillWrap');
+	if (consensusWrap) {
+		consensusWrap.style.display = mode === 'plan' ? 'flex' : 'none';
+	}
 	if (!modePill) { return; }
 	modePill.dataset.mode = mode;
 	modePill.textContent = modeLabel(mode);
