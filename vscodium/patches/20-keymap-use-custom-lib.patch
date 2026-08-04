@@ -23,15 +23,6 @@ index 7af8defd..b21564c3 100644
 +@vscodium/native-keymap/deps/**
 +!@vscodium/native-keymap/build/Release/*.node
  
-diff --git a/eslint.config.js b/eslint.config.js
-index 51b085ee..938419e2 100644
---- a/eslint.config.js
-+++ b/eslint.config.js
-@@ -1563,3 +1563,3 @@ export default defineConfig(
- 						'node:module',
--						'native-keymap',
-+						'@vscodium/native-keymap',
- 						'net',
 diff --git a/package-lock.json b/package-lock.json
 index 81d315f0..1d99e154 100644
 --- a/package-lock.json

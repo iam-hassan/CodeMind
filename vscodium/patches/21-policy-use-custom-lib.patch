@@ -28,7 +28,7 @@ index 7f650ba7..db927cb4 100644
 @@ -38,3 +38,3 @@ export abstract class BasePolicy implements Policy {
  		return [
 -			`<policy name="${this.name}" class="Both" displayName="$(string.${this.name})" explainText="$(string.${this.name}_${this.description.nlsKey.replace(/\./g, '_')})" key="Software\\Policies\\Microsoft\\${regKey}" presentation="$(presentation.${this.name})">`,
-+			`<policy name="${this.name}" class="Both" displayName="$(string.${this.name})" explainText="$(string.${this.name}_${this.description.nlsKey.replace(/\./g, '_')})" key="Software\\Policies\\!!ORG_NAME!!\\${regKey}" presentation="$(presentation.${this.name})">`,
++			`<policy name="${this.name}" class="Both" displayName="$(string.${this.name})" explainText="$(string.${this.name}_${this.description.nlsKey.replace(/\./g, '_')})" key="Software\\Policies\\CodeMind\\${regKey}" presentation="$(presentation.${this.name})">`,
  			`	<parentCategory ref="${this.category.name.nlsKey}" />`,
 diff --git a/build/lib/policies/render.ts b/build/lib/policies/render.ts
 index bd5958cb..3f62d83f 100644
@@ -37,12 +37,12 @@ index bd5958cb..3f62d83f 100644
 @@ -56,3 +56,3 @@ export function renderADMX(regKey: string, versions: string[], categories: Categ
  	<policyNamespaces>
 -		<target prefix="${regKey}" namespace="Microsoft.Policies.${regKey}" />
-+		<target prefix="${regKey}" namespace="!!ORG_NAME!!.Policies.${regKey}" />
++		<target prefix="${regKey}" namespace="CodeMind.Policies.${regKey}" />
  	</policyNamespaces>
 @@ -174,3 +174,3 @@ export function renderProfileManifest(appName: string, bundleIdentifier: string,
  			<key>pfm_default</key>
 -			<string>Microsoft</string>
-+			<string>!!ORG_NAME!!</string>
++			<string>CodeMind</string>
  			<key>pfm_name</key>
 @@ -192,3 +192,3 @@ export function renderProfileManifest(appName: string, bundleIdentifier: string,
      <key>pfm_app_url</key>
@@ -62,17 +62,8 @@ index bd5958cb..3f62d83f 100644
 @@ -268,3 +268,3 @@ ${policyEntries}
  		<key>PayloadOrganization</key>
 -		<string>Microsoft</string>
-+		<string>!!ORG_NAME!!</string>
++		<string>CodeMind</string>
  		<key>PayloadType</key>
-diff --git a/eslint.config.js b/eslint.config.js
-index 938419e2..f3a103ca 100644
---- a/eslint.config.js
-+++ b/eslint.config.js
-@@ -1544,3 +1544,3 @@ export default defineConfig(
- 						'@vscode/native-watchdog',
--						'@vscode/policy-watcher',
-+						'@vscodium/policy-watcher',
- 						'@vscode/proxy-agent',
 diff --git a/package-lock.json b/package-lock.json
 index 1d99e154..a99dcb95 100644
 --- a/package-lock.json
@@ -273,7 +264,7 @@ index 5b76979d..2af19dbd 100644
 @@ -95,3 +96,3 @@ export class CopilotManagedSettingsService extends Disposable implements ICopilo
  				this.logService.trace(`Creating Copilot managed-settings watcher for productName ${this.productName}`);
 -				this.watcher.value = createWatcher(this.productName, managedSettingDefinitions, update => {
-+				this.watcher.value = createWatcher('!!ORG_NAME!!', this.productName, managedSettingDefinitions, update => {
++				this.watcher.value = createWatcher('CodeMind', this.productName, managedSettingDefinitions, update => {
  					this._onDidManagedSettingsChange(update as Record<string, PolicyValue | undefined>);
 diff --git a/src/vs/platform/policy/node/nativePolicyService.ts b/src/vs/platform/policy/node/nativePolicyService.ts
 index 6039dbb7..978be1b4 100644
@@ -292,7 +283,7 @@ index 6039dbb7..978be1b4 100644
 @@ -32,3 +32,3 @@ export class NativePolicyService extends AbstractPolicyService implements IPolic
  				this.logService.trace(`Creating watcher for productName ${this.productName}`);
 -				this.watcher.value = createWatcher(this.productName, policyDefinitions, update => {
-+				this.watcher.value = createWatcher('!!ORG_NAME!!', this.productName, policyDefinitions, update => {
++				this.watcher.value = createWatcher('CodeMind', this.productName, policyDefinitions, update => {
  					this._onDidPolicyChange(update);
 diff --git a/src/vs/platform/policy/test/node/copilotManagedSettingsService.test.ts b/src/vs/platform/policy/test/node/copilotManagedSettingsService.test.ts
 index 9735a461..1c868690 100644
