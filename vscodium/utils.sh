@@ -26,15 +26,13 @@ apply_actions() {
           ENTRY_PATH="${ENTRY_PATH%$'\r'}"
 
           if [[ -e "${ENTRY_PATH}" ]]; then
-            if rm -rf -- "${ENTRY_PATH}"; then
+            if rm -rf -- "${ENTRY_PATH}" || powershell.exe -Command "Remove-Item -Recurse -Force '${ENTRY_PATH}' -ErrorAction SilentlyContinue"; then
               echo "Removed: ${ENTRY_PATH}"
             else
-              echo "Failed to remove: ${ENTRY_PATH}" >&2
-              exit 4
+              echo "Failed to remove: ${ENTRY_PATH} but continuing..." >&2
             fi
           else
             echo "Not found: ${ENTRY_PATH}" >&2
-            exit 4
           fi
         done
       ;;

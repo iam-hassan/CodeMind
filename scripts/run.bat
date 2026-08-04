@@ -1,4 +1,5 @@
 @echo off
+set VSCODE_DEV=1
 setlocal
 rem
 rem Launch the CodeMind development build, on Windows.
@@ -28,7 +29,7 @@ if not exist "%BIN%" (
 )
 
 set "FOLDER=%~1"
-if not defined FOLDER set "FOLDER=%CD%"
+if not defined FOLDER set "FOLDER=%ROOT%"
 if not exist "%FOLDER%\" (
 	echo run.bat: no such folder: %FOLDER% 1>&2
 	exit /b 2
@@ -45,4 +46,5 @@ pushd "%VSCODE%"
 "%BIN%" . "%FOLDER%"
 set "CODE=%ERRORLEVEL%"
 popd
+if %CODE% neq 0 pause
 exit /b %CODE%
