@@ -2346,7 +2346,8 @@ contextMeterEl?.addEventListener('click', () => {
 let featureFlags = {};
 
 function applyFeatureFlags() {
-	if (micBtn) { micBtn.classList.toggle('hidden', !featureFlags.voiceMode); }
+	// The mic button is intentionally always visible; the voice logic behind it
+	// is wired directly in wirePanelChrome and does not depend on the flag.
 }
 
 // ---------- Voice input (Section 3.18) ----------
