@@ -51,8 +51,8 @@ index 51b085ee..84972ed8 100644
  
 +// CodeMind ships without the bundled Copilot extension, so `extensions/copilot/.eslintplugin`
 +// is not on disk. A static import of a missing module makes this whole flat config
-+// unresolvable (ERR_MODULE_NOT_FOUND), which took ESLint — and with it the pre-commit
-+// hygiene hook — down before it read a single file. Loaded on demand instead, falling back
++// unresolvable (ERR_MODULE_NOT_FOUND), which took ESLint â€” and with it the pre-commit
++// hygiene hook â€” down before it read a single file. Loaded on demand instead, falling back
 +// to an empty plugin: every rule block that uses it is scoped to `extensions/copilot/**`,
 +// so with the extension gone nothing is ever linted through the stub.
 +const pluginCopilotLocal = await import('./extensions/copilot/.eslintplugin/index.ts')
@@ -61,21 +61,3 @@ index 51b085ee..84972ed8 100644
  const ignores = fs.readFileSync(path.join(import.meta.dirname, '.eslint-ignore'), 'utf8')
  	.toString()
  	.split(/\r\n|\n/)
-@@ -1542,7 +1550,7 @@ export default defineConfig(
- 						'@vscode/ripgrep-universal',
- 						'@vscode/iconv-lite-umd',
- 						'@vscode/native-watchdog',
--						'@vscode/policy-watcher',
-+						'@vscodium/policy-watcher',
- 						'@vscode/proxy-agent',
- 						'@vscode/spdlog',
- 						'@vscode/windows-process-tree',
-@@ -1561,7 +1569,7 @@ export default defineConfig(
- 						'inspector',
- 						'minimist',
- 						'node:module',
--						'native-keymap',
-+						'@vscodium/native-keymap',
- 						'net',
- 						'node-pty',
- 						'os',
