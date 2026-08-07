@@ -294,6 +294,14 @@
 				}
 				break;
 
+			case 'consensus_blocked':
+				els.currentPhase.textContent = 'BLOCKED';
+				els.phaseMessage.textContent = message.payload.message || 'This question is not related to the open project.';
+				els.submitBtn.disabled = false;
+				els.submitBtn.textContent = 'Start Consensus';
+				appendEvent('Blocked: ' + (message.payload.message || 'not related to the open project'), true);
+				break;
+
 			case 'error':
 				els.submitBtn.disabled = false;
 				els.submitBtn.textContent = 'Start Consensus';

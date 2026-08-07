@@ -8,6 +8,7 @@ import {
 	querySelectedModels,
 	runCritiqueRound,
 	runRevisionRound,
+	checkRelevance,
 	CritiqueResult,
 } from './openRouterService.js';
 import {
@@ -65,7 +66,8 @@ export class ConsensusOrchestrator {
 	async orchestrateConsensus(
 		userPrompt: string,
 		sessionId: string,
-		selectedModels: ModelConfig[]
+		selectedModels: ModelConfig[],
+		projectContext?: string
 	): Promise<OrchestrationResult> {
 		const pbftConfig = computePBFTConfig(selectedModels.length);
 		console.log(`[Orchestrator] Starting consensus for session ${sessionId}`);
@@ -75,6 +77,39 @@ export class ConsensusOrchestrator {
 			sessionId,
 			payload: { phase: 'planning', message: 'Decomposing query and routing to optimal agent subset...' },
 		});
+
+		// Project-scope gate: the consensus may only run on questions that belong
+		// to the open project. Skipped when no project context is available.
+		if (projectContext && selectedModels.length > 0) {
+			this.broadcastToSession(sessionId, {
+				type: 'pbft_phase_change',
+				sessionId,
+				payload: { phase: 'relevance_check', message: 'Checking that the question is about the open project...' },
+			});
+			const gate = await checkRelevance(selectedModels[0], userPrompt, projectContext);
+			if (!gate.relevant) {
+				const blockMessage = gate.reason || 'This question is not related to the open project.';
+				console.log(`[Orchestrator] Consensus blocked: ${blockMessage}`);
+				this.broadcastToSession(sessionId, {
+					type: 'consensus_blocked',
+					sessionId,
+					payload: { message: blockMessage, prompt: userPrompt },
+				});
+				return {
+					sessionId,
+					finalAnswer: '',
+					finalReasoning: '',
+					consensusScore: 0,
+					roundsCompleted: 0,
+					participatingModels: [],
+					faultyModels: [],
+					weightedVotes: {},
+					similarityMatrix: {},
+					hallucinationDetails: [],
+					roundHistory: [],
+				};
+			}
+		}
 
 		// Simplified routing: default to factual_qa strategy
 		const routerResult = routeTask('factual_qa', selectedModels);
@@ -88,7 +123,7 @@ export class ConsensusOrchestrator {
 
 		return await this.runConsensusPipeline(
 			userPrompt, sessionId, routerResult.assignments,
-			isCreative, undefined, routerResult.useDebateOnForcedConsensus,
+			isCreative, undefined, projectContext, routerResult.useDebateOnForcedConsensus,
 			pbftConfig
 		);
 	}
@@ -99,6 +134,7 @@ export class ConsensusOrchestrator {
 		assignments: AgentAssignment[],
 		isCreative: boolean,
 		memoryContext?: string,
+		projectContext?: string,
 		useDebateOnForcedConsensus?: boolean,
 		pbftConfig?: { consensusThreshold: number; maxFaultyNodes: number; totalNodes: number; maxRounds: number; forcedConsensusRound: number; }
 	): Promise<OrchestrationResult> {
@@ -133,6 +169,7 @@ export class ConsensusOrchestrator {
 			assignments,
 			memoryContext,
 			isCreative,
+			projectContext,
 			(modelId, response) => {
 				this.broadcastToSession(sessionId, {
 					type: 'model_response',
