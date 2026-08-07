@@ -8,6 +8,9 @@ import { IWebview } from '../../webview/browser/webview.js';
 import { asWebviewUri } from '../../webview/common/webview.js';
 import { FileAccess } from '../../../../base/common/network.js';
 import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { URI } from '../../../../base/common/uri.js';
+import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
 import { ConsensusOrchestrator } from './consensus/consensusOrchestrator.js';
 import { LLM_MODELS, fetchFreeModels } from './consensus/models.js';
 
@@ -19,7 +22,9 @@ export class CodeMindConsensusPanel extends Disposable {
 	private _fetchedModels: any[] = [];
 
 	constructor(
-		@IWebviewWorkbenchService private readonly webviewWorkbenchService: IWebviewWorkbenchService
+		@IWebviewWorkbenchService private readonly webviewWorkbenchService: IWebviewWorkbenchService,
+		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
+		@IFileService private readonly fileService: IFileService
 	) {
 		super();
 		this._orchestrator = new ConsensusOrchestrator();
@@ -62,7 +67,8 @@ export class CodeMindConsensusPanel extends Disposable {
 			if (message.type === 'start_consensus') {
 				try {
 					const selectedConfigs = this._fetchedModels.filter(m => message.payload.selectedModels.includes(m.id));
-					await this._orchestrator.orchestrateConsensus(message.payload.prompt, Date.now().toString(), selectedConfigs);
+					const projectContext = await this._buildProjectContext();
+					await this._orchestrator.orchestrateConsensus(message.payload.prompt, Date.now().toString(), selectedConfigs, projectContext);
 				} catch (err: any) {
 					webview.postMessage({ type: 'error', payload: err.message });
 				}
@@ -80,6 +86,50 @@ export class CodeMindConsensusPanel extends Disposable {
 		this._register(this._orchestrator.onDidEmitEvent((event: any) => {
 			webview.postMessage(event);
 		}));
+	}
+
+	/**
+	 * Builds a short grounding document from the open workspace: folder name,
+	 * README.md and package.json. This is what the consensus uses to decide
+	 * whether a question belongs to the project.
+	 */
+	private async _buildProjectContext(): Promise<string> {
+		try {
+			const folders = this.workspaceContextService.getWorkspace().folders;
+			if (!folders.length) {
+				return '';
+			}
+			const root = folders[0].uri;
+			const parts: string[] = [`Project: ${folders[0].name}`];
+
+			const readHead = async (path: URI, maxChars: number): Promise<string> => {
+				try {
+					const stat = await this.fileService.stat(path);
+					if (stat.isDirectory || stat.size > 200_000) {
+						return '';
+					}
+					const content = (await this.fileService.readFile(path)).value.toString();
+					return content.slice(0, maxChars);
+				} catch {
+					return '';
+				}
+			};
+
+			const readme = await readHead(URI.joinPath(root, 'README.md'), 2500);
+			if (readme) {
+				parts.push(`README:\n${readme}`);
+			}
+
+			const pkg = await readHead(URI.joinPath(root, 'package.json'), 1500);
+			if (pkg) {
+				parts.push(`package.json:\n${pkg}`);
+			}
+
+			const joined = parts.join('\n\n');
+			return joined.length > 4000 ? joined.slice(0, 4000) : joined;
+		} catch {
+			return '';
+		}
 	}
 
 	private _getHtml(webview: IWebview): string {

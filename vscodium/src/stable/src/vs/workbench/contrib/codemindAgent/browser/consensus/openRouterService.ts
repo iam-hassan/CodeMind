@@ -14,6 +14,7 @@ export interface LLMResponse {
 	confidence: number;
 	processingTimeMs: number;
 	strategy?: PromptStrategy;
+	relevant?: boolean;
 	error?: string;
 }
 
@@ -71,50 +72,43 @@ async function fetchOpenRouter(modelId: string, messages: any[]) {
 	return await response.json();
 }
 
-function buildSystemPrompt(strategy: PromptStrategy, isCreative = false): string {
+function buildSystemPrompt(strategy: PromptStrategy, isCreative = false, projectContext?: string): string {
 	const baseFormat = `Respond ONLY in JSON:
 {
   "answer": "Your final answer here",
   "reasoning": "A brief explanation of how you arrived at this answer",
-  "confidence": 0.9
+  "confidence": 0.9,
+  "relevant": true
 }`;
 
-	switch (strategy) {
-		case 'cot':
-			return `You are a validator in a decentralized AI consensus network.
-Think step-by-step before answering.
-${baseFormat}`;
+	const scopeBlock = projectContext
+		? `
 
-		case 'self_consistency':
-			return `You are a validator in a decentralized AI consensus network.
-Generate multiple possible paths to the answer internally, then select the most consistent one.
-${baseFormat}`;
+PROJECT SCOPE (MANDATORY):
+This consensus session belongs to the project below. You may ONLY answer questions that are directly about this project, its domain, its features or work that applies to it.
 
-		case 'react':
-			return `You are a validator in a decentralized AI consensus network.
-Use a Reason-Act observation loop before providing the final answer.
-${baseFormat}`;
+Project context:
+${projectContext}
 
-		case 'tot':
-			return `You are a validator in a decentralized AI consensus network.
-Explore a tree of thoughts. Backtrack if a branch looks unpromising.
-${baseFormat}`;
+RULES:
+- If the question is directly about this project or its domain, set "relevant" to true and answer it.
+- If the question is unrelated (generic programming topics, general knowledge, anything outside this project's domain), set "relevant" to false and set "answer" to an empty string.
+- Never answer an irrelevant question, even partially.`
+		: '';
 
-		case 'pot':
-			return `You are a validator in a decentralized AI consensus network.
-Solve math problems by writing Python code in your reasoning.
-${baseFormat}`;
+	const strategyInstructions: Partial<Record<PromptStrategy, string>> = {
+		cot: 'Think step-by-step before answering.',
+		self_consistency: 'Generate multiple possible paths to the answer internally, then select the most consistent one.',
+		react: 'Use a Reason-Act observation loop before providing the final answer.',
+		tot: 'Explore a tree of thoughts. Backtrack if a branch looks unpromising.',
+		pot: 'Solve math problems by writing Python code in your reasoning.',
+		chain_of_verification: 'Answer carefully, then verify your own claims before finalizing.',
+	};
+	const strategyInstruction = strategyInstructions[strategy] ?? 'Answer objectively and concisely.';
 
-		case 'chain_of_verification':
-			return `You are a validator in a decentralized AI consensus network.
-Answer carefully, then verify your own claims before finalizing.
+	return `You are a validator in a decentralized AI consensus network.
+${strategyInstruction}${scopeBlock}
 ${baseFormat}`;
-
-		default:
-			return `You are a validator in a decentralized AI consensus network.
-Answer objectively and concisely.
-${baseFormat}`;
-	}
 }
 
 async function generateSingleResponse(
@@ -137,7 +131,8 @@ export async function generateResponse(
 	strategy: PromptStrategy = 'cot',
 	isCreative = false,
 	selfConsistencyN = 5,
-	memoryContext?: string
+	memoryContext?: string,
+	projectContext?: string
 ): Promise<LLMResponse> {
 	const startTime = Date.now();
 
@@ -146,7 +141,7 @@ export async function generateResponse(
 		: prompt;
 
 	try {
-		const systemPrompt = buildSystemPrompt(strategy, isCreative);
+		const systemPrompt = buildSystemPrompt(strategy, isCreative, projectContext);
 		let answer: string;
 		let reasoning: string;
 		let confidence: number;
@@ -199,6 +194,7 @@ export async function querySelectedModels(
 	assignments: AgentAssignment[],
 	memoryContext?: string,
 	isCreative = false,
+	projectContext?: string,
 	onProgress?: (modelId: string, response: LLMRawResponse) => void
 ): Promise<LLMRawResponse[]> {
 	const promises = assignments.map(async (assignment) => {
@@ -209,7 +205,8 @@ export async function querySelectedModels(
 				assignment.strategy,
 				isCreative,
 				assignment.selfConsistencyN ?? 5,
-				memoryContext
+				memoryContext,
+				projectContext
 			);
 			if (onProgress) { onProgress(assignment.model.id, response); }
 			return response;
@@ -230,6 +227,53 @@ export async function querySelectedModels(
 	});
 
 	return Promise.all(promises);
+}
+
+export interface RelevanceCheck {
+	relevant: boolean;
+	reason: string;
+}
+
+/**
+ * Pre-consensus gate: asks one model whether the user's question belongs to the
+ * open project's domain. When no project context exists the gate is skipped by
+ * the caller, and a failed check falls back to allowing the consensus.
+ */
+export async function checkRelevance(
+	model: ModelConfig,
+	userPrompt: string,
+	projectContext: string
+): Promise<RelevanceCheck> {
+	const systemPrompt = `You decide whether a question is allowed in a consensus session that is strictly scoped to one project.
+
+Project context:
+${projectContext}
+
+Rules:
+- The question is allowed ONLY if it is directly about this project, its domain, its features or work that applies to it.
+- Generic programming questions, general knowledge and any topic outside the project's domain are NOT allowed.
+
+Respond ONLY in JSON:
+{
+  "relevant": true,
+  "reason": "One short sentence saying why the question is or is not allowed"
+}`;
+
+	try {
+		const completion = await fetchOpenRouter(model.openRouterId, [
+			{ role: 'system', content: systemPrompt },
+			{ role: 'user', content: userPrompt }
+		]);
+		const content = completion.choices[0]?.message?.content || '';
+		const parsed = parseLLMResponse(content);
+		return {
+			relevant: parsed.relevant !== false,
+			reason: parsed.answer || (parsed.relevant === false ? 'This question is not related to the open project.' : ''),
+		};
+	} catch (error: any) {
+		console.error(`[Relevance] check failed for ${model.id}:`, error.message);
+		return { relevant: true, reason: 'Relevance check failed, allowing consensus.' };
+	}
 }
 
 export async function generateCritiques(
@@ -456,12 +500,17 @@ function parseLLMResponse(content: string) {
 		const answer = parsed.answer !== undefined && parsed.answer !== null ? String(parsed.answer) : content;
 		const reasoning = parsed.reasoning !== undefined && parsed.reasoning !== null ? String(parsed.reasoning) : 'No reasoning provided.';
 		let confidence = 0.8;
+		let relevant = true;
 
 		if (parsed.confidence !== undefined && parsed.confidence !== null) {
 			const confNum = Number(parsed.confidence);
 			if (!isNaN(confNum)) {
 				confidence = confNum;
 			}
+		}
+
+		if (parsed.relevant !== undefined && parsed.relevant !== null) {
+			relevant = String(parsed.relevant).toLowerCase() !== 'false';
 		}
 
 		if (confidence > 1) {
@@ -474,12 +523,13 @@ function parseLLMResponse(content: string) {
 			confidence = 0.0;
 		}
 
-		return { answer, reasoning, confidence };
+		return { answer, reasoning, confidence, relevant };
 	} catch {
 		return {
 			answer: content || '',
 			reasoning: 'No reasoning provided.',
 			confidence: 0.8,
+			relevant: true,
 		};
 	}
 }
