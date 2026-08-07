@@ -40,6 +40,14 @@ echo CodeMind: %BIN%
 echo folder:   %FOLDER%
 echo.
 
+rem Dev mode (same flags the upstream scripts\code.bat sets): the compiled
+rem workbench in out\ is unbundled, and its CSS imports only load when the
+rem window is told this is a development build (VSCODE_DEV). Without this the
+rem renderer fails to load every stylesheet and the window stays blank.
+set NODE_ENV=development
+set VSCODE_DEV=1
+set VSCODE_CLI=1
+
 rem cwd has to be the checkout: the workbench loads out\ relative to it, and the
 rem leading "." tells Electron which app to run -- the folder follows it.
 pushd "%VSCODE%"
