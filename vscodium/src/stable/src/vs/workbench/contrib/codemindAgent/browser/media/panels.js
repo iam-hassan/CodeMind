@@ -45,20 +45,51 @@
 	const ADVISOR_OPTIONS = MODEL_OPTIONS.filter(m => /^(claude-)?(opus|sonnet)/.test(m.value) && !m.value.endsWith('[1m]') && m.value !== 'opusplan');
 
 	/**
-	 * Every model a picker may offer: the built-in list, whatever the endpoint last
-	 * reported, and the configured model itself. A custom endpoint's own model name
-	 * must never be missing from the list that can put it back.
+	 * The models the composer picker offers, each tagged with the provider that serves
+	 * it so a pick can switch endpoint + key + model together, and with that provider's
+	 * display name so the menu can say which model comes from where. Built from the
+	 * curated `settings.pickerModels` (chosen across every provider in Settings),
+	 * dropping any whose provider is gone or disabled. When nothing is curated it falls
+	 * back to the ACTIVE provider's models, which preserves the pre-curation behaviour.
+	 * The current `settings.model` is always included, tagged with the active provider,
+	 * so the model in effect stays selectable.
 	 */
 	function modelOptions() {
 		const seen = new Set();
 		const out = [];
-		for (const option of MODEL_OPTIONS.concat(endpointModels)) {
-			if (!option || !option.value || seen.has(option.value)) { continue; }
-			seen.add(option.value);
-			out.push(option);
+		const providers = Array.isArray(settings.providers) ? settings.providers : [];
+		const enabledById = new Map(providers.filter(p => p.enabled !== false).map(p => [p.id, p]));
+		const active = providers.find(p => p.id === settings.activeProviderId) || providers.find(p => p.enabled !== false);
+		const add = (value, providerId) => {
+			// Key on the pair: the same model id served by two providers is two choices.
+			const key = `${providerId || ''} ${value}`;
+			if (!value || seen.has(key)) { return; }
+			seen.add(key);
+			out.push({ value, label: labelForModel(value), providerId, providerName: providerNameFor(providerId) });
+		};
+		const picker = Array.isArray(settings.pickerModels) ? settings.pickerModels : [];
+		const curated = picker.filter(e => e && e.model && enabledById.has(e.providerId));
+		if (curated.length) {
+			for (const entry of curated) { add(entry.model, entry.providerId); }
+		} else if (active && Array.isArray(active.models)) {
+			for (const value of active.models) { add(value, active.id); }
 		}
-		if (settings.model && !seen.has(settings.model)) { out.push({ value: settings.model, label: settings.model }); }
+		if (settings.model) { add(settings.model, settings.activeProviderId); }
 		return out;
+	}
+
+	/** The display name of a provider by id, for the badge on a composer model row. */
+	function providerNameFor(providerId) {
+		if (!providerId) { return ''; }
+		const providers = Array.isArray(settings.providers) ? settings.providers : [];
+		const provider = providers.find(p => p.id === providerId);
+		return provider ? (provider.name || 'Provider') : '';
+	}
+
+	/** A friendly label for a model id, using the built-in names where one is known. */
+	function labelForModel(value) {
+		const known = MODEL_OPTIONS.find(m => m.value === value);
+		return known ? known.label : value;
 	}
 
 	const OUTPUT_STYLE_OPTIONS = [
@@ -87,32 +118,57 @@
 
 	const PANEL_CONTENT = {
 		/**
-		 * Section 8: this panel owns model *configuration* — the endpoint, the key, the
-		 * lookup that says what that endpoint serves, the fallback, the advisor — but not
-		 * model *selection*. Which model answers the next turn is chosen in the input bar,
-		 * one click from the composer, and nowhere else; the Model group here says so.
+		 * This panel owns provider *configuration* — the endpoints, their keys, the model
+		 * lists each serves, and which provider is active — but not model *selection*.
+		 * Which model answers the next turn is chosen in the input bar; that picker shows
+		 * the active provider's curated models.
 		 */
 		settings: () => `
 			<h2>Settings</h2>
 			<div class="setting-group">
-				<label for="settingsBaseUrl">Endpoint URL</label>
-				<input type="text" id="settingsBaseUrl" placeholder="https://api.anthropic.com" autocomplete="off" spellcheck="false">
-				<div class="setting-hint">Any Anthropic-compatible endpoint — a gateway or a self-hosted proxy. Leave empty for the official API. Do not include <code>/v1</code>.</div>
-			</div>
-			<div class="setting-group">
-				<label for="settingsApiKey">API Key</label>
-				<div class="api-key-row">
-					<input type="password" id="settingsApiKey" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
-					<button class="btn btn-secondary" id="settingsApiKeyTest">Validate</button>
-					<button class="btn btn-primary" id="settingsApiKeySave">Save</button>
+				<label>Providers</label>
+				<div class="setting-hint">Anthropic-compatible endpoints. The active provider's key and endpoint drive the agent, and every model it serves is imported. Keys are stored securely, never in settings.</div>
+				<div class="provider-list" id="providerList"></div>
+				<button class="btn btn-secondary" id="providerAddBtn">＋ Add provider</button>
+				<div class="provider-form hidden" id="providerForm">
+					<div class="form-group">
+						<label for="providerName">Name</label>
+						<input type="text" id="providerName" placeholder="e.g. Anthropic" autocomplete="off" spellcheck="false">
+					</div>
+					<div class="form-group">
+						<label for="providerBaseUrl">Endpoint URL</label>
+						<input type="text" id="providerBaseUrl" placeholder="https://api.anthropic.com" autocomplete="off" spellcheck="false">
+						<div class="setting-hint">The provider's API base address — host only, no <code>/v1</code> and no path. Leave empty for the official Anthropic API.</div>
+					</div>
+					<div class="form-group">
+						<label for="providerApiKey">API Key</label>
+						<div class="api-key-row">
+							<input type="password" id="providerApiKey" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
+							<button class="btn btn-secondary" id="providerValidate">Validate</button>
+						</div>
+						<div class="setting-hint" id="providerKeyHint">Stored securely once you save the provider.</div>
+					</div>
+					<div class="form-group">
+						<label>Models available from this provider</label>
+						<button class="btn btn-secondary" id="providerFetch">Fetch models</button>
+						<div class="setting-hint" id="providerFetchHint">Ask the endpoint what it serves — every model it lists is imported. You can also add a model id or alias by hand. Choose which of them appear in the composer under "Models in the picker" below.</div>
+						<div class="provider-models" id="providerModelChecks"></div>
+						<div class="provider-manual-row">
+							<input type="text" id="providerManualModel" placeholder="add a model id or alias, e.g. sonnet" autocomplete="off" spellcheck="false">
+							<button class="btn btn-secondary" id="providerManualAdd">Add</button>
+						</div>
+					</div>
+					<div class="form-actions">
+						<button class="btn btn-secondary" id="providerCancel">Cancel</button>
+						<button class="btn btn-primary" id="providerSave">Save provider</button>
+					</div>
 				</div>
-				<div class="setting-hint" id="settingsApiKeyHint">Stored securely via VS Code Secret Storage. Validate tests it against the endpoint above.</div>
 			</div>
 			<div class="setting-group">
-				<label>Model</label>
-				<div class="setting-note">Select the active model from the input bar.</div>
-				<button class="btn btn-secondary" id="settingsFetchModels">Fetch models</button>
-				<div class="setting-hint" id="settingsModelHint">Optional — asks the endpoint what it serves and adds whatever it lists to that picker.</div>
+				<label>Models in the picker</label>
+				<div class="setting-hint">Which models the composer's model menu offers, chosen across every provider. Leave none selected to fall back to the active provider's models.</div>
+				<button class="btn btn-secondary" id="pickerModelsBtn">Choose models…</button>
+				<div class="setting-hint picker-models-summary" id="pickerModelsSummary"></div>
 			</div>
 			<div class="setting-group">
 				<label for="settingsFallbackModel">Fallback Model</label>
@@ -291,6 +347,20 @@
 			</div>
 			<div class="setting-hint" style="margin-top:14px;">The agent's todo list for the current session. Click a status to cycle it.</div>
 		`,
+
+		history: () => `
+			<h2>Chat History</h2>
+			<div class="setting-group history-search-group">
+				<input type="text" id="historySearch" class="history-search" placeholder="Search by topic or project path…" autocomplete="off" spellcheck="false">
+			</div>
+			<div class="mcp-toolbar history-toolbar">
+				<label class="toggle-row"><input type="checkbox" id="historyAllProjects"> <span>All projects</span></label>
+			</div>
+			<div class="panel-rows" id="historyList">
+				<div class="panel-empty">Loading…</div>
+			</div>
+			<div class="setting-hint" style="margin-top:14px;">Past conversations from this project's transcripts. Click one to bring it back into the chat; the trash button deletes it for good.</div>
+		`,
 	};
 
 	/** Container ids keyed by the panel that owns them. */
@@ -306,6 +376,7 @@
 		memory: 'Memory',
 		skills: 'Skills',
 		tasks: 'Tasks',
+		history: 'Chat History',
 	};
 
 	/** Statuses `/tasks` cycles through when a row's badge is clicked. */
@@ -322,7 +393,8 @@
 			<div class="panel-window" role="dialog" aria-modal="true">
 				<div class="panel-header">
 					<h2 id="panelTitle"></h2>
-					<button class="icon-btn panel-close" id="panelClose" aria-label="Close panel">
+					<button class="icon-btn" id="devModeBtn" aria-label="Toggle dev mode" title="Dev mode (orchestration traces)">🐛</button>
+						<button class="icon-btn panel-close" id="panelClose" aria-label="Close panel">
 						<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
 					</button>
 				</div>
@@ -359,6 +431,7 @@
 		wireSettings(panelId, body);
 		wireMcp(panelId, body);
 		wireDataPanel(panelId, body);
+		wireHistory(panelId, body);
 	}
 
 	/**
@@ -477,15 +550,113 @@
 		return escapeHtml(parts.join(' · '));
 	}
 
+	// ---------- Chat History ----------
+
+	/** Rows last pushed by the workbench, kept so the search box can filter locally. */
+	let historyEntries = [];
+	/** Whether the last request asked for every project, echoed back to keep the toggle honest. */
+	let historyAllProjects = false;
+
+	/**
+	 * The history panel is populated by the workbench. Wire the search box (local
+	 * filter, no round trip) and the All-projects toggle (a fresh request, since it
+	 * changes which directories are read), then ask for the initial list.
+	 */
+	function wireHistory(panelId, body) {
+		if (panelId !== 'history') { return; }
+		const search = body.querySelector('#historySearch');
+		const allBox = body.querySelector('#historyAllProjects');
+		if (search) { search.addEventListener('input', () => renderHistoryRows()); }
+		if (allBox) {
+			allBox.checked = historyAllProjects;
+			allBox.addEventListener('change', () => {
+				historyAllProjects = allBox.checked;
+				const list = document.getElementById('historyList');
+				if (list) { list.innerHTML = '<div class="panel-empty">Loading…</div>'; }
+				vscode.postMessage({ type: 'requestHistory', payload: { allProjects: historyAllProjects } });
+			});
+		}
+		vscode.postMessage({ type: 'requestHistory', payload: { allProjects: historyAllProjects } });
+	}
+
+	/** Store the workbench's history rows and paint them. Called from agent.js on `historyData`. */
+	function renderHistory(entries, allProjects) {
+		historyEntries = Array.isArray(entries) ? entries : [];
+		if (typeof allProjects === 'boolean') {
+			historyAllProjects = allProjects;
+			const allBox = document.getElementById('historyAllProjects');
+			if (allBox) { allBox.checked = allProjects; }
+		}
+		renderHistoryRows();
+	}
+
+	/** Paint the rows currently in `historyEntries`, filtered by the search box. */
+	function renderHistoryRows() {
+		const list = document.getElementById('historyList');
+		if (!list) { return; }
+		const query = (document.getElementById('historySearch')?.value || '').trim().toLowerCase();
+		const rows = historyEntries.filter(e => {
+			if (!query) { return true; }
+			const haystack = `${e.topic || ''} ${e.cwd || e.projectDir || ''}`.toLowerCase();
+			return haystack.includes(query);
+		});
+		if (!rows.length) {
+			list.innerHTML = `<div class="panel-empty">${historyEntries.length ? 'No conversations match your search.' : 'No past conversations yet.'}</div>`;
+			return;
+		}
+		list.innerHTML = rows.map((e, i) => `
+			<div class="panel-row panel-row-openable history-row" data-idx="${i}">
+				<div class="panel-row-main">
+					<div class="panel-row-label">
+						${escapeHtml(e.topic || '(no prompt recorded)')}
+						${e.current ? '' : '<span class="panel-row-badge" title="Recorded in another project — read-only">other project</span>'}
+					</div>
+					<div class="panel-row-detail history-path" title="${escapeHtml(e.cwd || e.projectDir || '')}">${escapeHtml(e.cwd || e.projectDir || '')}</div>
+					<div class="panel-row-meta">${escapeHtml(formatHistoryMeta(e))}</div>
+				</div>
+				<button class="icon-btn panel-row-delete" data-del="${i}" title="Delete this conversation" aria-label="Delete conversation"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+			</div>
+		`).join('');
+
+		list.querySelectorAll('.history-row').forEach(row => row.addEventListener('click', (e) => {
+			if (e.target.closest('button')) { return; }
+			const entry = rows[Number(row.dataset.idx)];
+			if (!entry) { return; }
+			vscode.postMessage({ type: 'openSession', payload: { id: entry.id, projectDir: entry.projectDir, current: entry.current === true } });
+			closePanel();
+		}));
+		list.querySelectorAll('[data-del]').forEach(btn => btn.addEventListener('click', () => {
+			const entry = rows[Number(btn.dataset.del)];
+			if (!entry) { return; }
+			showSheet({
+				title: 'Delete this conversation?',
+				className: 'confirm-sheet',
+				body: `<p>${escapeHtml(entry.topic || '(no prompt recorded)')}</p><p class="setting-hint">The transcript is moved to the trash. This cannot be undone from here.</p>`,
+				confirmLabel: 'Delete',
+				onConfirm: () => {
+					vscode.postMessage({ type: 'deleteSession', payload: { id: entry.id, projectDir: entry.projectDir } });
+					// Optimistic: drop it locally so the row goes at once; the workbench
+					// re-sends the list after the delete lands anyway.
+					historyEntries = historyEntries.filter(x => !(x.id === entry.id && x.projectDir === entry.projectDir));
+					renderHistoryRows();
+					return true;
+				},
+			});
+		}));
+	}
+
+	/** "12/03/2026 · 34 messages" for a history row. */
+	function formatHistoryMeta(entry) {
+		const parts = [];
+		if (typeof entry.at === 'number') { parts.push(new Date(entry.at).toLocaleDateString()); }
+		if (typeof entry.messages === 'number') { parts.push(`${entry.messages} message${entry.messages === 1 ? '' : 's'}`); }
+		return parts.join(' · ');
+	}
+
 	// ---------- Settings ----------
 
 	function wireSettings(panelId, body) {
 		if (panelId !== 'settings') { return; }
-		const apiKeyInput = body.querySelector('#settingsApiKey');
-		const apiKeySave = body.querySelector('#settingsApiKeySave');
-		const apiKeyTest = body.querySelector('#settingsApiKeyTest');
-		const baseUrlInput = body.querySelector('#settingsBaseUrl');
-		const fetchModels = body.querySelector('#settingsFetchModels');
 		const openMcpBtn = body.querySelector('#settingsOpenMcp');
 
 		// Paint whatever was last pushed so the form is never blank, then ask for
@@ -498,52 +669,447 @@
 			vscode.postMessage({ type: 'settingsUpdate', payload: settings });
 		};
 
-		apiKeySave.addEventListener('click', () => {
-			const key = apiKeyInput.value.trim();
-			if (key) {
-				vscode.postMessage({ type: 'setApiKey', payload: key });
-				apiKeyInput.value = '';
-				setApiKeyHint('Saved to Secret Storage. Validate checks it against the endpoint above.');
-			} else {
-				// Silence here reads as a broken button; there is genuinely nothing to save.
-				setApiKeyHint('Type a key first — Save stores whatever is in the field.');
-			}
-		});
-		apiKeyTest.addEventListener('click', () => {
-			// The URL in the form, not the saved one: the point of Validate is to check a
-			// key and endpoint pair before either is committed. An empty field means the
-			// saved key — the field is cleared on save, so that is the common case.
-			setApiKeyHint(apiKeyInput.value.trim() ? 'Checking the key in the field…' : 'Checking the saved key…');
-			vscode.postMessage({
-				type: 'validateApiKey',
-				payload: { key: apiKeyInput.value.trim() || undefined, baseUrl: baseUrlInput.value.trim() },
-			});
-		});
-		if (fetchModels) {
-			fetchModels.addEventListener('click', () => {
-				setModelHint('Asking the endpoint…');
-				vscode.postMessage({
-					type: 'fetchEndpointModels',
-					// An unsaved key still counts, so a brand-new endpoint can be listed in
-					// one step; the workbench falls back to secret storage when it is empty.
-					payload: { key: apiKeyInput.value.trim() || undefined, baseUrl: baseUrlInput.value.trim() },
-				});
-			});
-		}
-		// The endpoint is a text field: save it when the user leaves it or presses
-		// Enter, not on every keystroke, so a half-typed URL is never pushed.
-		baseUrlInput.addEventListener('change', persist);
-		baseUrlInput.addEventListener('keydown', e => { if (e.key === 'Enter') { persist(); } });
+		wireProviders(body);
+
+		const pickerModelsBtn = body.querySelector('#pickerModelsBtn');
+		if (pickerModelsBtn) { pickerModelsBtn.addEventListener('click', showPickerModelsSheet); }
+
 		body.querySelectorAll('#settingsFallbackModel, #settingsOutputStyle, #settingsEffort, #settingsFastMode, #settingsCoordinatorMode, #settingsAdvisorModel, #settingsMaxTurns, #settingsMaxThinkingTokens, #settingsSystemPrompt, #settingsSandboxEnabled, #settingsSandboxAutoAllow, #settingsSandboxFallback, #settingsSandboxExcluded, #settingsVimMode, #settingsVoiceMode, #settingsShowOnStartup, #settingsAutoCompact')
 			.forEach(el => el.addEventListener('change', persist));
 		body.querySelectorAll('input[name="permMode"], .settings-source').forEach(r => r.addEventListener('change', persist));
 		if (openMcpBtn) { openMcpBtn.addEventListener('click', () => openPanel('mcp')); }
 	}
 
-	/** One line in the Model group: what the last endpoint lookup found. */
-	function setModelHint(text) {
-		const hint = document.getElementById('settingsModelHint');
-		if (hint) { hint.textContent = text; }
+	// ---------- Providers ----------
+
+	/** Form state while adding/editing a provider. `editingId` null = adding new. */
+	let providerDraft = { editingId: null, models: [] };
+	/** Incremented per fetch; only the reply carrying the current value is applied. */
+	let providerFetchToken = 0;
+
+	/** Providers pushed by the workbench (from settings). */
+	function currentProviders() {
+		return Array.isArray(settings.providers) ? settings.providers : [];
+	}
+
+	/** Persist the whole providers array back to the workbench and repaint. */
+	function pushProviders(providers) {
+		settings = { ...settings, providers };
+		vscode.postMessage({ type: 'providersUpdate', payload: providers });
+		renderProviderList();
+	}
+
+	function wireProviders(body) {
+		renderProviderList();
+		const addBtn = body.querySelector('#providerAddBtn');
+		const form = body.querySelector('#providerForm');
+		const cancel = body.querySelector('#providerCancel');
+		const save = body.querySelector('#providerSave');
+		const validate = body.querySelector('#providerValidate');
+		const fetch = body.querySelector('#providerFetch');
+		const manualAdd = body.querySelector('#providerManualAdd');
+		const manualInput = body.querySelector('#providerManualModel');
+		if (!addBtn || !form) { return; }
+
+		addBtn.addEventListener('click', () => openProviderForm(null));
+		if (cancel) { cancel.addEventListener('click', () => closeProviderForm()); }
+		if (save) { save.addEventListener('click', () => saveProvider(body)); }
+		if (validate) {
+			validate.addEventListener('click', () => {
+				setProviderKeyHint('Checking the key against the endpoint…');
+				vscode.postMessage({
+					type: 'validateProviderKey',
+					payload: {
+						providerId: providerDraft.editingId || undefined,
+						key: (body.querySelector('#providerApiKey').value || '').trim() || undefined,
+						baseUrl: (body.querySelector('#providerBaseUrl').value || '').trim(),
+					},
+				});
+			});
+		}
+		if (fetch) {
+			fetch.addEventListener('click', () => {
+				const key = (body.querySelector('#providerApiKey').value || '').trim() || undefined;
+				const baseUrl = (body.querySelector('#providerBaseUrl').value || '').trim();
+
+				if (!baseUrl) {
+					setProviderFetchHint('Enter the endpoint URL first — the API base address your provider gave you, for example https://api.example.com.', 'error');
+					return;
+				}
+
+				// A fetch replaces the list rather than adding to it: models left over
+				// from a previous endpoint (or a previous URL typo) are not offered by
+				// the one being probed now, and saving them would put dead ids in the
+				// composer. Cleared up front so the stale list never lingers on screen
+				// while the probe runs, and stays cleared if the probe fails.
+				providerDraft.models = [];
+				renderModelChecks();
+
+				// Only the newest probe may write to the draft. Without this, fixing a
+				// URL and re-fetching lets a slow first reply land last and overwrite
+				// the correct result.
+				providerFetchToken++;
+				setProviderFetchBusy(true);
+				setProviderFetchHint('Contacting the endpoint to list its models…', 'busy');
+
+				// One probe does both jobs: it identifies the wire format *and* returns
+				// the model list, so there is no second request to race with. (An earlier
+				// version also fired `fetchProviderModels` on a timer; that reply landed
+				// after the detection result and overwrote the detected models with the
+				// Anthropic-only subset.)
+				vscode.postMessage({
+					type: 'fetchProviderModels',
+					payload: {
+						providerId: providerDraft.editingId || 'draft',
+						baseUrl,
+						key: key || '',
+					},
+				});
+			});
+		}
+		if (manualAdd && manualInput) {
+			const add = () => {
+				const id = manualInput.value.trim();
+				if (id && !providerDraft.models.includes(id)) {
+					providerDraft.models.push(id);
+					renderModelChecks();
+				}
+				manualInput.value = '';
+			};
+			manualAdd.addEventListener('click', add);
+			manualInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+		}
+	}
+
+	/**
+	 * Apply a `providerDetection` reply: the endpoint told us which wire format it
+	 * speaks and which models it serves, so the draft is filled in from one probe
+	 * instead of the user typing model ids by hand.
+	 */
+	function handleProviderDetection(result) {
+		const data = result || {};
+
+		// Ignore a reply from a superseded fetch. Older builds sent no requestId, so
+		// a missing one is treated as current rather than silently dropped.
+		if (typeof data.requestId === 'number' && data.requestId !== providerFetchToken) { return; }
+
+		// The form may have been closed or switched to another provider while the
+		// probe was in flight; applying the result then would edit the wrong draft.
+		const form = document.getElementById('providerForm');
+		if (!form || form.classList.contains('hidden')) { return; }
+
+		setProviderFetchBusy(false);
+
+		const models = Array.isArray(data.models) ? data.models.filter(m => typeof m === 'string' && m.trim()) : [];
+
+		if (!data.success || !data.wire) {
+			// The draft was already cleared at click time, so there is nothing stale to
+			// undo here — just report what to fix. The backend's message names the
+			// specific cause (bad address, refused key, unreachable host).
+			setProviderFetchHint(data.error || 'Could not reach that endpoint or identify its protocol. Check the API base URL and the key.', 'error');
+			renderModelChecks();
+			return;
+		}
+
+		const label = data.wire === 'anthropic' ? 'Anthropic' : 'OpenAI';
+
+		providerDraft.baseUrl = data.baseUrl;
+		providerDraft.wire = data.wire;
+		// De-duplicate: some gateways list the same id under several aliases, and a
+		// duplicate would render twice and be stored twice.
+		providerDraft.models = Array.from(new Set(models));
+
+		const baseUrlInput = document.querySelector('#providerBaseUrl');
+		// The backend normalises the address (adds a scheme, drops a trailing /v1), so
+		// echo the corrected URL back — that is the form the provider will be saved
+		// with, and seeing it change is how the user learns what was wrong.
+		const corrected = baseUrlInput && data.baseUrl && baseUrlInput.value.trim() !== data.baseUrl;
+		if (baseUrlInput && data.baseUrl) { baseUrlInput.value = data.baseUrl; }
+
+		const count = providerDraft.models.length;
+		const note = corrected ? ` The address was corrected to ${data.baseUrl}.` : '';
+		// The engine speaks the Messages API; there is no OpenAI translation layer yet.
+		// Saying so here — rather than letting the first chat fail — is the difference
+		// between a known limitation and an apparent bug.
+		const unsupported = data.wire === 'openai'
+			? ' Note: CodeMind sends conversations in the Anthropic format, so this endpoint can be saved but cannot serve a chat yet.'
+			: '';
+
+		if (count) {
+			setProviderFetchHint(
+				`Detected the ${label} protocol and imported ${count} model${count === 1 ? '' : 's'}.${note} Remove any you do not want, then choose which appear in the composer under "Models in the picker".${unsupported}`,
+				unsupported ? 'warn' : 'ok');
+		} else {
+			setProviderFetchHint(
+				`Detected the ${label} protocol, but ${data.error || 'the endpoint published no model list'}.${note} Add the model ids by hand below.${unsupported}`,
+				'warn');
+		}
+
+		renderModelChecks();
+	}
+
+	function renderProviderList() {
+		const list = document.getElementById('providerList');
+		if (!list) { return; }
+		const providers = currentProviders();
+		if (!providers.length) {
+			list.innerHTML = '<div class="provider-empty">No providers yet. Add one to choose an endpoint and its models.</div>';
+			return;
+		}
+		list.innerHTML = providers.map((p, i) => `
+			<div class="provider-row${p.id === settings.activeProviderId ? ' active' : ''}" data-idx="${i}">
+				<label class="provider-active" title="Use this provider">
+					<input type="radio" name="activeProvider" ${p.id === settings.activeProviderId ? 'checked' : ''} ${p.enabled === false ? 'disabled' : ''} data-act="activate" data-idx="${i}">
+				</label>
+				<div class="provider-info">
+					<div class="provider-name">${escapeHtml(p.name || 'Provider')}${p.enabled === false ? ' <span class="provider-off">disabled</span>' : ''}</div>
+					<div class="provider-detail">${escapeHtml(p.baseUrl || 'https://api.anthropic.com')} · ${(p.models || []).length} model${(p.models || []).length === 1 ? '' : 's'}${p.wire === 'openai' ? ' · <span class="provider-wire-warn" title="CodeMind sends conversations in the Anthropic format. This endpoint speaks the OpenAI format, so it cannot serve a chat yet.">OpenAI protocol — chat not supported</span>' : ''}</div>
+				</div>
+				<div class="provider-actions">
+					<button class="icon-btn" data-act="toggle" data-idx="${i}" title="${p.enabled === false ? 'Enable' : 'Disable'}"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p.enabled === false ? '<path d="M5 12h14"/>' : '<path d="M20 6L9 17l-5-5"/>'}</svg></button>
+					<button class="icon-btn" data-act="edit" data-idx="${i}" title="Edit"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>
+					<button class="icon-btn" data-act="remove" data-idx="${i}" title="Remove"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+				</div>
+			</div>
+		`).join('');
+
+		list.querySelectorAll('[data-act="activate"]').forEach(el => el.addEventListener('change', e => {
+			const p = currentProviders()[Number(e.currentTarget.dataset.idx)];
+			if (p) { vscode.postMessage({ type: 'setActiveProvider', payload: { providerId: p.id } }); }
+		}));
+		list.querySelectorAll('[data-act="toggle"]').forEach(btn => btn.addEventListener('click', e => {
+			const idx = Number(e.currentTarget.dataset.idx);
+			pushProviders(currentProviders().map((p, i) => i === idx ? { ...p, enabled: p.enabled === false } : p));
+		}));
+		list.querySelectorAll('[data-act="edit"]').forEach(btn => btn.addEventListener('click', e => {
+			const p = currentProviders()[Number(e.currentTarget.dataset.idx)];
+			if (p) { openProviderForm(p); }
+		}));
+		list.querySelectorAll('[data-act="remove"]').forEach(btn => btn.addEventListener('click', e => {
+			const p = currentProviders()[Number(e.currentTarget.dataset.idx)];
+			if (!p) { return; }
+			if (p.id === providerDraft.editingId) { closeProviderForm(); }
+			vscode.postMessage({ type: 'deleteProviderKey', payload: { providerId: p.id } });
+			pushProviders(currentProviders().filter(x => x.id !== p.id));
+		}));
+	}
+
+	function openProviderForm(provider) {
+		const form = document.getElementById('providerForm');
+		if (!form) { return; }
+		form.classList.remove('hidden');
+		providerDraft = {
+			editingId: provider ? provider.id : null,
+			models: provider && Array.isArray(provider.models) ? provider.models.slice() : [],
+		};
+		form.querySelector('#providerName').value = provider ? (provider.name || '') : '';
+		form.querySelector('#providerBaseUrl').value = provider ? (provider.baseUrl || '') : '';
+		form.querySelector('#providerApiKey').value = '';
+		setProviderKeyHint(provider ? 'Leave blank to keep the saved key, or type a new one.' : 'Stored securely once you save the provider.');
+		// Abandon any in-flight probe from a previous open: its reply must not fill in
+		// the form that is being opened now.
+		providerFetchToken++;
+		setProviderFetchBusy(false);
+		setProviderFetchHint('Ask the endpoint what it serves — every model it lists is imported.');
+		renderModelChecks();
+	}
+
+	function closeProviderForm() {
+		const form = document.getElementById('providerForm');
+		if (form) { form.classList.add('hidden'); }
+		providerFetchToken++;
+		setProviderFetchBusy(false);
+		providerDraft = { editingId: null, models: [] };
+	}
+
+	function saveProvider(body) {
+		const name = (body.querySelector('#providerName').value || '').trim() || 'Provider';
+		const baseUrl = (body.querySelector('#providerBaseUrl').value || '').trim().replace(/\/+$/, '');
+		const key = (body.querySelector('#providerApiKey').value || '').trim();
+		const providers = currentProviders();
+		let id = providerDraft.editingId;
+		let next;
+		// The detected wire is persisted so it survives a reload: re-detecting costs two
+		// network round-trips, and the composer needs to know whether this endpoint can
+		// actually serve a turn. Only written when detection ran — editing a provider
+		// without re-fetching keeps whatever was stored before.
+		const detected = providerDraft.wire ? { wire: providerDraft.wire } : {};
+		if (id) {
+			next = providers.map(p => p.id === id ? { ...p, name, baseUrl, models: providerDraft.models.slice(), ...detected } : p);
+		} else {
+			id = 'p-' + Math.abs(hashString(name + baseUrl + providerDraft.models.join(','))).toString(36) + '-' + providers.length;
+			next = providers.concat({ id, name, baseUrl, models: providerDraft.models.slice(), enabled: true, ...detected });
+		}
+		if (key) { vscode.postMessage({ type: 'setProviderKey', payload: { providerId: id, key } }); }
+		pushProviders(next);
+		closeProviderForm();
+	}
+
+	/** A tiny non-crypto hash so a new provider gets a stable-ish id without Date/random. */
+	function hashString(s) {
+		let h = 0;
+		for (let i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; }
+		return h;
+	}
+
+	/**
+	 * Draw the provider's imported models. Every model a provider knows is kept —
+	 * fetching auto-imports the whole list, and manual adds append — so this is a
+	 * plain removable list, not a tick-to-keep one. Which of them reach the composer
+	 * is a separate choice, made under "Models in the picker".
+	 */
+	function renderModelChecks(fetched) {
+		const host = document.getElementById('providerModelChecks');
+		if (!host) { return; }
+		// Fetching imports everything: merge any freshly fetched ids into the draft so
+		// the list below is exactly what the provider will store.
+		for (const m of (fetched || [])) {
+			const v = m && m.value;
+			if (v && !providerDraft.models.includes(v)) { providerDraft.models.push(v); }
+		}
+		const ids = providerDraft.models.slice();
+		if (!ids.length) {
+			host.innerHTML = '<div class="provider-models-empty">No models yet — use “Fetch models” to import them from the endpoint, or add a model id by hand below.</div>';
+			return;
+		}
+		host.innerHTML = ids.map((v, i) => `
+			<div class="provider-model-item">
+				<span>${escapeHtml(v)}</span>
+				<button class="icon-btn provider-model-remove" data-del="${i}" title="Remove" aria-label="Remove ${escapeHtml(v)}"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+			</div>
+		`).join('');
+		host.querySelectorAll('[data-del]').forEach(btn => btn.addEventListener('click', e => {
+			const idx = Number(e.currentTarget.dataset.del);
+			providerDraft.models = providerDraft.models.filter((_, i) => i !== idx);
+			renderModelChecks();
+		}));
+	}
+
+	/** Handle a providerModels reply from the workbench (Fetch models button). */
+	function applyProviderModels(payload) {
+		const data = payload || {};
+		setProviderFetchBusy(false);
+		if (data.error) {
+			setProviderFetchHint(`Could not list models: ${data.error}`, 'error');
+			return;
+		}
+		const models = Array.isArray(data.models) ? data.models : [];
+
+		// A fetch replaces the list rather than adding to it — see handleProviderDetection.
+		providerDraft.models = [];
+
+		setProviderFetchHint(models.length
+			? `Imported ${models.length} model${models.length === 1 ? '' : 's'} from ${data.endpoint || 'the endpoint'}. Curate the composer's list under "Models in the picker".`
+			: `${data.endpoint || 'The endpoint'} listed no Anthropic-compatible models.`,
+			models.length ? 'ok' : 'warn');
+
+		// Replace the model list completely (not append)
+		renderModelChecks(models);
+	}
+
+	/**
+	 * The "Models in the picker" curation is a button that opens a sheet, not an inline
+	 * list — the settings form should not grow a row per model across every provider.
+	 * This keeps the button's summary line honest: how many models are chosen, or that
+	 * the picker is falling back to the active provider.
+	 */
+	function renderPickerModelsSummary() {
+		const summary = document.getElementById('pickerModelsSummary');
+		if (!summary) { return; }
+		const enabled = new Set((Array.isArray(settings.providers) ? settings.providers : [])
+			.filter(p => p.enabled !== false).map(p => p.id));
+		// Only count picks whose provider still exists and is enabled, so a stale entry
+		// never inflates the number the user is shown.
+		const live = (Array.isArray(settings.pickerModels) ? settings.pickerModels : [])
+			.filter(e => e && e.providerId && e.model && enabled.has(e.providerId));
+		summary.textContent = live.length
+			? `${live.length} model${live.length === 1 ? '' : 's'} chosen for the composer picker.`
+			: "None chosen — the composer falls back to the active provider's models.";
+	}
+
+	/**
+	 * Choose which models the composer picker offers, across every enabled provider, in
+	 * a sheet so the settings form stays short. Each provider's imported models are
+	 * listed with a checkbox and the provider's name as the group heading; on Done the
+	 * ticked set is written to `codemind.pickerModels` (`{providerId, model}` pairs, so
+	 * the same model id served by two providers is two independent choices). An empty
+	 * selection is valid and means "fall back to the active provider's models".
+	 */
+	function showPickerModelsSheet() {
+		const providers = (Array.isArray(settings.providers) ? settings.providers : []).filter(p => p.enabled !== false);
+		const groups = providers.filter(p => Array.isArray(p.models) && p.models.length);
+		if (!groups.length) {
+			showSheet({
+				title: 'Models in the picker',
+				className: 'picker-models-sheet',
+				body: '<p class="setting-hint">No models imported yet. Add a provider and fetch its models first.</p>',
+				confirmLabel: 'Done',
+				onConfirm: () => true,
+			});
+			return;
+		}
+		const selected = new Set((Array.isArray(settings.pickerModels) ? settings.pickerModels : []).map(e => `${e.providerId} ${e.model}`));
+		const body = `
+			<div class="picker-models-sheet-list">
+				${groups.map(p => `
+					<div class="picker-model-group">
+						<div class="picker-model-provider">${escapeHtml(p.name || 'Provider')}</div>
+						${p.models.map(m => `
+							<label class="picker-model-check">
+								<input type="checkbox" data-provider="${escapeHtml(p.id)}" data-model="${escapeHtml(m)}" ${selected.has(`${p.id} ${m}`) ? 'checked' : ''}>
+								<span class="picker-model-check-name">${escapeHtml(labelForModel(m))}</span>
+							</label>
+						`).join('')}
+					</div>
+				`).join('')}
+			</div>`;
+		showSheet({
+			title: 'Models in the picker',
+			className: 'picker-models-sheet',
+			body,
+			confirmLabel: 'Done',
+			onConfirm(overlay) {
+				const picked = Array.from(overlay.querySelectorAll('input[type="checkbox"]:checked'))
+					.map(box => ({ providerId: box.dataset.provider, model: box.dataset.model }));
+				pushSettingChange({ pickerModels: picked });
+				return true;
+			},
+		});
+	}
+
+	function setProviderKeyHint(text) {
+		const el = document.getElementById('providerKeyHint');
+		if (el) { el.textContent = text; }
+	}
+	/**
+	 * The one status line under "Fetch models". `tone` colours it so a failure reads
+	 * as a failure at a glance: 'busy' | 'ok' | 'warn' | 'error', or omitted for the
+	 * neutral resting text.
+	 */
+	function setProviderFetchHint(text, tone) {
+		const el = document.getElementById('providerFetchHint');
+		if (!el) { return; }
+		el.textContent = text;
+		el.classList.remove('is-busy', 'is-ok', 'is-warn', 'is-error');
+		if (tone) { el.classList.add(`is-${tone}`); }
+		// Failures are announced: the message names what to fix, and a sighted user
+		// sees the colour change that a screen-reader user otherwise would not get.
+		el.setAttribute('aria-live', tone === 'error' || tone === 'warn' ? 'assertive' : 'polite');
+	}
+
+	/**
+	 * Disable the fetch/validate pair while a probe is in flight, so a second click
+	 * cannot start a race whose reply overwrites the first one's models.
+	 */
+	function setProviderFetchBusy(busy) {
+		const fetchBtn = document.getElementById('providerFetch');
+		const validateBtn = document.getElementById('providerValidate');
+		for (const btn of [fetchBtn, validateBtn]) {
+			if (!btn) { continue; }
+			btn.disabled = !!busy;
+			btn.classList.toggle('is-busy', !!busy);
+		}
+		if (fetchBtn) { fetchBtn.textContent = busy ? 'Fetching…' : 'Fetch models'; }
 	}
 
 	/** One line under the API key row: what the last Save or Validate did. */
@@ -561,6 +1127,13 @@
 	 * for is the input bar's picker and the fallback list, both of which read
 	 * `endpointModels` when they are next drawn.
 	 */
+	/** Legacy single-endpoint model hint. The provider UI uses its own hints now; this
+	 *  stays only so the dormant applyEndpointModels path has something to call. */
+	function setModelHint(text) {
+		const hint = document.getElementById('settingsModelHint');
+		if (hint) { hint.textContent = text; }
+	}
+
 	function applyEndpointModels(payload) {
 		const data = payload || {};
 		if (data.error) {
@@ -584,14 +1157,16 @@
 	/** Read the settings form into the payload shape the workbench expects. */
 	function readSettingsForm(body) {
 		return {
-			// Trailing slashes off: the engine builds `${base}/v1/...` from this.
-			baseUrl: body.querySelector('#settingsBaseUrl').value.trim().replace(/\/+$/, ''),
-			// Section 8: there is no model select in this form. Carrying the configured
-			// model through unchanged keeps the workbench's echo consistent with what it
-			// already has — the form must not be able to change which model is active, and
-			// dropping the key would leave the panel's own copy of the settings short one
-			// field until the next echo arrives.
+			// The endpoint now lives per-provider, not in this form. Carry the workbench's
+			// current values (baseUrl/model/providers/activeProviderId) through unchanged so
+			// a settingsUpdate from this form never clobbers provider state.
+			baseUrl: settings.baseUrl,
 			model: settings.model,
+			providers: settings.providers,
+			activeProviderId: settings.activeProviderId,
+			// The picker curation is written through its own change handler; carry it
+			// through unchanged so a plain form save never clobbers it.
+			pickerModels: settings.pickerModels,
 			fallbackModel: body.querySelector('#settingsFallbackModel').value,
 			outputStyle: body.querySelector('#settingsOutputStyle').value,
 			effort: body.querySelector('#settingsEffort').value,
@@ -626,17 +1201,13 @@
 		settings = payload || {};
 		if (activePanel !== 'settings') { return; }
 		const body = document.getElementById('panelBody');
-		// The endpoint field is in every version of this form, so it is what "the settings
-		// form is on screen" is asked about. (It used to be the model select, which
-		// Section 8 removed.)
-		if (!body || !body.querySelector('#settingsBaseUrl')) { return; }
+		// The providers list is in every version of this form, so it is what "the settings
+		// form is on screen" is asked about.
+		if (!body || !body.querySelector('#providerList')) { return; }
 
-		// Never overwrite a URL the user is in the middle of typing: this runs on every
-		// settings echo, including the one the user's own edit triggered.
-		const baseUrlInput = body.querySelector('#settingsBaseUrl');
-		if (baseUrlInput && document.activeElement !== baseUrlInput) {
-			baseUrlInput.value = settings.baseUrl || '';
-		}
+		// Repaint the providers list (active/enabled state may have changed elsewhere).
+		renderProviderList();
+		renderPickerModelsSummary();
 		// Same '' handling as the advisor below: an empty value means "no fallback".
 		const fallback = settings.fallbackModel || '';
 		if (fallback) {
@@ -994,20 +1565,33 @@
 	}
 
 	function showModelPicker() {
+		const options = modelOptions();
 		showPicker({
 			title: 'Model for new turns',
-			options: modelOptions(),
+			// Name the provider alongside the model in the fallback sheet too, so it reads
+			// the same as the composer's inline menu.
+			options: options.map(o => ({ value: o.value, label: o.providerName ? `${o.label} — ${o.providerName}` : o.label })),
 			current: settings.model || '',
-			onPick: (value) => pushSettingChange({ model: value }),
+			onPick: (value) => {
+				const chosen = options.find(o => o.value === value);
+				selectModel(value, chosen && chosen.providerId);
+			},
 		});
 	}
 
 	/**
 	 * Set the active model from outside this file. The composer's pill owns model
-	 * selection now (Section 2.2), so it needs the same one-setting write the picker
-	 * uses rather than a second path into the settings payload.
+	 * selection now (Section 2.2). When the choice carries a provider — every composer
+	 * option does — it goes through `selectPickerModel` so the endpoint, key and model
+	 * switch together; without one it is a plain model write, the pre-provider path.
 	 */
-	function selectModel(value) {
+	function selectModel(value, providerId) {
+		if (providerId) {
+			settings = { ...settings, model: value, activeProviderId: providerId };
+			vscode.postMessage({ type: 'selectPickerModel', payload: { providerId, model: value } });
+			if (activePanel === 'settings') { applySettings(settings); }
+			return;
+		}
 		pushSettingChange({ model: value });
 	}
 
@@ -1028,11 +1612,13 @@
 	}
 
 	window.CodeMindPanels = {
-		openPanel, closePanel, renderPanelData, applySettings, applyEndpointModels, renderMcp, showCommitReview, showSheet,
+		openPanel, closePanel, renderPanelData, applySettings, applyEndpointModels, applyProviderModels, handleProviderDetection, renderMcp, showCommitReview, showSheet,
 		showPicker, showModelPicker, showEffortPicker, toggleFastMode,
 		// The composer's model pill renders this list itself and writes back through
 		// selectModel, so both are part of the surface now.
 		modelOptions, selectModel,
+		// The Chat History panel's rows arrive from the workbench via agent.js.
+		renderHistory,
 		getActivePanel: () => activePanel,
 	};
 })();

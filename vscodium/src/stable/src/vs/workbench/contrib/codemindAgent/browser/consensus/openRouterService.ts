@@ -43,8 +43,19 @@ export function setOpenRouterApiKey(key: string) {
 	openRouterApiKey = key;
 }
 
-// Lightweight fetch wrapper instead of @openrouter/sdk to avoid heavy dependencies
-async function fetchOpenRouter(modelId: string, messages: any[]) {
+// Lightweight fetch wrapper — now handles both OpenRouter and custom providers (Anthropic/OpenAI wire)
+async function fetchOpenRouter(modelId: string, messages: any[], modelConfig?: ModelConfig) {
+	// If modelConfig is provided (GUI model), use its credentials and endpoint
+	if (modelConfig && modelConfig.baseUrl && modelConfig.apiKey) {
+		const wire = modelConfig.wire || 'openai';
+		if (wire === 'anthropic') {
+			return await fetchAnthropicWire(modelConfig, messages);
+		} else {
+			return await fetchOpenAIWire(modelConfig, messages);
+		}
+	}
+
+	// Otherwise fall back to OpenRouter
 	if (!openRouterApiKey) {
 		throw new Error('OpenRouter API Key not set');
 	}
@@ -67,6 +78,75 @@ async function fetchOpenRouter(modelId: string, messages: any[]) {
 	if (!response.ok) {
 		const errText = await response.text();
 		throw new Error(`OpenRouter API error (${response.status}): ${errText}`);
+	}
+
+	return await response.json();
+}
+
+async function fetchAnthropicWire(modelConfig: ModelConfig, messages: any[]): Promise<any> {
+	const { baseUrl, apiKey, openRouterId } = modelConfig;
+	// Convert OpenAI-style messages to Anthropic format
+	let system = '';
+	const anthropicMessages: any[] = [];
+	for (const msg of messages) {
+		if (msg.role === 'system') {
+			system = msg.content;
+		} else {
+			anthropicMessages.push({ role: msg.role === 'assistant' ? 'assistant' : 'user', content: msg.content });
+		}
+	}
+
+	const response = await fetch(`${baseUrl}/messages`, {
+		method: 'POST',
+		headers: {
+			'x-api-key': apiKey!,
+			'anthropic-version': '2023-06-01',
+			'content-type': 'application/json'
+		},
+		body: JSON.stringify({
+			model: openRouterId,
+			max_tokens: 4096,
+			system,
+			messages: anthropicMessages,
+			temperature: 0.7
+		})
+	});
+
+	if (!response.ok) {
+		const errText = await response.text();
+		throw new Error(`Anthropic API error (${response.status}): ${errText}`);
+	}
+
+	const data = await response.json();
+	// Convert back to OpenAI format for consensus engine
+	return {
+		choices: [{
+			message: {
+				role: 'assistant',
+				content: data.content?.[0]?.text || ''
+			}
+		}]
+	};
+}
+
+async function fetchOpenAIWire(modelConfig: ModelConfig, messages: any[]): Promise<any> {
+	const { baseUrl, apiKey, openRouterId } = modelConfig;
+	const response = await fetch(`${baseUrl}/chat/completions`, {
+		method: 'POST',
+		headers: {
+			'Authorization': `Bearer ${apiKey}`,
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify({
+			model: openRouterId,
+			messages,
+			temperature: 0.7
+		})
+	});
+
+	if (!response.ok) {
+		const errText = await response.text();
+		throw new Error(`Provider API error (${response.status}): ${errText}`);
 	}
 
 	return await response.json();
@@ -119,7 +199,7 @@ async function generateSingleResponse(
 	const completion = await fetchOpenRouter(model.openRouterId, [
 		{ role: 'system', content: systemPrompt },
 		{ role: 'user', content: prompt }
-	]);
+	], model);
 
 	const content = completion.choices[0]?.message?.content || '';
 	return parseLLMResponse(content);
@@ -263,16 +343,35 @@ Respond ONLY in JSON:
 		const completion = await fetchOpenRouter(model.openRouterId, [
 			{ role: 'system', content: systemPrompt },
 			{ role: 'user', content: userPrompt }
-		]);
+		], model);
 		const content = completion.choices[0]?.message?.content || '';
-		const parsed = parseLLMResponse(content);
-		return {
-			relevant: parsed.relevant !== false,
-			reason: parsed.answer || (parsed.relevant === false ? 'This question is not related to the open project.' : ''),
-		};
+
+		// Parse the {relevant, reason} JSON directly. We must not fall back to the raw
+		// model output for `reason` — that would surface the JSON blob to the user. Any
+		// parse failure yields a clean, human sentence instead.
+		let relevant = true;
+		let reason = '';
+		try {
+			const jsonMatch = content.match(/\{[\s\S]*\}/);
+			const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+			relevant = String(parsed.relevant).toLowerCase() !== 'false';
+			if (typeof parsed.reason === 'string' && parsed.reason.trim()) {
+				reason = parsed.reason.trim();
+			}
+		} catch {
+			// Could not parse — allow the run rather than block on a malformed check.
+			return { relevant: true, reason: '' };
+		}
+
+		if (!reason) {
+			reason = relevant
+				? ''
+				: 'That question is outside what this project covers, so the models did not run.';
+		}
+		return { relevant, reason };
 	} catch (error: any) {
 		console.error(`[Relevance] check failed for ${model.id}:`, error.message);
-		return { relevant: true, reason: 'Relevance check failed, allowing consensus.' };
+		return { relevant: true, reason: '' };
 	}
 }
 
@@ -303,7 +402,7 @@ Output a JSON array of critiques:
 		const completion = await fetchOpenRouter(model.openRouterId, [
 			{ role: 'system', content: systemPrompt },
 			{ role: 'user', content: userMsg }
-		]);
+		], model);
 
 		const content = completion.choices[0]?.message?.content || '';
 		const critiques = parseCritiqueResponse(content);
@@ -362,7 +461,7 @@ Revise your answer to move toward consensus.`;
 		const completion = await fetchOpenRouter(model.openRouterId, [
 			{ role: 'system', content: systemPrompt },
 			{ role: 'user', content: userMsg }
-		]);
+		], model);
 
 		const content = completion.choices[0]?.message?.content || '';
 		const parsed = parseLLMResponse(content);
@@ -392,10 +491,14 @@ export interface RevisionResult {
 export async function runCritiqueRound(
 	userPrompt: string,
 	currentResponses: LLMRawResponse[],
+	participants: ModelConfig[],
 	onProgress?: (modelId: string, result: CritiqueResult) => void
 ): Promise<CritiqueResult[]> {
+	// Resolve against the actual participants, not the built-in catalogue: GUI-curated
+	// models are absent from LLM_MODELS and would otherwise be dropped from every
+	// round after the first, silently shrinking the quorum.
 	const modelsToUse = currentResponses.map(
-		(r) => LLM_MODELS.find((m) => m.id === r.modelId)
+		(r) => participants.find((m) => m.id === r.modelId) ?? LLM_MODELS.find((m) => m.id === r.modelId)
 	).filter((m): m is ModelConfig => m !== undefined);
 
 	const promises = modelsToUse.map(async (model) => {
@@ -430,10 +533,12 @@ export async function runRevisionRound(
 	currentResponses: LLMRawResponse[],
 	allCritiques: CritiqueResult[],
 	middleGrounds: string[],
+	participants: ModelConfig[],
 	onProgress?: (modelId: string, result: RevisionResult) => void
 ): Promise<RevisionResult[]> {
+	// Same reason as runCritiqueRound: participants first, catalogue only as a fallback.
 	const modelsToUse = currentResponses.map(
-		(r) => LLM_MODELS.find((m) => m.id === r.modelId)
+		(r) => participants.find((m) => m.id === r.modelId) ?? LLM_MODELS.find((m) => m.id === r.modelId)
 	).filter((m): m is ModelConfig => m !== undefined);
 
 	const promises = modelsToUse.map(async (model) => {

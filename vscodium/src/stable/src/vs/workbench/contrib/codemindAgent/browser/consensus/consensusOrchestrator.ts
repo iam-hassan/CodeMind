@@ -75,7 +75,7 @@ export class ConsensusOrchestrator {
 		this.broadcastToSession(sessionId, {
 			type: 'pbft_phase_change',
 			sessionId,
-			payload: { phase: 'planning', message: 'Decomposing query and routing to optimal agent subset...' },
+			payload: { phase: 'planning', message: 'Understanding your question and picking the right models…' },
 		});
 
 		// Project-scope gate: the consensus may only run on questions that belong
@@ -88,7 +88,7 @@ export class ConsensusOrchestrator {
 			});
 			const gate = await checkRelevance(selectedModels[0], userPrompt, projectContext);
 			if (!gate.relevant) {
-				const blockMessage = gate.reason || 'This question is not related to the open project.';
+				const blockMessage = gate.reason || 'That question is outside what this project covers, so the models did not run.';
 				console.log(`[Orchestrator] Consensus blocked: ${blockMessage}`);
 				this.broadcastToSession(sessionId, {
 					type: 'consensus_blocked',
@@ -143,6 +143,9 @@ export class ConsensusOrchestrator {
 		for (const a of assignments) {
 			reputationScores[a.model.id] = a.model.baseReputationScore;
 		}
+		// The full participant configs, so later rounds can resolve a response back to the
+		// model that produced it — including GUI models, which are not in LLM_MODELS.
+		const participantModels: ModelConfig[] = assignments.map((a) => a.model);
 
 		let currentResponses: LLMRawResponse[] = [];
 		let finalPBFTState: PBFTState | null = null;
@@ -160,7 +163,7 @@ export class ConsensusOrchestrator {
 			sessionId,
 			payload: {
 				phase: 'pre_prepare',
-				message: `Sending prompt to ${assignments.length} LLM validators (${assignments.map(a => a.strategy).join(', ')})...`,
+				message: `Asking ${assignments.length} models for their independent answers…`,
 			},
 		});
 
@@ -204,6 +207,7 @@ export class ConsensusOrchestrator {
 				critiqueResults = await runCritiqueRound(
 					userPrompt,
 					currentResponses.filter((r) => !droppedAgents.includes(r.modelId)),
+					participantModels,
 					(modelId, result) => {
 						this.broadcastToSession(sessionId, {
 							type: 'critique_result',
@@ -233,6 +237,7 @@ export class ConsensusOrchestrator {
 					currentResponses,
 					critiqueResults,
 					middleGrounds,
+					participantModels,
 					(modelId, result) => {
 						this.broadcastToSession(sessionId, {
 							type: 'model_revision',
@@ -255,7 +260,7 @@ export class ConsensusOrchestrator {
 			this.broadcastToSession(sessionId, {
 				type: 'pbft_phase_change',
 				sessionId,
-				payload: { phase: 'commit', round: roundNum, message: `Round ${roundNum}: Running PBFT consensus validation...` },
+				payload: { phase: 'commit', round: roundNum, message: `Round ${roundNum}: models are converging on a shared answer…` },
 			});
 
 			finalPBFTState = runPBFTPhase(
@@ -341,7 +346,7 @@ export class ConsensusOrchestrator {
 			this.broadcastToSession(sessionId, {
 				type: 'pbft_phase_change',
 				sessionId,
-				payload: { phase: 'forced_consensus', message: 'Activating forced consensus mechanism...' },
+				payload: { phase: 'forced_consensus', message: 'Reconciling the remaining differences into one answer…' },
 			});
 
 			const forcedResult = await runForcedConsensus(
@@ -353,7 +358,8 @@ export class ConsensusOrchestrator {
 				bestRoundTopAnswer,
 				bestRoundNumber,
 				bestRoundScore,
-				bestRoundMiddleGrounds
+				bestRoundMiddleGrounds,
+				participantModels
 			);
 
 			finalAnswer = forcedResult.finalAnswer;

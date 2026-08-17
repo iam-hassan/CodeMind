@@ -69,6 +69,11 @@ interface ICodeMindAgentEngineWorkerService {
 	doctor(): Promise<readonly ICodeMindDoctorCheck[]>;
 	heapSnapshot(): Promise<ICodeMindHeapSnapshotResult>;
 	getFeatureFlags(): Promise<Readonly<Record<string, boolean>>>;
+	// Phase 2 dev mode + telemetry. `setDevMode` is void on the worker, but every
+	// ProxyChannel call is marshalled as a promise, so it is typed as one here.
+	setDevMode(enabled: boolean): Promise<void>;
+	getOrchestrationPerf(): Promise<any>;
+	getTraceHistory(): Promise<any[]>;
 }
 
 /**
@@ -97,12 +102,16 @@ class CodeMindAgentEngineService extends Disposable implements ICodeMindAgentEng
 	declare readonly _serviceBrand: undefined;
 
 	private static readonly API_KEY_SECRET = 'codemind.anthropicApiKey';
+	private static readonly PROVIDER_KEY_PREFIX = 'codemind.providerKey.';
 	private static readonly WORKER_MODULE_ID = 'vs/workbench/contrib/codemindAgent/node/codeMindAgentEngineMain';
 
 	private readonly _workerDisposables = this._register(new DisposableStore());
 	private _worker: ICodeMindEngineWorkerHandle | undefined;
 	private _workerPromise: Promise<ICodeMindEngineWorkerHandle> | undefined;
-	private _apiKey: string | undefined | null = null; // null = not yet loaded
+	/** Per-secret-name key cache. undefined = known-absent, missing = not yet loaded. */
+	private readonly _keyCache = new Map<string, string | undefined>();
+	/** Which provider `getApiKey()`/`apiKeyState` resolve to when no id is given. */
+	private _activeProviderId: string | undefined;
 
 	private readonly _onEvent = this._register(new Emitter<{ queryId: string; event: ICodeMindEngineEvent }>());
 	readonly onEvent: Event<{ queryId: string; event: ICodeMindEngineEvent }> = this._onEvent.event;
@@ -167,25 +176,60 @@ class CodeMindAgentEngineService extends Disposable implements ICodeMindAgentEng
 		return service.diagnose(apiKey);
 	}
 
-	async storeApiKey(key: string): Promise<void> {
-		await this._secretStorageService.set(CodeMindAgentEngineService.API_KEY_SECRET, key);
-		this._apiKey = key;
+	/**
+	 * Secret-storage name for a provider's key. With no id (and no active provider set)
+	 * this is the legacy single-key slot, which keeps pre-provider installs working and
+	 * gives migration something to copy from.
+	 */
+	private _secretName(providerId?: string): string {
+		const id = providerId ?? this._activeProviderId;
+		return id ? CodeMindAgentEngineService.PROVIDER_KEY_PREFIX + id : CodeMindAgentEngineService.API_KEY_SECRET;
 	}
 
-	async deleteApiKey(): Promise<void> {
-		await this._secretStorageService.delete(CodeMindAgentEngineService.API_KEY_SECRET);
-		this._apiKey = undefined;
+	/** The view pane sets which provider is active, so `getApiKey()` resolves its key. */
+	setActiveProviderId(providerId: string | undefined): void {
+		this._activeProviderId = providerId || undefined;
 	}
 
-	async getApiKey(): Promise<string | undefined> {
-		if (this._apiKey === null) {
-			this._apiKey = await this._secretStorageService.get(CodeMindAgentEngineService.API_KEY_SECRET);
+	async migrateLegacyKey(providerId: string): Promise<boolean> {
+		const target = CodeMindAgentEngineService.PROVIDER_KEY_PREFIX + providerId;
+		const already = await this._secretStorageService.get(target);
+		if (already) {
+			this._keyCache.set(target, already);
+			return false;
 		}
-		return this._apiKey ?? undefined;
+		const legacy = await this._secretStorageService.get(CodeMindAgentEngineService.API_KEY_SECRET);
+		if (!legacy) {
+			return false;
+		}
+		await this._secretStorageService.set(target, legacy);
+		this._keyCache.set(target, legacy);
+		return true;
+	}
+
+	async storeApiKey(key: string, providerId?: string): Promise<void> {
+		const name = this._secretName(providerId);
+		await this._secretStorageService.set(name, key);
+		this._keyCache.set(name, key);
+	}
+
+	async deleteApiKey(providerId?: string): Promise<void> {
+		const name = this._secretName(providerId);
+		await this._secretStorageService.delete(name);
+		this._keyCache.set(name, undefined);
+	}
+
+	async getApiKey(providerId?: string): Promise<string | undefined> {
+		const name = this._secretName(providerId);
+		if (!this._keyCache.has(name)) {
+			this._keyCache.set(name, await this._secretStorageService.get(name));
+		}
+		return this._keyCache.get(name) ?? undefined;
 	}
 
 	get apiKeyState(): boolean | undefined {
-		return this._apiKey === null ? undefined : !!this._apiKey;
+		const name = this._secretName();
+		return this._keyCache.has(name) ? !!this._keyCache.get(name) : undefined;
 	}
 
 	async validateApiKey(key?: string, baseUrl?: string): Promise<ICodeMindEndpointCheck> {
@@ -362,6 +406,28 @@ class CodeMindAgentEngineService extends Disposable implements ICodeMindAgentEng
 	async heapSnapshot(): Promise<ICodeMindHeapSnapshotResult> {
 		const { service: worker } = await this._getWorkerService();
 		return worker.heapSnapshot();
+	}
+
+	/**
+	 * Fire-and-forget: the interface is synchronous because callers (the dev-mode toggle)
+	 * have nothing to await, and spinning up the worker just to flip a debug flag must
+	 * never surface an error to them.
+	 */
+	setDevMode(enabled: boolean): void {
+		void this._getWorkerService().then(
+			({ service: worker }) => worker.setDevMode(enabled),
+			() => { /* worker unavailable — dev mode is best-effort */ },
+		);
+	}
+
+	async getOrchestrationPerf(): Promise<any> {
+		const { service: worker } = await this._getWorkerService();
+		return worker.getOrchestrationPerf();
+	}
+
+	async getTraceHistory(): Promise<any[]> {
+		const { service: worker } = await this._getWorkerService();
+		return worker.getTraceHistory();
 	}
 }
 

@@ -225,6 +225,32 @@ export interface ICodeMindModelInfo {
 }
 
 /**
+ * A configured Anthropic-compatible provider: an endpoint the engine can talk to,
+ * plus the models the user curated from it for the composer picker. The API key is
+ * never part of this shape — it lives in secret storage keyed by {@link id}.
+ */
+export interface ICodeMindProvider {
+	/** Stable id; also the secret-storage key suffix and the active-provider selector. */
+	readonly id: string;
+	/** Display name, e.g. "Anthropic". */
+	readonly name: string;
+	/** Base URL; '' means the official API / launch-environment ANTHROPIC_BASE_URL. */
+	readonly baseUrl: string;
+	/** Model ids/aliases the user curated for this provider; these fill the picker. */
+	readonly models: readonly string[];
+	/** Whether this provider can be made active. */
+	readonly enabled: boolean;
+	/**
+	 * Protocol the endpoint speaks, as determined by "Fetch models": `anthropic`
+	 * (`/v1/messages`) or `openai` (`/v1/chat/completions`). Absent on providers saved
+	 * before detection existed, or added by hand — treat that as "not yet known"
+	 * rather than as Anthropic. Only `anthropic` endpoints can serve a turn today;
+	 * the engine has no OpenAI translation layer.
+	 */
+	readonly wire?: 'anthropic' | 'openai';
+}
+
+/**
  * What a key/endpoint check found out.
  *
  * A custom endpoint can fail in ways a plain boolean cannot express — wrong host,
@@ -469,7 +495,24 @@ export type ICodeMindEngineEvent =
 	// is now a summary. The panel needs it to stop showing stale context pressure
 	// and to know it must not compact again itself.
 	| { kind: 'compact_boundary'; trigger?: string; preTokens?: number }
-	| { kind: 'result'; text: string; isError: boolean; usage?: ICodeMindEngineUsage; totalCostUsd?: number; durationMs?: number; sessionId?: string; contextTokens?: number };
+	| { kind: 'result'; text: string; isError: boolean; usage?: ICodeMindEngineUsage; totalCostUsd?: number; durationMs?: number; sessionId?: string; contextTokens?: number }
+
+	// Phase 2 Orchestration events
+	| {
+		kind: 'orchestration_progress';
+		queryId: string;
+		phase: string;
+		status: 'running' | 'complete' | 'failed' | 'cache_hit' | 'timeout';
+		toolId?: string;
+		intent?: string;
+		durationMs?: number;
+		message?: string;
+	}
+	| {
+		kind: 'orchestration_trace';
+		queryId: string;
+		trace: unknown; // JSON-safe OrchestrationTrace object
+	};
 
 /** A query stream is identified by an id so events can be correlated. */
 export interface ICodeMindEngineQueryStart {
@@ -488,14 +531,34 @@ export interface ICodeMindAgentEngineService {
 	/** Resolves to a human-readable error string, or undefined if the engine is usable. */
 	diagnose(): Promise<string | undefined>;
 
-	/** Persist the Anthropic API key into secret storage. */
-	storeApiKey(key: string): Promise<void>;
+	/**
+	 * Persist a provider's API key into secret storage. With no `providerId` the
+	 * active provider's key is written (falling back to the legacy single-key slot).
+	 */
+	storeApiKey(key: string, providerId?: string): Promise<void>;
 
-	/** Remove the stored Anthropic API key. */
-	deleteApiKey(): Promise<void>;
+	/** Remove a provider's stored API key (active provider when `providerId` is omitted). */
+	deleteApiKey(providerId?: string): Promise<void>;
 
-	/** Load the stored API key (if any). */
-	getApiKey(): Promise<string | undefined>;
+	/** Load a provider's stored API key, if any (active provider when omitted). */
+	getApiKey(providerId?: string): Promise<string | undefined>;
+
+	// Phase 2 Dev Mode + Telemetry (B.3)
+	setDevMode(enabled: boolean): void;
+	getOrchestrationPerf(): Promise<any>;
+	getTraceHistory(): Promise<any[]>;
+
+	/**
+	 * Tell the service which provider is active, so `getApiKey()`/`apiKeyState` with no
+	 * id resolve that provider's key. Set by the view pane from configuration.
+	 */
+	setActiveProviderId(providerId: string | undefined): void;
+
+	/**
+	 * One-time migration: copy the legacy single key into `providerId`'s slot if that
+	 * slot is empty. Returns true when a copy happened. Safe to call repeatedly.
+	 */
+	migrateLegacyKey(providerId: string): Promise<boolean>;
 
 	/**
 	 * Whether a key is in hand, readable synchronously — `undefined` until the first

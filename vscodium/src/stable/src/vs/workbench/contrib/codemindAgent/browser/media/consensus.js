@@ -12,6 +12,19 @@
 		hallucinations: []
 	};
 
+	/**
+	 * Model labels can contain a provider name the user typed themselves, so every
+	 * interpolation into markup goes through this first.
+	 */
+	function escapeHtml(value) {
+		return String(value === undefined || value === null ? '' : value)
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#39;');
+	}
+
 	const els = {
 		promptInput: document.getElementById('promptInput'),
 		submitBtn: document.getElementById('submitBtn'),
@@ -36,13 +49,13 @@
 		const html = `
 			<div class="custom-dropdown">
 				<button class="dropdown-btn" id="dropdownBtn">
-					Select Models... <span class="arrow">▼</span>
+					Select models… <span class="arrow">▼</span>
 				</button>
 				<div class="dropdown-content hidden" id="dropdownContent">
 					${models.map(m => `
-						<label class="model-checkbox-label" title="${m.specialty}">
-							<input type="checkbox" value="${m.id}" checked>
-							${m.displayName}
+						<label class="model-checkbox-label" title="${escapeHtml(m.specialty)}">
+							<input type="checkbox" value="${escapeHtml(m.id)}" checked>
+							${escapeHtml(m.displayName)}
 						</label>
 					`).join('')}
 				</div>
@@ -87,7 +100,7 @@
 	}
 
 	function showModelLoading() {
-		els.modelCheckboxes.innerHTML = '<div class="loading-models">Loading free models from OpenRouter...</div>';
+		els.modelCheckboxes.innerHTML = '<div class="loading-models">Loading available models…</div>';
 	}
 
 	function validateSelection() {
@@ -114,9 +127,24 @@
 			els.modelSelectionError.classList.add('hidden');
 		} else {
 			els.submitBtn.disabled = true;
-			els.modelSelectionError.textContent = "Please select exactly 3, 5, or 7 models.";
+			els.modelSelectionError.textContent = "Please select 3, 5, or 7 models.";
 			els.modelSelectionError.classList.remove('hidden');
 		}
+	}
+
+	// The button holds a .btn-label span; set text through it so the markup survives.
+	function setButtonLabel(text) {
+		const label = els.submitBtn.querySelector('.btn-label');
+		if (label) { label.textContent = text; } else { els.submitBtn.textContent = text; }
+	}
+
+	// Reflect a run's phase on the status banner (dot colour + heading + message).
+	function setStatus(heading, message, tone) {
+		els.currentPhase.textContent = heading;
+		els.phaseMessage.textContent = message;
+		els.statusBanner.classList.remove('is-done', 'is-error');
+		if (tone === 'done') { els.statusBanner.classList.add('is-done'); }
+		else if (tone === 'error') { els.statusBanner.classList.add('is-error'); }
 	}
 
 	els.promptInput.addEventListener('input', validateSelection);
@@ -130,8 +158,9 @@
 		if (!prompt) return;
 
 		els.submitBtn.disabled = true;
-		els.submitBtn.textContent = 'Running...';
+		setButtonLabel('Deliberating…');
 		els.statusBanner.classList.remove('hidden');
+		setStatus('Starting', 'Gathering independent answers from each model…', 'active');
 		els.mainContent.classList.remove('hidden');
 		els.finalResult.classList.add('hidden');
 		els.modelGrid.innerHTML = '';
@@ -191,7 +220,7 @@
 		const resp = state.responses.get(modelId);
 		card.querySelector('.card-title').textContent = resp.displayName || modelId;
 		card.querySelector('.card-confidence').textContent = resp.confidence ? `${(resp.confidence * 100).toFixed(0)}%` : '';
-		card.querySelector('.card-answer').textContent = resp.answer || 'Thinking...';
+		card.querySelector('.card-answer').textContent = resp.answer || 'Thinking…';
 		card.querySelector('.card-reasoning').textContent = resp.reasoning || '';
 		
 		if (state.faultyModels.includes(modelId) || state.hallucinations.some(h => h.modelId === modelId)) {
@@ -205,8 +234,7 @@
 		const message = event.data;
 		switch (message.type) {
 			case 'pbft_phase_change':
-				els.currentPhase.textContent = `Phase: ${message.payload.phase.toUpperCase()}`;
-				els.phaseMessage.textContent = message.payload.message;
+				setStatus(prettyPhase(message.payload.phase), message.payload.message, 'active');
 				appendEvent(message.payload.message);
 				break;
 
@@ -223,7 +251,7 @@
 			case 'hallucination_detected':
 				{
 					state.hallucinations.push(message.payload);
-					appendEvent(`[${message.payload.modelId}] Hallucination Detected: ${message.payload.details}`, true);
+					appendEvent(`[${message.payload.modelId}] Flagged for review: ${message.payload.details}`, true);
 					renderCard(message.payload.modelId);
 				}
 				break;
@@ -234,7 +262,7 @@
 					for (const id of state.responses.keys()) {
 						renderCard(id);
 					}
-					appendEvent(`Round ${message.payload.round} Complete. Score: ${(message.payload.consensusScore * 100).toFixed(1)}%`);
+					appendEvent(`Round ${message.payload.round} complete. Agreement ${(message.payload.consensusScore * 100).toFixed(0)}%.`);
 				}
 				break;
 
@@ -267,44 +295,64 @@
 
 			case 'consensus_reached':
 				{
-					els.currentPhase.textContent = 'CONSENSUS REACHED';
-					els.phaseMessage.textContent = `Final Score: ${(message.payload.consensusScore * 100).toFixed(1)}%`;
+					setStatus('Consensus reached', `The models agreed at ${(message.payload.consensusScore * 100).toFixed(0)}% confidence.`, 'done');
 					els.submitBtn.disabled = false;
-					els.submitBtn.textContent = 'Start Consensus';
-					
+					setButtonLabel('Start deliberation');
+
 					els.finalResult.classList.remove('hidden');
 					// Render Answer and Reasoning
 					let text = message.payload.finalAnswer || '';
 					let reason = message.payload.finalReasoning || '';
 					text = text.replace(/\n/g, '<br/>');
 					reason = reason.replace(/\n/g, '<br/>');
-					
+
 					els.finalAnswer.innerHTML = `
-						<div style="margin-bottom: 10px;">
-							<h4 style="margin: 0 0 5px 0; color: var(--vscode-terminal-ansiGreen);">Final Answer</h4>
-							<div>${text}</div>
+						<div class="fa-section">
+							<h4 class="fa-label">Answer</h4>
+							<div class="fa-body">${text}</div>
 						</div>
-						<div style="padding-top: 10px; border-top: 1px solid var(--cm-border);">
-							<h4 style="margin: 0 0 5px 0; color: var(--vscode-descriptionForeground);">Consensus Reasoning</h4>
-							<div style="font-size: 0.9em; opacity: 0.9;">${reason}</div>
+						<div class="fa-section fa-reasoning">
+							<h4 class="fa-label">How they agreed</h4>
+							<div class="fa-body">${reason}</div>
 						</div>
 					`;
-					
-					appendEvent('Consensus process completed successfully.');
+
+					appendEvent('Deliberation complete. An agreed answer is ready.');
 				}
 				break;
 
 			case 'consensus_blocked':
-				els.currentPhase.textContent = 'BLOCKED';
-				els.phaseMessage.textContent = message.payload.message || 'This question is not related to the open project.';
-				els.submitBtn.disabled = false;
-				els.submitBtn.textContent = 'Start Consensus';
-				appendEvent('Blocked: ' + (message.payload.message || 'not related to the open project'), true);
+			case 'consensus_blocked':
+				{
+					const why = (message.payload && message.payload.message)
+						? message.payload.message
+						: 'That question is outside what this project covers, so the models did not run.';
+					setStatus('Not started', why, 'error');
+					els.submitBtn.disabled = false;
+					setButtonLabel('Start deliberation');
+					// No models ran, so hide the empty "Thinking…" cards and show a clean notice.
+					els.mainContent.classList.add('hidden');
+					els.finalResult.classList.remove('hidden');
+					els.finalAnswer.innerHTML = `
+						<div class="fa-notice">
+							<div class="fa-notice-icon" aria-hidden="true">
+								<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5h.01"/></svg>
+							</div>
+							<div class="fa-notice-text">
+								<h4>Kept to this project</h4>
+								<p></p>
+							</div>
+						</div>
+					`;
+					const noticeText = els.finalAnswer.querySelector('.fa-notice-text p');
+					if (noticeText) { noticeText.textContent = why; }
+				}
 				break;
 
 			case 'error':
+				setStatus('Something went wrong', String(message.payload || 'Unexpected error'), 'error');
 				els.submitBtn.disabled = false;
-				els.submitBtn.textContent = 'Start Consensus';
+				setButtonLabel('Start deliberation');
 				appendEvent(`Error: ${message.payload}`, true);
 				break;
 
@@ -313,4 +361,22 @@
 				break;
 		}
 	});
+
+	// Turn an internal phase token into readable text; unknown tokens are title-cased.
+	function prettyPhase(phase) {
+		const map = {
+			'planning': 'Planning',
+			'relevance_check': 'Checking relevance',
+			'pre_prepare': 'Collecting answers',
+			'pre-prepare': 'Collecting answers',
+			'prepare': 'Cross-checking',
+			'commit': 'Converging',
+			'reply': 'Finalizing',
+			'forced_consensus': 'Reconciling',
+			'critique': 'Critiquing'
+		};
+		const key = String(phase || '').toLowerCase();
+		if (map[key]) { return map[key]; }
+		return key ? key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' ') : 'Working';
+	}
 })();

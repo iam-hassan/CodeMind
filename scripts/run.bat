@@ -51,7 +51,7 @@ set VSCODE_CLI=1
 rem cwd has to be the checkout: the workbench loads out\ relative to it, and the
 rem leading "." tells Electron which app to run -- the folder follows it.
 pushd "%VSCODE%"
-"%BIN%" . "%FOLDER%"
+"%BIN%" .
 set "CODE=%ERRORLEVEL%"
 popd
 if %CODE% neq 0 pause

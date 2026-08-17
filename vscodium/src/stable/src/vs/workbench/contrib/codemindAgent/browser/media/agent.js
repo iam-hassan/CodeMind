@@ -31,6 +31,103 @@ const expandedThinking = new Set(); // message ids whose reasoning the reader ex
 // afterwards, so closing one stays closed instead of springing back open on the next tick.
 const seenTools = new Set();
 
+// B.4 – Dev mode toggle state
+let devModeEnabled = false;
+const BUG_ICON = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="8" cy="9" r="4" stroke="currentColor" stroke-width="1.5"/>
+  <circle cx="5.5" cy="4.5" r="1.5" stroke="currentColor" stroke-width="1.2"/>
+  <circle cx="10.5" cy="4.5" r="1.5" stroke="currentColor" stroke-width="1.2"/>
+  <line x1="5.5" y1="6" x2="6.5" y2="7.5" stroke="currentColor" stroke-width="1.2"/>
+  <line x1="10.5" y1="6" x2="9.5" y2="7.5" stroke="currentColor" stroke-width="1.2"/>
+  <line x1="4" y1="9" x2="2" y2="9" stroke="currentColor" stroke-width="1.2"/>
+  <line x1="12" y1="9" x2="14" y2="9" stroke="currentColor" stroke-width="1.2"/>
+  <line x1="4.5" y1="11.5" x2="2.5" y2="13" stroke="currentColor" stroke-width="1.2"/>
+  <line x1="11.5" y1="11.5" x2="13.5" y2="13" stroke="currentColor" stroke-width="1.2"/>
+</svg>`;
+
+// B.5 – Trace card rendering
+function renderTraceCard(trace, queryId) {
+    const bubble = document.querySelector(`[data-query-id="${queryId}"]`);
+    if (!bubble) return;
+
+    const card = document.createElement('div');
+    card.className = 'cm-trace-card';
+    card.dataset.queryId = queryId;
+
+    const totalMs = trace.totalDurationMs || 0;
+    let borderColor = 'var(--vscode-testing-iconPassed)';
+    if (totalMs >= 1500 || trace.timedOut) borderColor = 'var(--vscode-errorForeground)';
+    else if (totalMs >= 500) borderColor = 'var(--vscode-editorWarning-foreground)';
+    card.style.borderLeftColor = borderColor;
+
+    const dots = (trace.layers || []).map((l, i) => {
+        let color = 'var(--vscode-testing-iconPassed)';
+        if (l.status === 'timeout' || l.status === 'error') color = 'var(--vscode-errorForeground)';
+        else if (l.durationMs >= 200) color = 'var(--vscode-editorWarning-foreground)';
+        else if (l.status === 'skipped') color = 'var(--vscode-descriptionForeground)';
+        return `<span class="cm-layer-dot" style="background:${color}" title="${l.layerName}: ${l.status} ${l.durationMs}ms"></span>`;
+    }).join('');
+
+    const reduction = trace.layers?.find(l => l.layerName === 'Headroom Compression');
+    const tokenInfo = reduction
+        ? `${reduction.inputTokenEstimate}→${reduction.outputTokenEstimate} (${Math.round((1 - reduction.compressionRatio) * 100)}%)`
+        : `${trace.layers?.[trace.layers.length - 1]?.outputTokenEstimate || 0} tokens`;
+
+    card.innerHTML = `
+        <div class="cm-trace-summary">
+            <span style="font-size:10px;">${BUG_ICON}</span>
+            <span>Orchestration · ${totalMs}ms · ${trace.intent || ''}</span>
+            <span style="display:flex;gap:2px;margin:0 8px;">${dots}</span>
+            <span style="opacity:0.6;">${tokenInfo}</span>
+        </div>
+        <div class="cm-trace-detail" hidden></div>
+    `;
+
+    const detail = card.querySelector('.cm-trace-detail');
+    (trace.layers || []).forEach((layer, idx) => {
+        const section = document.createElement('div');
+        section.className = 'cm-trace-layer';
+        section.innerHTML = `
+            <div class="cm-trace-layer-header">
+                <span class="cm-trace-layer-index">${idx + 1}</span>
+                <span class="cm-trace-layer-name">${layer.layerName}</span>
+                <span class="cm-trace-layer-status">${layer.status === 'pass' ? '✓' : layer.status === 'timeout' ? '⏱' : layer.status === 'error' ? '✗' : '—'} ${layer.durationMs}ms</span>
+            </div>
+            <div class="cm-trace-io">
+                <div class="cm-trace-io-label">INPUT</div>
+                <pre class="cm-trace-io-content">${JSON.stringify(layer.input || {}, null, 2).slice(0, 400)}</pre>
+                <div class="cm-trace-io-label">OUTPUT</div>
+                <pre class="cm-trace-io-content">${JSON.stringify(layer.output || {}, null, 2).slice(0, 400)}</pre>
+            </div>
+        `;
+        section.querySelector('.cm-trace-layer-header').addEventListener('click', () => {
+            const pre = section.querySelectorAll('.cm-trace-io-content');
+            pre.forEach(p => p.classList.toggle('expanded'));
+        });
+        detail.appendChild(section);
+    });
+
+    // Copy trace button
+    const copyBtn = document.createElement('button');
+    copyBtn.textContent = '⎘';
+    copyBtn.style.cssText = 'position:absolute;top:4px;right:8px;font-size:10px;opacity:0.6;background:none;border:none;cursor:pointer;';
+    copyBtn.onclick = (e) => {
+        e.stopImmediatePropagation();
+        navigator.clipboard.writeText(JSON.stringify(trace, null, 2));
+        copyBtn.textContent = '✓';
+        setTimeout(() => { copyBtn.textContent = '⎘'; }, 1200);
+    };
+    card.style.position = 'relative';
+    card.appendChild(copyBtn);
+
+    // Toggle expand
+    card.querySelector('.cm-trace-summary').addEventListener('click', () => {
+        detail.hidden = !detail.hidden;
+    });
+
+    bubble.parentNode.insertBefore(card, bubble);
+}
+
 /**
  * Section 6.1: which message ids have not yet played their entry animation. Only ids that
  * arrived in this session go in — a transcript restored from history is drawn as something
@@ -143,6 +240,8 @@ const slashMenu = document.getElementById('slashMenu');
 const mentionMenu = document.getElementById('mentionMenu');
 const sessionTokensEl = document.getElementById('sessionTokens');
 const settingsBtn = document.getElementById('settingsBtn');
+const historyBtn = document.getElementById('historyBtn');
+const devModeBtn = document.getElementById('devModeBtn');
 const micBtn = document.getElementById('micBtn');
 const sessionNameEl = document.getElementById('sessionName');
 const sessionTagsEl = document.getElementById('sessionTags');
@@ -291,9 +390,72 @@ function wirePanelChrome() {
 			if (window.CodeMindPanels) { window.CodeMindPanels.openPanel('settings'); }
 		});
 	}
+	if (historyBtn) {
+		historyBtn.addEventListener('click', () => {
+			if (window.CodeMindPanels) { window.CodeMindPanels.openPanel('history'); }
+		});
+	}
 	if (micBtn) {
 		micBtn.addEventListener('click', toggleVoiceInput);
 	}
+
+	// B.4 – Dev mode toggle button (bug icon)
+	if (devModeBtn) {
+		const saved = window.localStorage?.getItem('codemind.devMode');
+		if (saved === 'true') {
+			devModeEnabled = true;
+			devModeBtn.style.color = 'var(--vscode-editorWarning-foreground)';
+			showDevModeBanner();
+		}
+
+		devModeBtn.addEventListener('click', () => {
+			devModeEnabled = !devModeEnabled;
+			devModeBtn.style.color = devModeEnabled
+				? 'var(--vscode-editorWarning-foreground)'
+				: 'var(--vscode-descriptionForeground)';
+
+			vscode.postMessage({ type: 'set_dev_mode', enabled: devModeEnabled });
+			window.localStorage?.setItem('codemind.devMode', String(devModeEnabled));
+
+			showToast(devModeEnabled
+				? 'Dev mode on — orchestration traces active'
+				: 'Dev mode off');
+
+			if (devModeEnabled) showDevModeBanner();
+			else hideDevModeBanner();
+		});
+	}
+}
+
+function showDevModeBanner() {
+	if (document.getElementById('devModeBanner')) return;
+	const banner = document.createElement('div');
+	banner.id = 'devModeBanner';
+	banner.style.cssText = 'background:var(--vscode-editorWarning-background);opacity:0.2;border-left:3px solid var(--vscode-editorWarning-foreground);padding:6px 12px;font-size:10px;display:flex;align-items:center;justify-content:space-between;';
+	banner.innerHTML = `
+		<span>⚠ Dev mode active — traces are logged</span>
+		<button id="devModeDismiss" style="background:none;border:none;color:var(--vscode-editorWarning-foreground);cursor:pointer;font-size:12px;">×</button>
+	`;
+	document.body.prepend(banner);
+	document.getElementById('devModeDismiss')?.addEventListener('click', () => {
+		devModeEnabled = false;
+		devModeBtn.style.color = 'var(--vscode-descriptionForeground)';
+		vscode.postMessage({ type: 'set_dev_mode', enabled: false });
+		window.localStorage?.setItem('codemind.devMode', 'false');
+		banner.remove();
+	});
+}
+
+function hideDevModeBanner() {
+	document.getElementById('devModeBanner')?.remove();
+}
+
+function showToast(text) {
+	const t = document.createElement('div');
+	t.style.cssText = 'position:fixed;bottom:12px;left:50%;transform:translateX(-50%);background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-input-border);padding:4px 12px;border-radius:4px;font-size:11px;opacity:0.95;z-index:10000;';
+	t.textContent = text;
+	document.body.appendChild(t);
+	setTimeout(() => t.remove(), 2000);
 }
 
 // ---------- Composer controls (Section 2) ----------
@@ -318,28 +480,27 @@ function wireComposerControls() {
 		modePill.addEventListener('click', (e) => { e.stopPropagation(); toggleModeMenu(); });
 		applyModeSelection(currentMode);
 	}
-	const consensusWrap = document.getElementById('consensusPillWrap');
 	const consensusCheckbox = document.getElementById('consensusPillCheckbox');
-	const consensusBg = document.getElementById('consensusPillSliderBg');
-	const consensusKnob = document.getElementById('consensusPillSliderKnob');
 	if (consensusCheckbox) {
-		consensusCheckbox.addEventListener('change', (e) => {
-			if (consensusCheckbox.checked) {
-				consensusKnob.style.left = '14px';
-				consensusBg.style.backgroundColor = 'var(--cm-accent)';
-				consensusKnob.style.backgroundColor = 'var(--cm-bg)';
-				vscode.postMessage({ type: 'dispatch', command: 'workbench.action.openCodeMindConsensus' });
-				setTimeout(() => {
-					consensusCheckbox.checked = false;
-					consensusKnob.style.left = '2px';
-					consensusBg.style.backgroundColor = 'transparent';
-					consensusKnob.style.backgroundColor = 'var(--cm-accent)';
-				}, 1000);
-			} else {
-				consensusKnob.style.left = '2px';
-				consensusBg.style.backgroundColor = 'transparent';
-				consensusKnob.style.backgroundColor = 'var(--cm-accent)';
+		consensusCheckbox.addEventListener('change', () => {
+			// The switch is a real toggle bound to the Multi-Agent Consensus window:
+			// ON opens (and stays lit), OFF closes it. Once a run is in flight the pane
+			// locks the switch (disabled), so this handler only ever fires before a run
+			// starts or after it ends.
+			if (consensusRunning) {
+				// Locked: revert any stray change and do nothing.
+				paintConsensusPill();
+				return;
 			}
+			if (consensusCheckbox.checked) {
+				consensusOpen = true;
+				vscode.postMessage({ type: 'openConsensus' });
+			} else {
+				consensusOpen = false;
+				vscode.postMessage({ type: 'closeConsensus' });
+			}
+			// Paint optimistically; the pane's consensusState echo confirms or corrects it.
+			paintConsensusPill();
 		});
 	}
 	// Clicking anywhere else closes either composer menu without changing anything (Section 2.2).
@@ -445,13 +606,14 @@ function renderModelMenu() {
 	const panels = window.CodeMindPanels;
 	const options = (panels && panels.modelOptions) ? panels.modelOptions() : [];
 	modelMenu.innerHTML = options.map(o => `
-		<div class="model-menu-item" role="option" data-value="${escapeAttr(o.value)}" aria-selected="${o.value === currentModel ? 'true' : 'false'}" title="${escapeAttr(o.label || o.value)}">
+		<div class="model-menu-item" role="option" data-value="${escapeAttr(o.value)}" data-provider="${escapeAttr(o.providerId || '')}" aria-selected="${o.value === currentModel ? 'true' : 'false'}" title="${escapeAttr((o.providerName ? o.providerName + ' — ' : '') + (o.label || o.value))}">
 			<span class="model-menu-name">${escapeHtml(modelDisplayName(o.value))}</span>
+			${o.providerName ? `<span class="model-menu-provider">${escapeHtml(o.providerName)}</span>` : ''}
 			<span class="model-menu-check" aria-hidden="true">${o.value === currentModel ? CHECK_SVG : ''}</span>
 		</div>
 	`).join('');
 	modelMenu.querySelectorAll('.model-menu-item').forEach(row => {
-		row.addEventListener('click', () => chooseModel(row.dataset.value));
+		row.addEventListener('click', () => chooseModel(row.dataset.value, row.dataset.provider));
 	});
 	// Open on the current choice rather than at the top of a list it may be far down.
 	// Only the menu's own scroll is touched: scrollIntoView would be free to move the
@@ -460,12 +622,14 @@ function renderModelMenu() {
 	if (selected) { modelMenu.scrollTop = Math.max(0, selected.offsetTop - modelMenu.clientHeight / 2); }
 }
 
-function chooseModel(value) {
+function chooseModel(value, providerId) {
 	closeModelMenu();
 	if (!value || value === currentModel) { return; }
 	const panels = window.CodeMindPanels;
 	if (panels && panels.selectModel) {
-		panels.selectModel(value);
+		// The provider rides along so the endpoint + key + model switch together for a
+		// model that belongs to a provider other than the active one.
+		panels.selectModel(value, providerId || undefined);
 	} else {
 		vscode.postMessage({ type: 'runCommand', payload: { name: 'model', args: value } });
 	}
@@ -551,12 +715,48 @@ function chooseMode(mode) {
 }
 
 /** Paint the pill. An unknown mode keeps its own name rather than showing as nothing. */
+// Multi-Agent Consensus toggle state, mirrored from the pane's `consensusState`.
+// `consensusOpen` = the window is open (switch lit); `consensusRunning` = a run is in
+// flight, which locks the switch so the window can't be closed from the composer.
+let consensusOpen = false;
+let consensusRunning = false;
+
+/** Paint the consensus switch to match {consensusOpen, consensusRunning}. */
+function paintConsensusPill() {
+	const checkbox = document.getElementById('consensusPillCheckbox');
+	const bg = document.getElementById('consensusPillSliderBg');
+	const knob = document.getElementById('consensusPillSliderKnob');
+	const label = document.querySelector('#consensusPillWrap label');
+	if (!checkbox || !bg || !knob) { return; }
+	checkbox.checked = consensusOpen;
+	checkbox.disabled = consensusRunning;
+	if (consensusOpen) {
+		knob.style.left = '14px';
+		bg.style.backgroundColor = 'var(--cm-accent)';
+		knob.style.backgroundColor = 'var(--cm-bg)';
+	} else {
+		knob.style.left = '2px';
+		bg.style.backgroundColor = 'transparent';
+		knob.style.backgroundColor = 'var(--cm-accent)';
+	}
+	// Running reads as locked: dim it and switch the cursor to not-allowed.
+	const wrap = document.getElementById('consensusPillWrap');
+	if (wrap) { wrap.style.opacity = consensusRunning ? '0.6' : '1'; }
+	if (label) {
+		label.style.cursor = consensusRunning ? 'not-allowed' : 'pointer';
+		label.title = consensusRunning
+			? 'Consensus is running — close it from the window when it finishes'
+			: (consensusOpen ? 'Multi-Agent Consensus — on (click to close)' : 'Multi-Agent Consensus — off (click to open)');
+	}
+}
+
 function applyModeSelection(mode) {
 	currentMode = mode;
 	const consensusWrap = document.getElementById('consensusPillWrap');
 	if (consensusWrap) {
 		consensusWrap.style.display = mode === 'plan' ? 'flex' : 'none';
 	}
+	paintConsensusPill();
 	if (!modePill) { return; }
 	modePill.dataset.mode = mode;
 	modePill.textContent = modeLabel(mode);
@@ -800,13 +1000,31 @@ function handleExtensionMessage(event) {
 				window.CodeMindPanels.applyEndpointModels(msg.payload || {});
 			}
 			break;
+		case 'providerModels':
+			if (window.CodeMindPanels && window.CodeMindPanels.applyProviderModels) {
+				window.CodeMindPanels.applyProviderModels(msg.payload || {});
+			}
+			break;
+		case 'providerDetection':
+			if (window.CodeMindPanels && window.CodeMindPanels.handleProviderDetection) {
+				window.CodeMindPanels.handleProviderDetection(msg.payload || {});
+			}
+			break;
+		case 'historyData':
+			if (window.CodeMindPanels && window.CodeMindPanels.renderHistory) {
+				window.CodeMindPanels.renderHistory(msg.payload && msg.payload.entries || [], msg.payload && msg.payload.allProjects);
+			}
+			break;
 		case 'mcpData':
 			if (window.CodeMindPanels && window.CodeMindPanels.renderMcp) {
 				window.CodeMindPanels.renderMcp(msg.payload || []);
 			}
 			break;
 		case 'mentionItems':
-			showMentionMenu((msg.payload && msg.payload.items) || [], msg.payload && msg.payload.query);
+			showMentionMenu((msg.payload && msg.payload.items) || [], msg.payload && msg.payload.query, msg.payload && msg.payload.requestId);
+			break;
+		case 'imagePreview':
+			applyImagePreview(msg.payload.path, msg.payload.dataUrl);
 			break;
 		case 'commitReview':
 			if (window.CodeMindPanels && window.CodeMindPanels.showCommitReview) {
@@ -828,6 +1046,11 @@ function handleExtensionMessage(event) {
 			break;
 		case 'planMode':
 			setPlanMode(!!msg.payload);
+			break;
+		case 'consensusState':
+			consensusOpen = !!(msg.payload && msg.payload.open);
+			consensusRunning = !!(msg.payload && msg.payload.running);
+			paintConsensusPill();
 			break;
 		case 'attachPaths':
 			attachFiles(msg.payload || []);
@@ -858,6 +1081,11 @@ function handleExtensionMessage(event) {
 		case 'focusInput':
 			inputEl.focus();
 			break;
+			case 'orchestrationTrace':
+				if (devModeEnabled) {
+					renderTraceCard(msg.payload.trace, msg.payload.queryId || msg.payload.trace?.queryId);
+				}
+				break;
 	}
 }
 
@@ -1758,13 +1986,14 @@ function handleHistorySearchKey(e) {
 
 // ---------- File / image attachments (Step 8 / Section 3.4) ----------
 const attachments = []; // { kind: 'file'|'image', name, path?, dataUrl? }
+const imagePreviewCache = new Map(); // path -> dataUrl
 
 function renderAttachments() {
 	if (!attachmentsHost) { return; }
 	if (!attachments.length) { attachmentsHost.innerHTML = ''; attachmentsHost.classList.add('hidden'); return; }
 	attachmentsHost.classList.remove('hidden');
 	attachmentsHost.innerHTML = attachments.map((a, i) => `
-		<span class="attachment-chip" data-idx="${i}">
+		<span class="attachment-chip ${a.kind === 'image' ? 'attachment-chip-image' : ''}" data-idx="${i}" data-path="${escapeAttr(a.path || '')}" data-data-url="${escapeAttr(a.dataUrl || '')}">
 			<span class="attachment-kind">${a.kind === 'image' ? '🖼' : '📄'}</span>
 			<span class="attachment-name">${escapeHtml(a.name)}</span>
 			<button class="attachment-remove" data-idx="${i}" aria-label="Remove attachment">×</button>
@@ -1774,6 +2003,51 @@ function renderAttachments() {
 		attachments.splice(Number(e.currentTarget.dataset.idx), 1);
 		renderAttachments();
 	}));
+	// Wire hover previews for image attachments
+	attachmentsHost.querySelectorAll('.attachment-chip-image').forEach(chip => {
+		chip.addEventListener('mouseenter', () => requestImagePreview(chip));
+	});
+}
+
+function requestImagePreview(chip) {
+	const path = chip.dataset.path;
+	const dataUrl = chip.dataset.dataUrl;
+	if (dataUrl) {
+		showImagePreview(chip, dataUrl);
+	} else if (path) {
+		if (imagePreviewCache.has(path)) {
+			showImagePreview(chip, imagePreviewCache.get(path));
+		} else {
+			vscode.postMessage({ type: 'resolveImagePreview', payload: { path } });
+		}
+	}
+}
+
+function applyImagePreview(path, dataUrl) {
+	imagePreviewCache.set(path, dataUrl);
+	// Find the chip currently hovered (if any) and show the preview
+	const chip = document.querySelector(`.attachment-chip-image[data-path="${CSS.escape(path)}"]:hover`);
+	if (chip) {
+		showImagePreview(chip, dataUrl);
+	}
+}
+
+function showImagePreview(chip, dataUrl) {
+	// Remove any existing preview
+	document.querySelectorAll('.attachment-preview-popup').forEach(el => el.remove());
+	const popup = document.createElement('div');
+	popup.className = 'attachment-preview-popup';
+	popup.innerHTML = `<img src="${escapeAttr(dataUrl)}" alt="Preview">`;
+	document.body.appendChild(popup);
+	const rect = chip.getBoundingClientRect();
+	popup.style.left = `${rect.left}px`;
+	popup.style.bottom = `${window.innerHeight - rect.top + 8}px`;
+	const removePreview = () => popup.remove();
+	chip.addEventListener('mouseleave', removePreview, { once: true });
+	popup.addEventListener('mouseenter', () => {
+		chip.removeEventListener('mouseleave', removePreview);
+		popup.addEventListener('mouseleave', removePreview, { once: true });
+	});
 }
 
 function attachFiles(paths) {
@@ -2094,13 +2368,16 @@ function syncSlashArgsHint() {
 // ---------- @-mention file autocomplete (Section 3.4) ----------
 // The workbench owns the file index, so typing `@foo` posts a query and the
 // reply arrives as `mentionItems`. `mentionQuery` guards against a stale reply
-// overwriting the menu after the user has typed on.
+// overwriting the menu after the user has typed on. Now debounced (300ms) and
+// cancels stale backend searches via requestId.
 let mentionOpen = false;
 let mentionItems = [];
 let mentionIndex = 0;
 let mentionQuery = null;
 /** Caret offset of the `@` that opened the menu, so accept can splice exactly. */
 let mentionStart = -1;
+let mentionRequestId = 0;
+let mentionDebounceTimer = null;
 
 function updateMentionMenu() {
 	if (!mentionMenu) { return; }
@@ -2112,15 +2389,22 @@ function updateMentionMenu() {
 	if (!match) { closeMentionMenu(); return; }
 	mentionStart = caret - match[2].length - 1;
 	mentionQuery = match[2];
-	vscode.postMessage({ type: 'requestMentionItems', payload: { query: mentionQuery } });
+
+	// Debounce: wait 300ms before posting the request
+	clearTimeout(mentionDebounceTimer);
+	mentionDebounceTimer = setTimeout(() => {
+		const reqId = String(++mentionRequestId);
+		vscode.postMessage({ type: 'requestMentionItems', payload: { query: mentionQuery, requestId: reqId } });
+	}, 300);
 }
 
-function showMentionMenu(items, query) {
+function showMentionMenu(items, query, requestId) {
 	// A reply for a query the user has already moved past is dropped — otherwise the
 	// unfiltered list from `@` can land after the list for `@gulpfile` and the next
 	// Enter accepts a file nobody was looking at.
 	if (mentionQuery === null) { return; }
 	if (query !== undefined && query !== mentionQuery) { return; }
+	if (requestId !== undefined && requestId !== String(mentionRequestId)) { return; }
 	mentionItems = items;
 	if (!mentionItems.length) { closeMentionMenu(); return; }
 	mentionIndex = 0;
@@ -2180,6 +2464,10 @@ function closeMentionMenu() {
 	mentionItems = [];
 	mentionQuery = null;
 	mentionStart = -1;
+	clearTimeout(mentionDebounceTimer);
+	if (String(mentionRequestId)) {
+		vscode.postMessage({ type: 'cancelMentionRequest', payload: { requestId: String(mentionRequestId) } });
+	}
 	if (mentionMenu) { mentionMenu.classList.add('hidden'); mentionMenu.innerHTML = ''; }
 }
 

@@ -9,6 +9,29 @@ export interface ModelConfig {
 	openRouterId: string;
 	specialty: string;
 	baseReputationScore: number;
+	/**
+	 * Set only for models curated in the GUI (`codemind.pickerModels`). When present the
+	 * call routes to this provider's endpoint with its own key instead of OpenRouter.
+	 * These fields never cross to a webview — see `CodeMindConsensusPanel._buildGuiModels`.
+	 */
+	baseUrl?: string;
+	apiKey?: string;
+	/** Request/response shape of the provider: Anthropic Messages vs OpenAI Chat Completions. */
+	wire?: 'anthropic' | 'openai';
+}
+
+/**
+ * The subset of a model that is safe to hand to the consensus webview: identity and
+ * labels only, never `apiKey`/`baseUrl`.
+ */
+export interface PublicModelInfo {
+	id: string;
+	displayName: string;
+	specialty: string;
+}
+
+export function toPublicModelInfo(model: ModelConfig): PublicModelInfo {
+	return { id: model.id, displayName: model.displayName, specialty: model.specialty };
 }
 
 // Hardcoded fallback models (used if API fetch fails)

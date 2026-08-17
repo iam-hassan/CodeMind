@@ -4,9 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { CancellationTokenSource } from '../../../../base/common/cancellation.js';
-import { isCancellationError } from '../../../../base/common/errors.js';
 import { Event } from '../../../../base/common/event.js';
-import { getWindow } from '../../../../base/browser/dom.js';
+import { getWindow, findParentWithClass, addDisposableListener } from '../../../../base/browser/dom.js';
 import { DisposableStore, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { FileAccess } from '../../../../base/common/network.js';
 import { escapeRegExpCharacters } from '../../../../base/common/strings.js';
@@ -26,7 +25,7 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { ColorScheme } from '../../../../platform/theme/common/theme.js';
 import { IWorkbenchColorTheme, IWorkbenchThemeService } from '../../../services/themes/common/workbenchThemeService.js';
 import { asWebviewUri } from '../../webview/common/webview.js';
-import { IWebview, IWebviewService, WebviewInitInfo } from '../../webview/browser/webview.js';
+import { IOverlayWebview, IWebviewService, WebviewInitInfo } from '../../webview/browser/webview.js';
 import { ViewPane, IViewPaneOptions } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
@@ -40,7 +39,7 @@ import { IWorkspaceEditingService } from '../../../services/workspaces/common/wo
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { IQuickInputService, IQuickPickItem } from '../../../../platform/quickinput/common/quickInput.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
-import { VSBuffer } from '../../../../base/common/buffer.js';
+import { VSBuffer, encodeBase64 } from '../../../../base/common/buffer.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
@@ -58,10 +57,12 @@ import {
 	ICodeMindMcpServer,
 	ICodeMindModelInfo,
 	ICodeMindPermissionScope,
+	ICodeMindProvider,
 	ICodeMindSandboxSettings,
 	ICodeMindTurnOverrides,
 } from '../common/codeMindAgentEngineService.js';
 import { commandRegistry, ICodeMindColorTheme, ICodeMindCommandContext, ICodeMindOutputStyle, ICodeMindProjectInsights, ICodeMindSessionSummary, OUTPUT_STYLES, PERMISSION_MODES, runCompaction } from './codeMindCommands.js';
+import { CodeMindConsensusPanel } from './codeMindConsensusPanel.js';
 import {
 	companionHatchPrompt,
 	companionIntroText,
@@ -100,6 +101,28 @@ interface AgentAttachment {
 	name: string;
 	path?: string;
 	dataUrl?: string;
+}
+
+/**
+ * One past session in the Chat History panel. Built from the engine's on-disk
+ * transcripts (`~/.claude/projects/<projectDir>/<id>.jsonl`), so it also sees
+ * sessions started from the CLI.
+ */
+interface ICodeMindHistoryEntry {
+	/** Session id = transcript filename stem; used to resume and to delete. */
+	id: string;
+	/** First user prompt, clipped to one line; '' when none was recorded. */
+	topic: string;
+	/** Transcript mtime in ms — the row's date. */
+	at: number;
+	/** Line count, a rough sense of length. */
+	messages: number;
+	/** The engine's dashed project directory; locates the `.jsonl` for open/delete. */
+	projectDir: string;
+	/** The real folder path read from the transcript; falls back to projectDir for display. */
+	cwd?: string;
+	/** Whether the session belongs to the current workspace (only those can resume). */
+	current: boolean;
 }
 
 /**
@@ -144,6 +167,29 @@ type WebviewInbound =
 	| { type: 'validateApiKey'; payload: string | { key?: string; baseUrl?: string } }
 	/** Ask the endpoint which models it serves (settings panel "Fetch models"). */
 	| { type: 'fetchEndpointModels'; payload?: { key?: string; baseUrl?: string } }
+	/** Provider management (multi-provider settings). */
+	| { type: 'providersUpdate'; payload: ICodeMindProvider[] }
+	| { type: 'setProviderKey'; payload: { providerId: string; key: string } }
+	| { type: 'deleteProviderKey'; payload: { providerId: string } }
+	| { type: 'validateProviderKey'; payload: { providerId?: string; key?: string; baseUrl?: string } }
+	| { type: 'fetchProviderModels'; payload: { providerId: string; key?: string; baseUrl?: string } }
+	/**
+	 * Probe an endpoint the user has typed but not yet saved: work out whether it
+	 * speaks the Anthropic or the OpenAI wire format and list its models in one go.
+	 */
+	| { type: 'detectProvider'; payload: { providerId?: string; baseUrl: string; apiKey: string; requestId?: number } }
+	| { type: 'setActiveProvider'; payload: { providerId: string } }
+	/**
+	 * A composer picker model was chosen. Carries the provider that serves it so the
+	 * pane can switch endpoint + key + model together — a model can belong to a
+	 * provider other than the active one, and running it against the wrong endpoint
+	 * would fail.
+	 */
+	| { type: 'selectPickerModel'; payload: { providerId: string; model: string } }
+	/** Chat history panel: list past sessions, open one back into the chat, delete one. */
+	| { type: 'requestHistory'; payload?: { allProjects?: boolean } }
+	| { type: 'openSession'; payload: { id: string; projectDir: string; current: boolean } }
+	| { type: 'deleteSession'; payload: { id: string; projectDir: string } }
 	| { type: 'clearHistory' }
 	| { type: 'cancel'; payload: { queryId: string } }
 	| { type: 'setPlanMode'; payload: { enabled: boolean } }
@@ -165,6 +211,8 @@ type WebviewInbound =
 	| { type: 'requestMcpServers' }
 	| { type: 'mcpReconnect' }
 	| { type: 'dispatch'; command: string }
+	| { type: 'openConsensus' }
+	| { type: 'closeConsensus' }
 	| { type: 'runCommand'; payload: { name: string; args: string } }
 	| { type: 'requestPanelData'; payload: { panelId: PanelId } }
 	| { type: 'openFile'; payload: { path: string } }
@@ -174,7 +222,9 @@ type WebviewInbound =
 	| { type: 'createSkill'; payload: { scope: MemoryScope; name: string } }
 	| { type: 'updateTaskStatus'; payload: { index: number; status: string } }
 	| { type: 'pickFiles' }
-	| { type: 'requestMentionItems'; payload: { query: string } }
+	| { type: 'requestMentionItems'; payload: { query: string; requestId: string } }
+	| { type: 'cancelMentionRequest'; payload: { requestId: string } }
+	| { type: 'resolveImagePreview'; payload: { path: string } }
 	| { type: 'permissionResponse'; payload: { toolUseId: string; decision?: CodeMindPermissionDecision; allow: boolean; scopeId?: string; feedback?: string } }
 	| { type: 'commitResponse'; payload: { confirmed: boolean; message?: string } }
 	/**
@@ -205,6 +255,17 @@ interface ICodeMindPanelSettings {
 	 */
 	baseUrl?: string;
 	model?: string;
+	/** Configured Anthropic-compatible providers (endpoint + curated models). Keys are not echoed. */
+	providers?: ICodeMindProvider[];
+	/** Id of the active provider whose endpoint/key/models drive the engine and picker. */
+	activeProviderId?: string;
+	/**
+	 * The models offered in the composer picker, each tied to the provider that serves
+	 * it. Curated separately from what a provider imports: a provider auto-imports all
+	 * its models, and this is the hand-picked subset — across every provider — that the
+	 * GUI shows. Empty means "fall back to the active provider's models".
+	 */
+	pickerModels?: Array<{ providerId: string; model: string }>;
 	/** Model used when the primary one is overloaded; '' means no fallback. */
 	fallbackModel?: string;
 	maxTurns?: number;
@@ -258,6 +319,7 @@ interface IPanelDataItem {
 /** Messages flowing from the workbench to the webview. */
 type WebviewOutbound =
 	| { type: 'history'; payload: AgentMessage[] }
+	| { type: 'consensusState'; payload: { open: boolean; running: boolean } }
 	| { type: 'status'; payload: 'ready' | 'busy' | 'error' }
 	| { type: 'newMessage'; payload: AgentMessage }
 	| { type: 'streamStart'; payload: { id: string; intent?: { id: string; label: string }; metadata?: { model?: string }; endpoint?: string } }
@@ -305,8 +367,18 @@ type WebviewOutbound =
 	 * empty dropdown that looks like a working endpoint with nothing in it.
 	 */
 	| { type: 'endpointModels'; payload: { endpoint: string; models?: ICodeMindModelInfo[]; error?: string } }
+	| { type: 'providerModels'; payload: { providerId: string; endpoint: string; models?: ICodeMindModelInfo[]; error?: string } }
+	/**
+	 * Result of a {@link detectProvider} probe. `wire` is null with `success: false`
+	 * when neither protocol answered; `models` carries plain ids, since a detected
+	 * gateway's ids are not necessarily Anthropic-shaped.
+	 */
+	| { type: 'providerDetection'; payload: { providerId?: string; baseUrl: string; wire: 'anthropic' | 'openai' | null; models: string[]; success: boolean; error?: string; requestId?: number } }
+	/** Past sessions for the Chat History panel, newest first. */
+	| { type: 'historyData'; payload: { entries: ICodeMindHistoryEntry[]; allProjects: boolean } }
 	| { type: 'mcpData'; payload: ICodeMindMcpServer[] }
-	| { type: 'mentionItems'; payload: { query: string; items: Array<{ label: string; path: string; detail?: string }> } }
+	| { type: 'mentionItems'; payload: { query: string; requestId: string; items: Array<{ label: string; path: string; detail?: string }> } }
+	| { type: 'imagePreview'; payload: { path: string; dataUrl: string } }
 	| { type: 'featureFlags'; payload: { voiceMode?: boolean } }
 	| { type: 'commitReview'; payload: { message: string; files: string[] } }
 	| { type: 'planMode'; payload: boolean }
@@ -411,7 +483,9 @@ export class CodeMindAgentViewPane extends ViewPane {
 			+ 'do themselves to cement the idea. Never skip the working solution in favour of the lesson.',
 	};
 
-	private _webview: IWebview | undefined;
+	private readonly _webview = this._register(new MutableDisposable<IOverlayWebview>());
+	private _bodyContainer: HTMLElement | undefined;
+	private _rootContainer: HTMLElement | undefined;
 	private readonly _history: AgentMessage[] = [];
 	private readonly _requestCts = this._register(new MutableDisposable<CancellationTokenSource>());
 	/**
@@ -487,6 +561,10 @@ export class CodeMindAgentViewPane extends ViewPane {
 	 * conversation the panel is showing — the first turn has to say, once.
 	 */
 	private _pendingResumeSessionId: string | undefined;
+	/** The scope the Chat History panel last asked for, so a delete refreshes the same view. */
+	private _lastHistoryAllProjects = false;
+	/** Active mention-search cancellation tokens, keyed by requestId. */
+	private readonly _mentionCancellation = new Map<string, CancellationTokenSource>();
 	private readonly _memento: Memento<ICodeMindPanelMemento>;
 	private readonly _mementoState: Partial<ICodeMindPanelMemento>;
 	/**
@@ -550,6 +628,23 @@ export class CodeMindAgentViewPane extends ViewPane {
 	protected override renderBody(container: HTMLElement): void {
 		super.renderBody(container);
 
+		this._bodyContainer = container;
+		this._rootContainer = undefined;
+
+		// The webview iframe lives in an overlay anchored to this container rather than
+		// mounted inside it. An iframe cannot be reparented without reloading, and the
+		// workbench rebuilds this body's DOM every time the Secondary Side Bar is toggled
+		// or the view is moved — a mounted iframe would end up detached and blank. An
+		// overlay is re-anchored on each visibility change instead, so the panel always
+		// re-appears. The container itself is made focusable so keyboard users can Tab in.
+		container.tabIndex = 0;
+		container.setAttribute('role', 'document');
+		this._register(addDisposableListener(container, 'focus', e => {
+			if (e.target === container) {
+				this._webview.value?.focus();
+			}
+		}));
+
 		const mediaRootUri = FileAccess.asFileUri(CodeMindAgentViewPane.MEDIA_ROOT);
 		const init: WebviewInitInfo = {
 			title: localize('codeMindAgent', 'CodeMind Agent'),
@@ -557,17 +652,48 @@ export class CodeMindAgentViewPane extends ViewPane {
 			contentOptions: { allowScripts: true, localResourceRoots: [mediaRootUri] },
 			extension: undefined,
 		};
-		const webview = this._register(this._webviewService.createWebviewElement(init));
-		this._webview = webview;
+		const webview = this._webviewService.createWebviewOverlay(init);
+		this._webview.value = webview;
 
 		webview.setHtml(this._getHtml(webview));
-		webview.mountTo(container, getWindow(container));
+		this._layoutWebview();
+
+		// Claim the overlay while visible so it anchors to this body, and release it when
+		// hidden so another view can take over the overlay host. This is what survives a
+		// Secondary Side Bar toggle.
+		this._register(this.onDidChangeBodyVisibility(() => {
+			if (this.isBodyVisible()) {
+				this._webview.value?.claim(this, getWindow(this.element), undefined);
+				this._layoutWebview();
+			} else {
+				this._webview.value?.release(this);
+			}
+		}));
+		if (this.isBodyVisible()) {
+			webview.claim(this, getWindow(this.element), undefined);
+			this._layoutWebview();
+		}
 
 		this._register(webview.onMessage(e => this._handleWebviewMessage(e.message as WebviewInbound)));
+
+		// Mirror the Multi-Agent Consensus window's lifecycle into the composer toggle:
+		// open/closed drives the switch's on/off, and running locks it so the window can't
+		// be closed mid-run from the composer. The initial value is sent on the webview's
+		// 'ready' message, once its listener is attached.
+		this._register(CodeMindConsensusPanel.onDidChangeState(state => {
+			this._postMessage({ type: 'consensusState', payload: state });
+		}));
 
 		// The worker boots with empty settings, so seed it from configuration before
 		// the first turn can be sent.
 		this._pushEngineSettings();
+
+		// Fold any pre-provider single-endpoint config into a default provider, then
+		// re-seed the engine and re-echo settings so the webview shows the migrated state.
+		this._migrateProvidersIfNeeded().then(() => {
+			this._pushEngineSettings();
+			this._postMessage({ type: 'settingsData', payload: this._readSettings() });
+		}).catch(() => { });
 
 		// Same for MCP: the worker keeps its server list in memory only, so without this
 		// a server added in an earlier window is in settings.json but unknown to the
@@ -697,7 +823,7 @@ export class CodeMindAgentViewPane extends ViewPane {
 		return message.includes(sessionId) || /no conversation found/i.test(message);
 	}
 
-	private _getHtml(webview: IWebview): string {
+	private _getHtml(webview: IOverlayWebview): string {
 		const cssUri = asWebviewUri(FileAccess.asFileUri(`${CodeMindAgentViewPane.MEDIA_ROOT}agent.css`));
 		const jsUri = asWebviewUri(FileAccess.asFileUri(`${CodeMindAgentViewPane.MEDIA_ROOT}agent.js`));
 		const panelsUri = asWebviewUri(FileAccess.asFileUri(`${CodeMindAgentViewPane.MEDIA_ROOT}panels.js`));
@@ -722,6 +848,13 @@ export class CodeMindAgentViewPane extends ViewPane {
 			<span class="session-name hidden" id="sessionName" title="Session name (/rename)"></span>
 			<span class="session-tags hidden" id="sessionTags" title="Session tags (/tag)"></span>
 		</div>
+		<!-- Turn status lives in the header centre now: the pulsing dot + "Thinking…" is
+		     silent at rest (setStatus writes text only for a running turn or an error), so at
+		     idle it contributes nothing and the header reads as usual. -->
+		<span class="status-pill" id="statusPill">
+			<span class="status-dot ready" id="statusDot"></span>
+			<span id="statusText"></span>
+		</span>
 		<!-- Section 3.2: two buttons only. The plan toggle moves into the input bar's mode
 		     control (Section 2.4); Clear History discarded the visible conversation, which is
 		     exactly what New Session already does through the same \`discardConversation()\`;
@@ -729,11 +862,11 @@ export class CodeMindAgentViewPane extends ViewPane {
 		     field with Save and Test. The status chip moves to the composer footer, where
 		     "Still connecting to …" is next to the box the user is waiting on. -->
 		<div class="header-right header-actions">
-			<button class="icon-btn" id="consensusBtn" title="Consensus Network" aria-label="Open PBFT Consensus">
-				<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z"/></svg>
-			</button>
 			<button class="icon-btn" id="newSessionBtn" title="New Session" aria-label="Start a new session">
 				<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+			</button>
+			<button class="icon-btn" id="historyBtn" title="Chat History" aria-label="Browse chat history">
+				<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l3 2"/></svg>
 			</button>
 			<button class="icon-btn" id="settingsBtn" title="Settings" aria-label="Open settings">
 				<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -818,13 +951,6 @@ export class CodeMindAgentViewPane extends ViewPane {
 		<input type="file" id="filePicker" class="hidden" multiple accept="*/*">
 		<div class="input-footer">
 			<span>Enter to send · Shift+Enter for newline</span>
-			<!-- Relocated out of the header by Section 3.2. It is silent at rest — \`setStatus\`
-			     writes text only for a running turn and for an error — so at idle this
-			     contributes nothing to the line. -->
-			<span class="status-pill" id="statusPill">
-				<span class="status-dot ready" id="statusDot"></span>
-				<span id="statusText"></span>
-			</span>
 			<span class="slash-hint hidden" id="slashHint"></span>
 			<span class="composer-hint hidden" id="composerHint"></span>
 			<span class="vim-indicator hidden" id="vimIndicator"></span>
@@ -898,6 +1024,8 @@ export class CodeMindAgentViewPane extends ViewPane {
 				// Both restored from the memento, so the reloaded webview shows the
 				// conversation as the user left it rather than a clean slate.
 				this._postMessage({ type: 'planMode', payload: this._planMode });
+					// Reflect whether the Multi-Agent Consensus window is currently open/running.
+					this._postMessage({ type: 'consensusState', payload: CodeMindConsensusPanel.state });
 				if (this._draft) {
 					this._postMessage({ type: 'restoreDraft', payload: this._draft });
 				}
@@ -932,6 +1060,41 @@ export class CodeMindAgentViewPane extends ViewPane {
 			case 'fetchEndpointModels':
 				this._fetchEndpointModels(message.payload?.key, message.payload?.baseUrl);
 				break;
+			case 'providersUpdate':
+				this._applyProviders(message.payload);
+				break;
+			case 'setProviderKey':
+				this._engineService.storeApiKey(message.payload.key, message.payload.providerId).then(() => {
+					this._postMessage({ type: 'status', payload: 'ready' });
+				}).catch(() => { });
+				break;
+			case 'deleteProviderKey':
+				this._engineService.deleteApiKey(message.payload.providerId).catch(() => { });
+				break;
+			case 'validateProviderKey':
+				this._validateProviderKey(message.payload);
+				break;
+			case 'fetchProviderModels':
+				this._fetchProviderModels(message.payload);
+				break;
+			case 'setActiveProvider':
+				this._setActiveProvider(message.payload.providerId);
+				break;
+			case 'selectPickerModel':
+				// A composer pick carries the provider that serves the model, so the
+				// endpoint, key and model all move together — otherwise a model from a
+				// non-active provider would run against the wrong endpoint.
+				this._setActiveProvider(message.payload.providerId, message.payload.model);
+				break;
+			case 'requestHistory':
+				void this._sendHistory(message.payload?.allProjects === true);
+				break;
+			case 'openSession':
+				void this._openSession(message.payload);
+				break;
+			case 'deleteSession':
+				void this._deleteSession(message.payload);
+				break;
 			case 'clearHistory':
 				this._history.length = 0;
 				this._pendingResumeSessionId = undefined;
@@ -952,6 +1115,9 @@ export class CodeMindAgentViewPane extends ViewPane {
 				break;
 			case 'setPermissionMode':
 				this._setPermissionModeFromPanel(message.payload.mode);
+				break;
+			case 'orchestration_trace':
+				this._postMessage({ type: 'orchestrationTrace', payload: message.payload });
 				break;
 			case 'draftChanged':
 				this._draft = message.payload;
@@ -1011,7 +1177,13 @@ export class CodeMindAgentViewPane extends ViewPane {
 				this._pickFiles();
 				break;
 			case 'requestMentionItems':
-				this._sendMentionItems(message.payload.query);
+				this._sendMentionItems(message.payload.query, message.payload.requestId);
+				break;
+			case 'cancelMentionRequest':
+				this._cancelMentionRequest(message.payload.requestId);
+				break;
+			case 'resolveImagePreview':
+				this._resolveImagePreview(message.payload.path);
 				break;
 			case 'permissionResponse': {
 				// Every decision beyond "just this once" is carried out engine-side:
@@ -1039,6 +1211,12 @@ export class CodeMindAgentViewPane extends ViewPane {
 				break;
 			case 'dispatch':
 				this._commandService.executeCommand(message.command).catch(() => { });
+				break;
+			case 'openConsensus':
+				this._commandService.executeCommand('workbench.action.openCodeMindConsensus').catch(() => { });
+				break;
+			case 'closeConsensus':
+				this._commandService.executeCommand('workbench.action.closeCodeMindConsensus').catch(() => { });
 				break;
 		}
 	}
@@ -1096,9 +1274,13 @@ export class CodeMindAgentViewPane extends ViewPane {
 
 	/** Read the settings panel's current values out of user configuration. */
 	private _readSettings(): ICodeMindPanelSettings {
+		const providers = this._readProviders();
 		return {
 			baseUrl: this.configurationService.getValue<string>('codemind.baseUrl'),
 			model: this.configurationService.getValue<string>('codemind.model'),
+			providers,
+			activeProviderId: this._readActiveProviderId(providers),
+			pickerModels: this._readPickerModels(providers),
 			fallbackModel: this.configurationService.getValue<string>('codemind.fallbackModel'),
 			maxTurns: this.configurationService.getValue<number>('codemind.maxTurns'),
 			maxThinkingTokens: this.configurationService.getValue<number>('codemind.maxThinkingTokens'),
@@ -1117,6 +1299,106 @@ export class CodeMindAgentViewPane extends ViewPane {
 			showOnStartup: this.configurationService.getValue<boolean>('codemind.showOnStartup'),
 			autoCompact: this._isAutoCompactEnabled(),
 		};
+	}
+
+	/**
+	 * Read the configured providers, normalising each entry so a partial object from
+	 * settings.json is safe. Empty by default until migration or the settings UI fills it.
+	 */
+	private _readProviders(): ICodeMindProvider[] {
+		const raw = this.configurationService.getValue<Partial<ICodeMindProvider>[]>('codemind.providers') ?? [];
+		if (!Array.isArray(raw)) {
+			return [];
+		}
+		return raw
+			.filter(p => p && typeof p.id === 'string' && p.id)
+			.map(p => ({
+				id: p.id as string,
+				name: (typeof p.name === 'string' && p.name) ? p.name : 'Provider',
+				baseUrl: typeof p.baseUrl === 'string' ? p.baseUrl : '',
+				models: Array.isArray(p.models) ? p.models.filter(m => typeof m === 'string' && m) : [],
+				enabled: p.enabled !== false,
+			}));
+	}
+
+	/** The active provider id, defaulting to the first enabled provider when unset/stale. */
+	private _readActiveProviderId(providers: ICodeMindProvider[] = this._readProviders()): string | undefined {
+		const configured = (this.configurationService.getValue<string>('codemind.activeProviderId') ?? '').trim();
+		if (configured && providers.some(p => p.id === configured && p.enabled)) {
+			return configured;
+		}
+		const firstEnabled = providers.find(p => p.enabled);
+		return firstEnabled?.id;
+	}
+
+	/** The active provider record, or undefined when none is configured. */
+	private _activeProvider(): ICodeMindProvider | undefined {
+		const providers = this._readProviders();
+		const id = this._readActiveProviderId(providers);
+		return providers.find(p => p.id === id);
+	}
+
+	/**
+	 * The composer picker's curated models, read from `codemind.pickerModels` and
+	 * pruned to entries that can still be served: the provider must exist, be enabled,
+	 * and actually list the model. A stale entry — provider removed, disabled, or the
+	 * model no longer imported — would otherwise offer a choice that resolves to a
+	 * missing endpoint, so it is dropped here rather than surfaced and left to fail.
+	 */
+	private _readPickerModels(providers: ICodeMindProvider[] = this._readProviders()): Array<{ providerId: string; model: string }> {
+		const raw = this.configurationService.getValue<Array<{ providerId?: unknown; model?: unknown }>>('codemind.pickerModels') ?? [];
+		if (!Array.isArray(raw)) {
+			return [];
+		}
+		const byId = new Map(providers.filter(p => p.enabled).map(p => [p.id, p]));
+		const seen = new Set<string>();
+		const out: Array<{ providerId: string; model: string }> = [];
+		for (const entry of raw) {
+			const providerId = typeof entry?.providerId === 'string' ? entry.providerId : '';
+			const model = typeof entry?.model === 'string' ? entry.model : '';
+			if (!providerId || !model) {
+				continue;
+			}
+			const provider = byId.get(providerId);
+			if (!provider || !provider.models.includes(model)) {
+				continue;
+			}
+			// One provider can legitimately be picked for several models, so the key is
+			// the pair, not the id — de-duped so a doubled entry shows once.
+			const key = `${providerId} ${model}`;
+			if (seen.has(key)) {
+				continue;
+			}
+			seen.add(key);
+			out.push({ providerId, model });
+		}
+		return out;
+	}
+
+	/**
+	 * One-time migration from the pre-provider single-endpoint config. If no providers
+	 * exist yet, synthesize a default "Anthropic" provider from `codemind.baseUrl` +
+	 * `codemind.model`, copy the legacy secret key into its slot, and mark it active.
+	 * Runs before the first settings read so nothing regresses for existing users.
+	 */
+	private async _migrateProvidersIfNeeded(): Promise<void> {
+		if (this._readProviders().length > 0) {
+			return;
+		}
+		const baseUrl = (this.configurationService.getValue<string>('codemind.baseUrl') ?? '').trim();
+		const model = (this.configurationService.getValue<string>('codemind.model') ?? '').trim();
+		const id = generateUuid();
+		const provider: ICodeMindProvider = {
+			id,
+			name: 'Anthropic',
+			baseUrl,
+			models: model ? [model] : [],
+			enabled: true,
+		};
+		await this.configurationService.updateValue('codemind.providers', [provider]);
+		await this.configurationService.updateValue('codemind.activeProviderId', id);
+		await this._engineService.migrateLegacyKey(id);
+		this._engineService.setActiveProviderId(id);
 	}
 
 	/**
@@ -1168,10 +1450,16 @@ export class CodeMindAgentViewPane extends ViewPane {
 	 * nullish), so send undefined instead and let its default stand.
 	 */
 	private _pushEngineSettings(settings: ICodeMindPanelSettings = this._readSettings()): void {
+		// The active provider owns the endpoint and the key. Its baseUrl drives the engine;
+		// telling the engine the active id makes getApiKey() resolve that provider's key for
+		// the query. Fall back to the flat baseUrl for pre-migration / legacy installs.
+		const active = this._activeProvider();
+		this._engineService.setActiveProviderId(active?.id);
+		const baseUrl = active ? active.baseUrl : settings.baseUrl;
 		this._engineService.updateSettings({
 			// '' is meaningful: it takes the custom endpoint back off, so unlike the
 			// other fields it is forwarded as-is rather than turned into undefined.
-			baseUrl: settings.baseUrl,
+			baseUrl,
 			model: settings.model || undefined,
 			// '' means "no fallback" — same treatment as the advisor.
 			fallbackModel: settings.fallbackModel || undefined,
@@ -1416,33 +1704,91 @@ export class CodeMindAgentViewPane extends ViewPane {
 	 * Answer the `@` mention picker with workspace files matching `query`. The query
 	 * travels back with the results: one keystroke per request means replies can land
 	 * out of order, and a late reply for a shorter prefix must not replace the list the
-	 * composer is already showing.
+	 * composer is already showing. Now with requestId-based cancellation and an empty-query
+	 * fast path that seeds from open editors instead of walking the full tree.
 	 */
-	private async _sendMentionItems(query: string): Promise<void> {
+	private async _sendMentionItems(query: string, requestId: string): Promise<void> {
 		const folders = this._workspaceContextService.getWorkspace().folders;
 		if (!folders.length) {
-			this._postMessage({ type: 'mentionItems', payload: { query, items: [] } });
+			this._postMessage({ type: 'mentionItems', payload: { query, requestId, items: [] } });
 			return;
 		}
+
+		// Cancel any prior request under this same requestId (client debounces, but still cancels stale)
+		const cancel = new CancellationTokenSource();
+		const prior = this._mentionCancellation.get(requestId);
+		if (prior) { prior.cancel(); prior.dispose(); }
+		this._mentionCancellation.set(requestId, cancel);
+
 		try {
-			const result = await this._searchService.fileSearch({
-				type: QueryType.File,
-				folderQueries: folders.map(folder => ({ folder: folder.uri })),
-				filePattern: query,
-				sortByScore: true,
-				maxResults: 30,
-				_reason: 'codemindAgentMention',
-			});
-			const items = result.results.map(match => {
-				const fsPath = match.resource.fsPath;
-				const label = match.resource.path.split('/').pop() ?? fsPath;
-				const folder = this._workspaceContextService.getWorkspaceFolder(match.resource);
-				const detail = folder ? fsPath.slice(folder.uri.fsPath.length + 1) : fsPath;
-				return { label, path: fsPath, detail };
-			});
-			this._postMessage({ type: 'mentionItems', payload: { query, items } });
+			let items: Array<{ label: string; path: string; detail?: string }> = [];
+
+			if (!query.trim()) {
+				// Fast path: seed from open editors instead of fileSearch (which walks the full tree)
+				const editors = this._editorService.editors.slice(0, 30);
+				items = editors.map(editor => {
+					const uri = editor.resource;
+					if (!uri) { return null; }
+					const fsPath = uri.fsPath;
+					const label = uri.path.split('/').pop() ?? fsPath;
+					const folder = this._workspaceContextService.getWorkspaceFolder(uri);
+					const detail = folder ? fsPath.slice(folder.uri.fsPath.length + 1) : fsPath;
+					return { label, path: fsPath, detail };
+				}).filter((item): item is { label: string; path: string; detail: string } => item !== null);
+			} else {
+				// Real search with cancellation token and cacheKey for incremental prefix search
+				const result = await this._searchService.fileSearch({
+					type: QueryType.File,
+					folderQueries: folders.map(folder => ({ folder: folder.uri })),
+					filePattern: query,
+					sortByScore: true,
+					maxResults: 30,
+					cacheKey: 'codemindMention',
+					_reason: 'codemindAgentMention',
+				}, cancel.token);
+				if (cancel.token.isCancellationRequested) { return; }
+				items = result.results.map(match => {
+					const fsPath = match.resource.fsPath;
+					const label = match.resource.path.split('/').pop() ?? fsPath;
+					const folder = this._workspaceContextService.getWorkspaceFolder(match.resource);
+					const detail = folder ? fsPath.slice(folder.uri.fsPath.length + 1) : fsPath;
+					return { label, path: fsPath, detail };
+				});
+			}
+			this._postMessage({ type: 'mentionItems', payload: { query, requestId, items } });
+		} catch (err) {
+			// Only surface non-cancellation failures; tolerate either signature of isCancellationError
+			const name = (err as any)?.name;
+			if (name !== 'CancellationError' && name !== 'Canceled') {
+				this._postMessage({ type: 'mentionItems', payload: { query, requestId, items: [] } });
+			}
+		} finally {
+			this._mentionCancellation.delete(requestId);
+			cancel.dispose();
+		}
+	}
+
+	private _cancelMentionRequest(requestId: string): void {
+		const cancel = this._mentionCancellation.get(requestId);
+		if (cancel) {
+			cancel.cancel();
+			cancel.dispose();
+			this._mentionCancellation.delete(requestId);
+		}
+	}
+
+	private async _resolveImagePreview(path: string): Promise<void> {
+		try {
+			const uri = URI.file(path);
+			const content = await this._fileService.readFile(uri);
+			const ext = path.split('.').pop()?.toLowerCase() || 'png';
+			const mimeMap: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml' };
+			const mime = mimeMap[ext] || 'image/png';
+			const b64 = encodeBase64(content.value);
+			const dataUrl = `data:${mime};base64,${b64}`;
+			this._postMessage({ type: 'imagePreview', payload: { path, dataUrl } });
 		} catch {
-			this._postMessage({ type: 'mentionItems', payload: { query, items: [] } });
+			// silently fail — hover just won't show
 		}
 	}
 
@@ -1479,6 +1825,75 @@ export class CodeMindAgentViewPane extends ViewPane {
 			this._postMessage({ type: 'endpointModels', payload: { endpoint, error } });
 			this._appendSystemMessage(`Could not list models: ${error}`);
 		});
+	}
+
+	/** Persist the providers array and re-seed the engine (endpoint may have changed). */
+	private _applyProviders(providers: ICodeMindProvider[]): void {
+		const clean = Array.isArray(providers) ? providers : [];
+		this.configurationService.updateValue('codemind.providers', clean).then(() => {
+			// If the active provider was removed or disabled, fall back to the first enabled one.
+			const active = this._readActiveProviderId(this._readProviders());
+			if (active !== (this.configurationService.getValue<string>('codemind.activeProviderId') ?? '')) {
+				return this.configurationService.updateValue('codemind.activeProviderId', active ?? '');
+			}
+			return undefined;
+		}).then(() => {
+			this._pushEngineSettings();
+			this._postMessage({ type: 'settingsData', payload: this._readSettings() });
+		}).catch(() => { });
+	}
+
+	/** Validate a provider's key against its endpoint, without storing it. */
+	private _validateProviderKey(payload: { providerId?: string; key?: string; baseUrl?: string }): void {
+		this._engineService.validateApiKey(payload.key, payload.baseUrl).then(result => {
+			this._appendSystemMessage(`${result.ok ? 'OK' : 'Failed'} · ${result.endpoint} — ${result.detail}`);
+		}).catch(err => {
+			this._appendSystemMessage(`Could not validate the key: ${err instanceof Error ? err.message : String(err)}`);
+		});
+	}
+
+	private _fetchProviderModels(payload: { providerId: string; key?: string; baseUrl?: string }): void {
+		const endpoint = (payload.baseUrl ?? '').trim() || 'https://api.anthropic.com';
+		this._engineService.listEndpointModels(payload.key, payload.baseUrl).then(models => {
+			this._postMessage({ type: 'providerModels', payload: { providerId: payload.providerId, endpoint, models: [...models] } });
+		}).catch(err => {
+			const error = err instanceof Error ? err.message : String(err);
+			this._postMessage({ type: 'providerModels', payload: { providerId: payload.providerId, endpoint, error } });
+		});
+	}
+
+	/**
+	 * Make a provider active: persist the id, point the engine at its endpoint + key,
+	 * and settle on a model to run.
+	 *
+	 * The model is chosen so a plain provider switch does not silently move the user
+	 * off the model they were on: an explicit `model` (a composer pick) wins when the
+	 * provider serves it; otherwise the current `codemind.model` is kept if this
+	 * provider also lists it; only then does it fall back to the provider's first
+	 * model. Picking a composer model that belongs to another provider therefore
+	 * swaps endpoint + key + model together, which is what makes a cross-provider pick
+	 * hit the right endpoint on the next turn.
+	 */
+	private _setActiveProvider(providerId: string, model?: string): void {
+		const provider = this._readProviders().find(p => p.id === providerId && p.enabled);
+		if (!provider) {
+			return;
+		}
+		const current = (this.configurationService.getValue<string>('codemind.model') ?? '').trim();
+		const nextModel = (model && provider.models.includes(model)) ? model
+			: (current && provider.models.includes(current)) ? current
+				: (provider.models[0] ?? '');
+		this.configurationService.updateValue('codemind.activeProviderId', providerId)
+			.then(() => this.configurationService.updateValue('codemind.baseUrl', provider.baseUrl))
+			.then(() => nextModel ? this.configurationService.updateValue('codemind.model', nextModel) : undefined)
+			.then(() => {
+				this._engineService.setActiveProviderId(providerId);
+				if (nextModel) {
+					this._engineService.setModel(nextModel).catch(() => { });
+				}
+				this._pushEngineSettings();
+				this._postMessage({ type: 'settingsData', payload: this._readSettings() });
+			}).catch(() => { });
 	}
 
 	private _isVoiceModeEnabled(): boolean {
@@ -2311,7 +2726,243 @@ export class CodeMindAgentViewPane extends ViewPane {
 	}
 
 	/**
-	 * Aggregate the engine's transcript logs for this workspace: how many sessions,
+	 * The real workspace path a transcript was recorded in, read from the top-level
+	 * `cwd` every user/assistant line carries. The dashed directory name is a lossy
+	 * on-disk key, so this is the only faithful source for the folder a session
+	 * belonged to; scan a few lines, since the opening entry can be metadata.
+	 */
+	private _cwdOf(lines: readonly string[]): string | undefined {
+		for (const line of lines.slice(0, 40)) {
+			let entry: { cwd?: unknown };
+			try {
+				entry = JSON.parse(line);
+			} catch {
+				continue;
+			}
+			if (typeof entry.cwd === 'string' && entry.cwd) {
+				return entry.cwd;
+			}
+		}
+		return undefined;
+	}
+
+	/**
+	 * Build the Chat History rows and post them to the webview. Defaults to the
+	 * current workspace — one directory read — and only walks every project when the
+	 * panel's "All projects" toggle asks for it, since that is up to twenty directory
+	 * reads plus a transcript read each.
+	 *
+	 * The heavy lifting (which logs, newest first, capped) is shared with the
+	 * `/resume` picker via the per-project walk; here each row also carries the real
+	 * `cwd` and the dashed dir name, which are what the panel needs to display a true
+	 * path and to locate the `.jsonl` again for open and delete.
+	 */
+	private async _sendHistory(allProjects: boolean): Promise<void> {
+		this._lastHistoryAllProjects = allProjects;
+		const thisProject = this._projectDirName();
+		const entries: ICodeMindHistoryEntry[] = [];
+		const projects: string[] = [];
+		if (allProjects) {
+			const root = await this._resolveHomePath('projects');
+			if (root) {
+				try {
+					const children = (await this._fileService.resolve(root, { resolveMetadata: true })).children ?? [];
+					projects.push(...children
+						.filter(child => child.isDirectory)
+						.sort((a, b) => b.mtime - a.mtime)
+						.slice(0, 20)
+						.map(child => child.name));
+				} catch {
+					// No projects directory yet; the list is simply empty.
+				}
+			}
+		} else if (thisProject) {
+			projects.push(thisProject);
+		}
+		// A handful of the newest transcripts per project when walking them all, more
+		// for the single current project since it is the one read.
+		const perProject = allProjects ? 8 : 40;
+		for (const project of projects) {
+			entries.push(...await this._collectHistoryEntries(project, project === thisProject, perProject));
+		}
+		entries.sort((a, b) => b.at - a.at);
+		this._postMessage({ type: 'historyData', payload: { entries: entries.slice(0, 100), allProjects } });
+	}
+
+	/**
+	 * Summarize one project directory's newest `limit` transcripts into history rows,
+	 * reading each log once for its first prompt, real `cwd` and line count.
+	 */
+	private async _collectHistoryEntries(projectDir: string, current: boolean, limit: number): Promise<ICodeMindHistoryEntry[]> {
+		const dir = await this._resolveHomePath(`projects/${projectDir}`);
+		if (!dir) {
+			return [];
+		}
+		let children;
+		try {
+			children = (await this._fileService.resolve(dir, { resolveMetadata: true })).children ?? [];
+		} catch {
+			return [];
+		}
+		const logs = children
+			.filter(child => !child.isDirectory && child.name.endsWith('.jsonl'))
+			.sort((a, b) => b.mtime - a.mtime)
+			.slice(0, limit);
+		const entries: ICodeMindHistoryEntry[] = [];
+		for (const log of logs) {
+			let text: string;
+			try {
+				text = (await this._fileService.readFile(log.resource)).value.toString();
+			} catch {
+				continue;
+			}
+			const lines = text.split('\n').filter(line => line.trim());
+			entries.push({
+				id: log.name.replace(/\.jsonl$/, ''),
+				topic: this._firstPromptOf(lines),
+				at: log.mtime,
+				messages: lines.length,
+				projectDir,
+				// The current project's real path is the live workspace root; for other
+				// projects it comes from the transcript, the only faithful source.
+				cwd: current ? this._workspaceRoot()?.fsPath : this._cwdOf(lines),
+				current,
+			});
+		}
+		return entries;
+	}
+
+	/**
+	 * Open a past session from the history panel: render its transcript back into the
+	 * chat and, for a session from this workspace, arm resume so the next turn
+	 * continues it. A session recorded in another project can be read but not resumed
+	 * — a turn always runs with the current workspace `cwd`, so the engine cannot
+	 * attach to a conversation that lived somewhere else.
+	 */
+	private async _openSession(payload: { id: string; projectDir: string; current: boolean }): Promise<void> {
+		const dir = await this._resolveHomePath(`projects/${payload.projectDir}`);
+		const target = dir ? URI.joinPath(dir, `${payload.id}.jsonl`) : undefined;
+		if (!target) {
+			this._appendSystemMessage('Could not locate that session on disk.');
+			return;
+		}
+		let text: string;
+		try {
+			text = (await this._fileService.readFile(target)).value.toString();
+		} catch (err) {
+			this._appendSystemMessage(`Could not open that session: ${err instanceof Error ? err.message : String(err)}`);
+			return;
+		}
+		const lines = text.split('\n').filter(line => line.trim());
+		const messages = this._transcriptToMessages(lines);
+		this._history.length = 0;
+		this._history.push(...messages);
+		this._lastSessionId = payload.id;
+		this._interruptedTurn = undefined;
+		if (payload.current) {
+			this._pendingResumeSessionId = payload.id;
+			await this._engineService.resumeSession(payload.id).catch(() => { });
+			if (!messages.length) {
+				this._history.push({ id: this._generateId(), type: 'system', content: 'This session had no readable messages, but the next turn will still continue it.', timestamp: Date.now() });
+			}
+		} else {
+			this._pendingResumeSessionId = undefined;
+			this._history.push({
+				id: this._generateId(),
+				type: 'system',
+				content: 'Opened read-only — this conversation was recorded in another project, so it cannot be resumed here. Its history refers to files in that project.',
+				timestamp: Date.now(),
+			});
+		}
+		this._postMessage({ type: 'history', payload: this._history });
+		this._persistState();
+	}
+
+	/**
+	 * Turn a transcript's JSONL lines into the chat's own message shape. Only the two
+	 * things a person came back to see survive: what they typed and what the agent
+	 * answered. Tool results (user entries whose content is a block array), thinking
+	 * blocks and metadata lines are dropped; each `tool_use` an assistant made is
+	 * kept as a single `⏺ <tool>` line so the shape of the work still reads. Capped
+	 * to the last `MEMENTO_MAX_MESSAGES`, the same bound the live history keeps.
+	 */
+	private _transcriptToMessages(lines: readonly string[]): AgentMessage[] {
+		const messages: AgentMessage[] = [];
+		for (const line of lines) {
+			let entry: { type?: string; message?: { role?: string; content?: unknown }; timestamp?: string };
+			try {
+				entry = JSON.parse(line);
+			} catch {
+				continue;
+			}
+			const role = entry.message?.role ?? entry.type;
+			const content = entry.message?.content;
+			const at = entry.timestamp ? Date.parse(entry.timestamp) : Number.NaN;
+			const timestamp = Number.isFinite(at) ? at : Date.now();
+			if (role === 'user') {
+				// A plain string is something the user typed; a block array is a tool
+				// result the engine fed back, which is not part of the conversation.
+				if (typeof content === 'string' && content.trim() && !content.startsWith('<')) {
+					messages.push({ id: this._generateId(), type: 'user', content, timestamp });
+				}
+				continue;
+			}
+			if (role !== 'assistant') {
+				continue;
+			}
+			const parts: string[] = [];
+			if (typeof content === 'string') {
+				if (content.trim()) {
+					parts.push(content);
+				}
+			} else if (Array.isArray(content)) {
+				for (const block of content as Array<{ type?: string; text?: string; name?: string }>) {
+					if (block?.type === 'text' && block.text) {
+						parts.push(block.text);
+					} else if (block?.type === 'tool_use' && block.name) {
+						parts.push(`⏺ ${block.name}`);
+					}
+					// `thinking` and everything else is left out on purpose.
+				}
+			}
+			const joined = parts.join('\n\n').trim();
+			if (joined) {
+				messages.push({ id: this._generateId(), type: 'assistant', content: joined, timestamp });
+			}
+		}
+		return messages.slice(-CodeMindAgentViewPane.MEMENTO_MAX_MESSAGES);
+	}
+
+	/**
+	 * Delete a past session's transcript, sending it to the trash the way the panels'
+	 * own file deletes do. If the removed session was the one armed for resume, that
+	 * arming is cleared so the next turn does not try to attach to a conversation the
+	 * engine can no longer load. The history list is then refreshed in whatever scope
+	 * it was last shown.
+	 */
+	private async _deleteSession(payload: { id: string; projectDir: string }): Promise<void> {
+		const dir = await this._resolveHomePath(`projects/${payload.projectDir}`);
+		const target = dir ? URI.joinPath(dir, `${payload.id}.jsonl`) : undefined;
+		if (!target) {
+			this._appendSystemMessage('Could not locate that session on disk.');
+			return;
+		}
+		try {
+			await this._fileService.del(target, { useTrash: true });
+		} catch (err) {
+			this._appendSystemMessage(`Could not delete that session: ${err instanceof Error ? err.message : String(err)}`);
+			return;
+		}
+		if (this._lastSessionId === payload.id) {
+			this._lastSessionId = undefined;
+		}
+		if (this._pendingResumeSessionId === payload.id) {
+			this._pendingResumeSessionId = undefined;
+		}
+		await this._sendHistory(this._lastHistoryAllProjects);
+	}
+
+	/**
 	 * how much was asked, which tools ran and which files they touched.
 	 *
 	 * The logs are the only record that spans sessions, so this is what makes
@@ -3057,7 +3708,8 @@ export class CodeMindAgentViewPane extends ViewPane {
 				this._postMessage({ type: 'streamEnd', payload: { id: streamId, metadata: { model } } });
 			}
 		}).catch(error => {
-			if (cts.token.isCancellationRequested || isCancellationError(error) || /request cancelled/i.test(String(error && (error as Error).message))) {
+			const errorName = (error as any)?.name;
+			if (cts.token.isCancellationRequested || errorName === 'CancellationError' || errorName === 'Canceled' || /request cancelled/i.test(String(error && (error as Error).message))) {
 				finalizeInterrupted();
 				return;
 			}
@@ -3490,7 +4142,7 @@ export class CodeMindAgentViewPane extends ViewPane {
 	}
 
 	private _postMessage(message: WebviewOutbound): void {
-		this._webview?.postMessage(message);
+		this._webview.value?.postMessage(message);
 	}
 
 	private _generateId(): string {
@@ -3513,7 +4165,25 @@ export class CodeMindAgentViewPane extends ViewPane {
 
 	protected override layoutBody(height: number, width: number): void {
 		super.layoutBody(height, width);
-		// The webview fills its container; nothing extra to size.
+		// The overlay webview is anchored to the body container; re-anchor it so it tracks
+		// the container's new size and position after a resize.
+		this._layoutWebview();
+	}
+
+	/**
+	 * Anchor the overlay webview to the current body container. Re-run on every visibility
+	 * change and resize: the workbench rebuilds the body DOM when the Secondary Side Bar is
+	 * toggled, and without a fresh anchor the iframe would be left detached (a black panel).
+	 */
+	private _layoutWebview(): void {
+		const webview = this._webview.value;
+		if (!this._bodyContainer || !webview) {
+			return;
+		}
+		if (!this._rootContainer || !this._rootContainer.isConnected) {
+			this._rootContainer = findParentWithClass(this._bodyContainer, 'monaco-scrollable-element') ?? undefined;
+		}
+		webview.setAnchorElement(this._bodyContainer, this._rootContainer);
 	}
 }
 

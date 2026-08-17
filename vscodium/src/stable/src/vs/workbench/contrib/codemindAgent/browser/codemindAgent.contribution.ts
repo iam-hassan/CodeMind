@@ -227,6 +227,44 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 				},
 			},
 		},
+		'codemind.providers': {
+			type: 'array',
+			default: [],
+			description: localize('codemind.providers', "Anthropic-compatible providers the CodeMind Agent can use. Each has an endpoint and the full set of models it serves; API keys are stored securely, not here."),
+			scope: ConfigurationScope.APPLICATION,
+			items: {
+				type: 'object',
+				required: ['id', 'name'],
+				properties: {
+					id: { type: 'string', description: localize('codemind.providers.id', "Stable identifier for the provider.") },
+					name: { type: 'string', description: localize('codemind.providers.name', "Display name, e.g. Anthropic.") },
+					baseUrl: { type: 'string', default: '', description: localize('codemind.providers.baseUrl', "Endpoint base URL. Do not include /v1. Empty uses the official API.") },
+					models: { type: 'array', items: { type: 'string' }, default: [], description: localize('codemind.providers.models', "All model ids or aliases this provider serves, imported from its endpoint. Which of these appear in the composer picker is controlled by codemind.pickerModels.") },
+					enabled: { type: 'boolean', default: true, description: localize('codemind.providers.enabled', "Whether this provider can be made active.") },
+					wire: { type: 'string', enum: ['anthropic', 'openai'], description: localize('codemind.providers.wire', "Protocol the endpoint speaks, as detected by \"Fetch models\": anthropic (/v1/messages) or openai (/v1/chat/completions). Only anthropic endpoints can serve a conversation today.") },
+				},
+			},
+		},
+		'codemind.activeProviderId': {
+			type: 'string',
+			default: '',
+			description: localize('codemind.activeProviderId', "Id of the provider whose endpoint, key and models are currently active."),
+			scope: ConfigurationScope.APPLICATION,
+		},
+		'codemind.pickerModels': {
+			type: 'array',
+			default: [],
+			description: localize('codemind.pickerModels', "Models shown in the composer model picker, each tied to the provider that serves it. Picking one makes that provider active. Empty falls back to the active provider's models."),
+			scope: ConfigurationScope.APPLICATION,
+			items: {
+				type: 'object',
+				required: ['providerId', 'model'],
+				properties: {
+					providerId: { type: 'string', description: localize('codemind.pickerModels.providerId', "Id of the provider that serves this model.") },
+					model: { type: 'string', description: localize('codemind.pickerModels.model', "Model id or alias to show in the composer picker.") },
+				},
+			},
+		},
 	},
 });
 
@@ -387,8 +425,8 @@ registerAction2(class OpenCodeMindConsensusAction extends Action2 {
 		super({
 			id: 'workbench.action.openCodeMindConsensus',
 			title: {
-				value: localize('openCodeMindConsensus', 'Open CodeMind Consensus'),
-				original: 'Open CodeMind Consensus'
+				value: localize('openCodeMindConsensus', 'Open Multi-Agent Consensus'),
+				original: 'Open Multi-Agent Consensus'
 			},
 			f1: true
 		});
@@ -396,8 +434,25 @@ registerAction2(class OpenCodeMindConsensusAction extends Action2 {
 
 	run(accessor: ServicesAccessor): void {
 		const instantiationService = accessor.get(IInstantiationService);
-		const consensusPanel = instantiationService.createInstance(CodeMindConsensusPanel);
-		consensusPanel.show();
+		CodeMindConsensusPanel.open(instantiationService);
+	}
+});
+
+registerAction2(class CloseCodeMindConsensusAction extends Action2 {
+	constructor() {
+		super({
+			id: 'workbench.action.closeCodeMindConsensus',
+			title: {
+				value: localize('closeCodeMindConsensus', 'Close Multi-Agent Consensus'),
+				original: 'Close Multi-Agent Consensus'
+			},
+			f1: false
+		});
+	}
+
+	run(): void {
+		// Refused while a run is in flight (see CodeMindConsensusPanel.close).
+		CodeMindConsensusPanel.close();
 	}
 });
 

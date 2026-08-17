@@ -5,7 +5,7 @@
 
 import { LLMRawResponse, generateResponse } from './openRouterService.js';
 import { PBFTState } from './consensusEngine.js';
-import { LLM_MODELS } from './models.js';
+import { LLM_MODELS, ModelConfig } from './models.js';
 
 export interface ForcedConsensusResult {
 	finalAnswer: string;
@@ -23,7 +23,8 @@ export async function runForcedConsensus(
 	bestRoundAnswer?: string,
 	bestRoundNumber?: number,
 	bestRoundScore?: number,
-	bestRoundMiddleGrounds?: string[]
+	bestRoundMiddleGrounds?: string[],
+	participants?: ModelConfig[]
 ): Promise<ForcedConsensusResult> {
 	console.log('[Forced Consensus] Synthesizing final answer from weighted votes');
 
@@ -65,7 +66,17 @@ Be concise, balanced, and factual. Do not say "forced consensus" or mention the 
 Output only your answer, nothing else.`;
 
 		try {
-			const synthesisModel = LLM_MODELS.find(m => m.id.includes('gpt-oss')) || LLM_MODELS[0];
+			// Synthesize with one of the models the user actually chose. Falling straight to
+			// the built-in catalogue would send this call to OpenRouter even for a run made
+			// up entirely of GUI-configured providers.
+			const healthy = (participants ?? []).filter(
+				m => !finalPBFTState.faultyNodes.includes(m.id)
+			);
+			const pool = healthy.length ? healthy : (participants ?? []);
+			const synthesisModel = pool.find(m => m.id.includes('gpt-oss'))
+				?? pool[0]
+				?? LLM_MODELS.find(m => m.id.includes('gpt-oss'))
+				?? LLM_MODELS[0];
 			const result = await generateResponse(synthesisModel, synthesisPrompt);
 			synthesizedAnswer = result.answer;
 		} catch (err: any) {

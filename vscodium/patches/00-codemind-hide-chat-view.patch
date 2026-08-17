@@ -1,0 +1,35 @@
+diff --git a/src/vs/workbench/contrib/chat/browser/chatParticipant.contribution.ts b/src/vs/workbench/contrib/chat/browser/chatParticipant.contribution.ts
+index 8fb472b3..924aa8ac 100644
+--- a/src/vs/workbench/contrib/chat/browser/chatParticipant.contribution.ts
++++ b/src/vs/workbench/contrib/chat/browser/chatParticipant.contribution.ts
+@@ -45,7 +45,7 @@ const chatViewContainer: ViewContainer = Registry.as<IViewContainersRegistry>(Vi
+ 	storageId: ChatViewContainerId,
+ 	hideIfEmpty: true,
+ 	order: 1,
+-}, ViewContainerLocation.AuxiliaryBar, { isDefault: true, doNotRegisterOpenCommand: true });
++}, ViewContainerLocation.AuxiliaryBar, { doNotRegisterOpenCommand: true });
+ 
+ const chatViewDescriptor: IViewDescriptor = {
+ 	id: ChatViewId,
+@@ -68,17 +68,10 @@ const chatViewDescriptor: IViewDescriptor = {
+ 		order: 1
+ 	},
+ 	ctorDescriptor: new SyncDescriptor(ChatViewPane),
+-	when: ContextKeyExpr.and(
+-		ChatContextKeys.accountPolicyGateActive.negate(),
+-		ContextKeyExpr.or(
+-			ContextKeyExpr.and(
+-				ChatContextKeys.Setup.hidden.negate(),
+-				ChatContextKeys.Setup.disabledInWorkspace.negate(),
+-			),
+-			ChatContextKeys.panelParticipantRegistered,
+-			ChatContextKeys.extensionInvalid
+-		)
+-	)
++	// CodeMind: the built-in Chat view is hidden from the Secondary Side Bar so the
++	// CodeMind Agent panel is the only container there. The chat services stay
++	// registered (other features depend on them); only this view is suppressed.
++	when: ContextKeyExpr.false()
+ };
+ Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([chatViewDescriptor], chatViewContainer);
+ 
