@@ -47,8 +47,12 @@ export async function compressContext(
 ): Promise<CompressedContext> {
     const mode = shouldCompress(optimized.estimatedTokens);
     if (mode === 'none') {
+        // §7.3 NONE: return the optimized context UNCHANGED (not null). Returning null
+        // here made the coordinator fall back to the bare user prompt, so for every
+        // small context (< 2000 tok — the common case) all pre-fetched repository/file/
+        // dependency/git context was silently discarded and enrichment did nothing.
         return {
-            context: null,
+            context: optimized.serializedContext,
             estimatedTokens: optimized.estimatedTokens,
             mode,
             headroomAvailable: false,

@@ -39,6 +39,10 @@ export const webSearchAdapter: ToolAdapter = {
     },
     shouldRun(intent: IntentClassification, _context: SelectionContext): boolean {
         return intent.intent === DeveloperIntent.WEB_SEARCH ||
-               intent.intent === DeveloperIntent.CODE_REVIEW; // best-practice searches
+               intent.intent === DeveloperIntent.CODE_REVIEW || // best-practice searches
+               // A multi-tool workflow (e.g. "build auth AND check latest pricing")
+               // explicitly asks for web search in the selector; without this the
+               // selector's add('webSearchAdapter') was silently vetoed here.
+               intent.intent === DeveloperIntent.MULTI_TOOL_WORKFLOW;
     },
 };

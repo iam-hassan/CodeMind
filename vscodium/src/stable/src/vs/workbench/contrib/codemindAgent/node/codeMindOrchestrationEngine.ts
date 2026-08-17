@@ -80,8 +80,17 @@ function buildCacheKey(req: OrchestrationRequest): string {
  */
 
 function buildSystemPromptSuffix(intent: any, aggregated: any): string {
-    const sections = Object.keys(aggregated).filter(k => (aggregated as any)[k] && k !== 'collectionDurationMs');
-    return `\n\n[CODEMIND ORCHESTRATION]\nDetected intent: ${intent.intent}\nPre-fetched context: ${sections.join(', ')}\nProject Brain: ${aggregated.projectBrain?.available ? 'available' : 'stub'}\nDo not ask for information already in the context above.`;
+    // Mirror contextOptimizer's presence checks: list only sections that carry
+    // content, not every truthy key (empty arrays and bookkeeping fields).
+    const sections: string[] = [];
+    if (aggregated.projectBrain?.available) sections.push('projectBrain');
+    if (aggregated.repository) sections.push('repository');
+    if (aggregated.currentFiles?.length) sections.push('currentFiles');
+    if (aggregated.dependencies?.packages?.length) sections.push('dependencies');
+    if (aggregated.gitState?.available) sections.push('gitState');
+    if (aggregated.webResults?.length) sections.push('webResults');
+    const list = sections.length ? sections.join(', ') : '(none)';
+    return `\n\n[CODEMIND ORCHESTRATION]\nDetected intent: ${intent.intent}\nPre-fetched context: ${list}\nProject Brain: ${aggregated.projectBrain?.available ? 'available' : 'stub'}\nDo not ask for information already in the context above.`;
 }
 
 export async function orchestrate(
@@ -130,6 +139,37 @@ export async function orchestrate(
         const enrichedPrompt = compressed.context
             ? `${compressed.context}\n\n---\n\n${request.userPrompt}`
             : request.userPrompt;
+        // B.2/B.3 – Even on a cache hit dev mode still gets a trace, so the panel
+        // never looks broken when the pipeline was simply short-circuited.
+        if (_devModeEnabled) {
+            const trace = {
+                queryId: request.queryId,
+                timestamp: t0,
+                intent: _lastIntent,
+                totalDurationMs: Date.now() - t0,
+                cacheHit: true,
+                timedOut: false,
+                originalTokens: optimized.estimatedTokens,
+                finalTokens: compressed.estimatedTokens,
+                layers: [
+                    { layerName: 'cacheHit', layerIndex: 0, durationMs: 0, status: 'pass',
+                      input: preview({ cacheKey, cachedTools: aggregated.toolsExecuted }),
+                      output: preview('Reused aggregated context from a previous turn (tool execution skipped).'),
+                      inputTokenEstimate: 0, outputTokenEstimate: 0, notes: ['result-cache hit'] },
+                    { layerName: 'contextOptimization', layerIndex: 5, durationMs: 0, status: 'pass',
+                      input: preview(aggregated), output: preview(optimized.serializedContext),
+                      inputTokenEstimate: 0, outputTokenEstimate: optimized.estimatedTokens,
+                      notes: [`kept: ${optimized.sectionsIncluded.join(', ') || '(none)'}`] },
+                    { layerName: 'headroomCompression', layerIndex: 6, durationMs: 0, status: 'pass',
+                      input: preview(optimized.serializedContext), output: preview(compressed.context ?? optimized.serializedContext),
+                      inputTokenEstimate: optimized.estimatedTokens, outputTokenEstimate: compressed.estimatedTokens,
+                      notes: [`mode: ${compressed.mode}`, `${optimized.estimatedTokens}→${compressed.estimatedTokens} tok`] },
+                ],
+            };
+            _traceBuffer.push(trace);
+            while (_traceBuffer.length > 20) { _traceBuffer.shift(); }
+            onProgress({ type: 'orchestration_trace', queryId: request.queryId, trace } as any);
+        }
         return {
             enrichedPrompt,
             systemPromptSuffix: buildSystemPromptSuffix({ intent: _lastIntent }, aggregated),
@@ -151,17 +191,21 @@ export async function orchestrate(
     const layers: any[] = [];
     const pushLayer = (name: string, index: number, input: any, output: any, status: string, duration: number, notes: string[] = []) => {
         if (!_devModeEnabled) return;
+        // Previews are truncated strings, not objects: slicing serialized JSON and
+        // re-parsing it throws on anything longer than the cut.
+        const inPrev = preview(input);
+        const outPrev = preview(output);
         layers.push({
             layerName: name,
             layerIndex: index,
             durationMs: duration,
             status,
-            // Previews are truncated strings, not objects: slicing serialized JSON and
-            // re-parsing it throws on anything longer than the cut.
-            input: preview(input),
-            output: preview(output),
-            inputTokenEstimate: 0,
-            outputTokenEstimate: 0,
+            input: inPrev,
+            output: outPrev,
+            // chars/4 is the same heuristic the optimizer uses; good enough for a
+            // per-layer indicator in the trace card.
+            inputTokenEstimate: Math.ceil(inPrev.length / 4),
+            outputTokenEstimate: Math.ceil(outPrev.length / 4),
             notes,
         });
     };
@@ -201,18 +245,30 @@ export async function orchestrate(
     const aggregated = aggregateToolOutputs(toolOutputs);
     _perfStats.cacheHitRate = _cacheHits / _cacheLookups;
     _contextCache.set(cacheKey, { context: aggregated, expiresAt: Date.now() + CACHE_TTL_MS });
-    pushLayer('contextAggregation', 4, toolOutputs.length, aggregated.toolsExecuted, 'pass', Date.now() - tAgg);
+    pushLayer('contextAggregation', 4,
+        toolOutputs.map(o => `${o.adapterId}: ${o.outputSummary ?? o.status}`),
+        aggregated, 'pass', Date.now() - tAgg);
 
     // Step 5: Optimization
     const tOpt = Date.now();
     const optimized = optimizeContext(aggregated, request.userPrompt, intent.intent);
-    pushLayer('contextOptimization', 5, aggregated.toolsExecuted, optimized.sectionsIncluded, 'pass', Date.now() - tOpt, optimized.sectionsRemoved);
+    // Show the ACTUAL optimized context text that will be prepended to the prompt —
+    // this is the artifact the reader most needs to verify, not a list of section names.
+    pushLayer('contextOptimization', 5,
+        aggregated, optimized.serializedContext, 'pass', Date.now() - tOpt,
+        [`kept: ${optimized.sectionsIncluded.join(', ') || '(none)'}`,
+        ...(optimized.sectionsRemoved.length ? [`removed: ${optimized.sectionsRemoved.join(', ')}`] : [])]);
 
     // Step 6: Headroom
     const tHead = Date.now();
     const compressed = await compressContext(optimized, request.model, request.token);
     _perfStats.headroomAvailable = compressed.headroomAvailable;
-    pushLayer('headroomCompression', 6, optimized.estimatedTokens, compressed.estimatedTokens, 'pass', Date.now() - tHead, [compressed.mode]);
+    // Input = context before compression, output = after. Token counts move to notes
+    // so the before→after text stays visible (the header still shows the token delta).
+    pushLayer('headroomCompression', 6,
+        optimized.serializedContext, compressed.context ?? optimized.serializedContext,
+        'pass', Date.now() - tHead,
+        [`mode: ${compressed.mode}`, `${optimized.estimatedTokens}→${compressed.estimatedTokens} tok`]);
 
     const enrichedPrompt = compressed.context
         ? `${compressed.context}\n\n---\n\n${request.userPrompt}`
@@ -236,25 +292,36 @@ export async function orchestrate(
         },
     };
 
-    // B.2 – Publish the trace so getTraceBuffer()/getTraceHistory() can serve it
+    // Layer 7 — the SDK call itself. We only capture its input here; the model
+    // response streams back through the normal event channel, not the trace.
+    pushLayer('claudeAgentSDK', 7,
+        { finalPromptChars: enrichedPrompt.length, suffixChars: systemPromptSuffix.length, model: request.model },
+        { streaming: true }, 'pass', 0);
+
+    // B.2 – Publish the trace so getTraceBuffer()/getTraceHistory() can serve it,
+    // and B.3 – emit it so agent.js can render the trace card. Built once and shared
+    // by both so the buffered copy and the emitted copy never drift.
     if (_devModeEnabled) {
-        _traceBuffer.push({
+        const trace = {
             queryId: request.queryId,
             timestamp: t0,
+            intent: intent.intent,
             totalDurationMs: Date.now() - t0,
             cacheHit: false,
             timedOut: false,
+            originalTokens: optimized.estimatedTokens,
+            finalTokens: compressed.estimatedTokens,
             layers,
-        });
+        };
+        _traceBuffer.push(trace);
         while (_traceBuffer.length > 20) { _traceBuffer.shift(); }
 
-	        // B.3 – Emit the event so agent.js can render the trace card
-	        onProgress({
-	            type: 'orchestration_trace',
-	            queryId: request.queryId,
-	            trace,
-	        } as any);
-	    }
+        onProgress({
+            type: 'orchestration_trace',
+            queryId: request.queryId,
+            trace,
+        } as any);
+    }
 
     // A.9 – Update rolling performance stats
     _perfHistory.push(Date.now() - t0);

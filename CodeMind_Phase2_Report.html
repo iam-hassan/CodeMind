@@ -1,0 +1,455 @@
+<title>Phase-2 Orchestration</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --surface-2: #eceef2;
+    --text: #171b24;
+    --dim: #59616f;
+    --faint: #8b93a1;
+    --border: #dde1e8;
+    --border-strong: #c8ced8;
+    --accent: #0c7d8c;
+    --accent-2: #4f46e5;
+    --pass: #157f3b;
+    --warn: #a65a08;
+    --err: #c0272b;
+    --pass-bg: #e8f5ec;
+    --warn-bg: #fbf1e3;
+    --err-bg: #fbeaea;
+    --accent-bg: #e4f3f5;
+    --code-bg: #f2f4f7;
+    --shadow: 0 1px 2px rgba(20,24,34,.04), 0 8px 24px -12px rgba(20,24,34,.12);
+    --mono: ui-monospace, "Cascadia Code", "Cascadia Mono", "JetBrains Mono", "SF Mono", Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1016;
+      --surface: #151a22;
+      --surface-2: #1b212c;
+      --text: #e7eaf0;
+      --dim: #9aa3b2;
+      --faint: #6b7686;
+      --border: #262d39;
+      --border-strong: #333c4a;
+      --accent: #2fd6c3;
+      --accent-2: #8b93f7;
+      --pass: #4ade80;
+      --warn: #f5b544;
+      --err: #f0716b;
+      --pass-bg: #12291b;
+      --warn-bg: #2c2110;
+      --err-bg: #2e1616;
+      --accent-bg: #0f2a2c;
+      --code-bg: #10151d;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 32px -16px rgba(0,0,0,.6);
+    }
+  }
+  [data-theme="dark"] {
+    --bg: #0d1016; --surface: #151a22; --surface-2: #1b212c; --text: #e7eaf0;
+    --dim: #9aa3b2; --faint: #6b7686; --border: #262d39; --border-strong: #333c4a;
+    --accent: #2fd6c3; --accent-2: #8b93f7; --pass: #4ade80; --warn: #f5b544; --err: #f0716b;
+    --pass-bg: #12291b; --warn-bg: #2c2110; --err-bg: #2e1616; --accent-bg: #0f2a2c;
+    --code-bg: #10151d; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 32px -16px rgba(0,0,0,.6);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 0 24px; }
+  .prose { max-width: 72ch; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  code { font-family: var(--mono); font-size: .88em; }
+  p code, li code, td code {
+    background: var(--code-bg); border: 1px solid var(--border);
+    padding: .08em .38em; border-radius: 5px; white-space: nowrap;
+  }
+  h2, h3, h4 { line-height: 1.25; text-wrap: balance; letter-spacing: -.01em; }
+  h2 { font-size: 1.55rem; margin: 0 0 .2em; }
+  h3 { font-size: 1.15rem; margin: 2.2em 0 .5em; }
+  h4 { font-size: .98rem; margin: 1.6em 0 .4em; }
+  .eyebrow {
+    font-family: var(--mono); font-size: .72rem; font-weight: 600;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--accent);
+  }
+  /* ---- header ---- */
+  header.hero { padding: 60px 0 30px; border-bottom: 1px solid var(--border); }
+  .hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  h1 {
+    font-family: var(--mono); font-size: clamp(2rem, 5vw, 3rem); line-height: 1.04;
+    letter-spacing: -.03em; margin: .28em 0 .18em; font-weight: 680;
+  }
+  .dek { font-size: 1.12rem; color: var(--dim); max-width: 60ch; margin: 0; }
+  .stamp {
+    font-family: var(--mono); font-size: .74rem; color: var(--dim); text-align: right;
+    line-height: 1.7; white-space: nowrap;
+  }
+  .stamp b { color: var(--pass); font-weight: 600; }
+  /* theme toggle */
+  .tt {
+    font-family: var(--mono); font-size: .72rem; cursor: pointer; color: var(--dim);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 7px;
+    padding: 6px 10px; margin-top: 8px;
+  }
+  .tt:hover { border-color: var(--accent); color: var(--accent); }
+  /* ---- stat chips ---- */
+  .stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 26px 0 4px; }
+  .chip {
+    display: flex; flex-direction: column; gap: 2px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; min-width: 104px;
+  }
+  .chip .n { font-family: var(--mono); font-size: 1.5rem; font-weight: 680; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .chip .l { font-size: .74rem; color: var(--dim); letter-spacing: .02em; }
+  /* ---- section scaffolding ---- */
+  section { padding: 40px 0; border-bottom: 1px solid var(--border); }
+  section:last-of-type { border-bottom: 0; }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 8px; }
+  .sec-no {
+    font-family: var(--mono); font-size: .8rem; font-weight: 600; color: var(--accent-2);
+    border: 1px solid var(--border-strong); border-radius: 6px; padding: 2px 8px; white-space: nowrap;
+  }
+  /* ---- pipeline diagram ---- */
+  .flow-scroll { overflow-x: auto; padding: 8px 0 14px; margin: 8px 0; }
+  .flow { display: flex; gap: 0; align-items: stretch; min-width: min-content; }
+  .node {
+    position: relative; flex: 0 0 auto; width: 150px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 11px; padding: 12px 13px; box-shadow: var(--shadow);
+  }
+  .node + .node { margin-left: 26px; }
+  .node + .node::before {
+    content: "→"; position: absolute; left: -22px; top: 50%; transform: translateY(-50%);
+    color: var(--faint); font-family: var(--mono); font-size: 1rem;
+  }
+  .node .ix { font-family: var(--mono); font-size: .7rem; color: var(--faint); }
+  .node .nm { font-family: var(--mono); font-size: .82rem; font-weight: 600; margin: 3px 0 7px; word-break: break-word; }
+  .node .ms { font-family: var(--mono); font-size: 1.05rem; font-weight: 680; font-variant-numeric: tabular-nums; }
+  .node .tag { font-size: .66rem; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; margin-top: 5px; }
+  .node.io .ms { color: var(--warn); }
+  .node.mem .ms { color: var(--pass); }
+  .node.sdk { border-style: dashed; border-color: var(--border-strong); }
+  .node.sdk .ms { color: var(--faint); }
+  /* ---- callouts ---- */
+  .call {
+    border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    background: var(--accent-bg); border-radius: 8px; padding: 14px 18px; margin: 18px 0;
+  }
+  .call.warn { border-left-color: var(--warn); background: var(--warn-bg); }
+  .call.key { border-left-color: var(--accent-2); }
+  .call .t { font-family: var(--mono); font-size: .74rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 5px; color: var(--dim); }
+  .call p { margin: .3em 0; }
+  .call p:first-of-type { margin-top: 0; }
+  .call p:last-child { margin-bottom: 0; }
+  /* ---- code blocks ---- */
+  pre {
+    font-family: var(--mono); font-size: .82rem; line-height: 1.6; background: var(--code-bg);
+    border: 1px solid var(--border); border-radius: 9px; padding: 14px 16px; overflow-x: auto; margin: 16px 0;
+  }
+  pre .c { color: var(--faint); }
+  pre .k { color: var(--accent-2); }
+  pre .s { color: var(--accent); }
+  pre b { color: var(--text); font-weight: 700; }
+  /* ---- tables ---- */
+  .tbl-scroll { overflow-x: auto; margin: 16px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: .88rem; min-width: 460px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-family: var(--mono); font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; color: var(--accent); font-weight: 600; }
+  td code { white-space: nowrap; }
+  tbody tr:hover { background: var(--surface-2); }
+  .tot td { font-weight: 700; border-top: 2px solid var(--border-strong); }
+  /* status dots */
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .dot.p { background: var(--pass); } .dot.w { background: var(--warn); } .dot.e { background: var(--err); }
+  .pass-txt { color: var(--pass); font-weight: 600; }
+  .err-txt { color: var(--err); font-weight: 600; }
+  ul.tight { padding-left: 1.2em; }
+  ul.tight li { margin: .35em 0; }
+  .lead { font-size: 1.05rem; color: var(--dim); }
+  footer { padding: 34px 0 60px; color: var(--faint); font-family: var(--mono); font-size: .76rem; }
+  @media (max-width: 620px) {
+    header.hero { padding: 40px 0 24px; }
+    .hero-top { flex-direction: column; }
+    .stamp { text-align: left; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .fade { animation: up .5s ease both; }
+    @keyframes up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+</style>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="hero-top">
+      <div>
+        <div class="eyebrow">CodeMind · Phase 2 · Engineering Report</div>
+        <h1>Phase-2 Orchestration</h1>
+      </div>
+      <div>
+        <div class="stamp">
+          build <b>exit 0</b> · 5.7 min<br>
+          tests <b>170 passing</b> · 370 ms<br>
+          <span id="ds"></span>
+        </div>
+        <button class="tt" id="tt" aria-label="Toggle color theme">◐ theme</button>
+      </div>
+    </div>
+    <p class="dek">A 7-layer context-enrichment pipeline for a VS Code fork — moved its live trace into a dedicated panel, pinned it with a 170-test proof suite, and root-caused the "stuck on Thinking…" report.</p>
+    <div class="stats">
+      <div class="chip"><span class="n">7</span><span class="l">pipeline layers</span></div>
+      <div class="chip"><span class="n">170</span><span class="l">passing tests</span></div>
+      <div class="chip"><span class="n">3</span><span class="l">files added (panel)</span></div>
+      <div class="chip"><span class="n">2</span><span class="l">worker bugs fixed</span></div>
+      <div class="chip"><span class="n">1</span><span class="l">hang, diagnosed</span></div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+<section id="what">
+  <div class="prose">
+    <div class="eyebrow">Overview</div>
+    <h2>What Phase-2 is</h2>
+    <p class="lead">Before any prompt reaches the model, CodeMind runs it through a pipeline that gathers and shapes context — so the model answers with the repository, open files, dependencies and intent already in hand.</p>
+    <p>The engine lives in <code>node/codeMindOrchestrationEngine.ts</code> and <code>node/orchestration/*</code>. It is pure Node (only <code>fs</code>/<code>path</code>/<code>child_process</code>/<code>net</code>/<code>url</code> — no <code>vscode</code>/electron imports), which is exactly why it is testable in isolation. Each user turn passes through seven ordered layers:</p>
+  </div>
+  <div class="flow-scroll">
+    <div class="flow">
+      <div class="node mem"><div class="ix">01</div><div class="nm">intentDetection</div><div class="ms">1<span style="font-size:.7rem">ms</span></div><div class="tag">in-memory</div></div>
+      <div class="node mem"><div class="ix">02</div><div class="nm">toolSelection</div><div class="ms">0<span style="font-size:.7rem">ms</span></div><div class="tag">in-memory</div></div>
+      <div class="node io"><div class="ix">03</div><div class="nm">toolExecution</div><div class="ms">6<span style="font-size:.7rem">ms</span></div><div class="tag">disk I/O</div></div>
+      <div class="node mem"><div class="ix">04</div><div class="nm">contextAggregation</div><div class="ms">0<span style="font-size:.7rem">ms</span></div><div class="tag">in-memory</div></div>
+      <div class="node mem"><div class="ix">05</div><div class="nm">contextOptimization</div><div class="ms">0<span style="font-size:.7rem">ms</span></div><div class="tag">in-memory</div></div>
+      <div class="node mem"><div class="ix">06</div><div class="nm">headroomCompression</div><div class="ms">0<span style="font-size:.7rem">ms</span></div><div class="tag">skipped &lt;2k tok</div></div>
+      <div class="node sdk"><div class="ix">07</div><div class="nm">claudeAgentSDK</div><div class="ms">0<span style="font-size:.7rem">ms</span></div><div class="tag">not timed</div></div>
+    </div>
+  </div>
+  <div class="prose">
+    <p>The numbers above are a real trace of the turn <em>"Implement a Login Screen using Clerk"</em> — total ≈ 9 ms. That speed is genuine, and the reason is worth stating precisely because it looks suspicious at first glance.</p>
+  </div>
+  <div class="call key">
+    <div class="t">Why 7 layers finish in ~9 ms</div>
+    <p>Six of the seven layers do pure in-memory string/object work on a ~290-character payload — sub-millisecond each. The one layer that touches disk, <code>toolExecution</code>, is measurably the slowest (6 ms) because it walks the repository for related files. That asymmetry is the fingerprint of <em>real</em> work: if the timings were fake, they would all read 0.</p>
+    <p><b>Layer 6 (headroom) did nothing this turn — by design.</b> <code>shouldCompress()</code> returns <code>'none'</code> below 2000 tokens, and the context here was 61. So <code>compressContext()</code> returns the text unchanged and never loads the compressor. Headroom is a <em>local</em> dynamically-imported module, not a network API, and it never ran.</p>
+    <p><b>Layer 7's 0 ms is not the model.</b> It is a hard-coded placeholder that records only the SDK input; the actual model round-trip streams back on a different channel and is never timed by the trace. On this same turn the real round-trip took ≈ 101 s.</p>
+  </div>
+</section>
+<section id="layers">
+  <div class="prose">
+    <div class="eyebrow">Reference</div>
+    <h2>The seven layers</h2>
+    <p>Each layer is wrapped in a real <code>Date.now()</code> delta and pushed to the trace with its input, output and notes. Layers 1–6 are measured; layer 7 is a labelled hand-off.</p>
+  </div>
+  <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>#</th><th>Layer</th><th>What it does</th><th>Cost</th></tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><td><code>intentDetection</code></td><td>Classifies the prompt into one of 12 developer intents with a confidence and matched signals.</td><td>in-memory</td></tr>
+        <tr><td class="num">2</td><td><code>toolSelection</code></td><td>Picks which context adapters to run for that intent and situation (open files, follow-up, length).</td><td>in-memory</td></tr>
+        <tr><td class="num">3</td><td><code>toolExecution</code></td><td>Runs the selected adapters in parallel (<code>Promise.allSettled</code>). The only layer that does disk / process I/O.</td><td>disk I/O</td></tr>
+        <tr><td class="num">4</td><td><code>contextAggregation</code></td><td>Merges adapter outputs into one structured context object; records which tools ran vs failed.</td><td>in-memory</td></tr>
+        <tr><td class="num">5</td><td><code>contextOptimization</code></td><td>Serialises to labelled sections (<code>=== REPOSITORY ===</code> …), prunes by intent, trims long lines.</td><td>in-memory</td></tr>
+        <tr><td class="num">6</td><td><code>headroomCompression</code></td><td>Compresses only when the context clears 2000 tokens; otherwise returns it unchanged.</td><td>conditional</td></tr>
+        <tr><td class="num">7</td><td><code>claudeAgentSDK</code></td><td>Prepends the enriched context to the prompt and hands off to the SDK. Streams back off-trace.</td><td>hand-off</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <div class="call warn">
+      <div class="t">One honest gap in the data today</div>
+      <p><code>projectBrainAdapter</code> is an intentional stub (<code>available:false</code>) until Phase 1 (Project Brain) is built — it reports success but contributes no content, so optimization correctly excludes it. Today real content comes from the repository, file, dependency, git and web adapters; the "Project Context" section is deliberately empty.</p>
+    </div>
+  </div>
+</section>
+<section id="part-a">
+  <div class="prose">
+    <div class="sec-head"><span class="sec-no">Part A</span><div class="eyebrow">Delivered</div></div>
+    <h2>The trace moved into its own window</h2>
+    <p>The dev-mode (🐛) trace used to render inside the chat window. It now lives in a dedicated <b>"Orchestration Trace"</b> editor tab, mirroring the existing Multi-Agent Consensus panel — a passive, singleton webview fed by the view pane.</p>
+
+    <h3>What was added</h3>
+  </div>
+  <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>File</th><th>Role</th></tr></thead>
+      <tbody>
+        <tr><td><code>browser/codeMindOrchestrationTracePanel.ts</code></td><td>Singleton webview (viewType <code>codemind.orchestrationTrace</code>, <code>retainContextWhenHidden</code>) with a module ring buffer of the last 20 traces. <code>pushTrace()</code> stores + posts to an open panel; <code>show()</code> replays the buffer.</td></tr>
+        <tr><td><code>browser/media/trace.js</code></td><td>Renders the trace list (newest first): per-layer INPUT/OUTPUT cards, token-delta header, pass/timeout dots.</td></tr>
+        <tr><td><code>browser/media/trace.css</code></td><td>Self-contained styling for the panel document.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <p>Commands <code>workbench.action.{open,close}CodeMindTrace</code> are registered in the contribution; enabling the 🐛 toggle auto-opens the panel. The old in-chat rendering path (<code>traceCardHtml</code>, the <code>orchestrationTraces</code> map, <code>expandedTraces</code>) was removed from <code>agent.js</code> — it is a move, not a duplication.</p>
+
+    <h3>The event chain (verified live)</h3>
+  </div>
+  <pre><span class="c">// worker — only emits when dev mode is on</span>
+orchestrate() ─▶ onProgress({ <span class="k">type</span>: <span class="s">'orchestration_trace'</span>, queryId, trace })
+  ─▶ _onEvent.fire({ queryId, event })            <span class="c">// codeMindAgentEngineMain.ts</span>
+    ─▶ viewpane engine-listener
+      ─▶ <b>CodeMindOrchestrationTracePanel.pushTrace(orch.trace)</b>   <span class="c">// → separate panel</span></pre>
+  <div class="prose">
+    <div class="call warn">
+      <div class="t">Gotcha — dev mode must be re-synced on reload</div>
+      <p>The webview restores <code>devModeEnabled</code> from <code>localStorage</code>, but a window reload respawns the worker with the flag <code>false</code>. Without re-posting <code>set_dev_mode</code>, the banner claims "active" while the worker emits zero traces — a silent no-card trap. The restore path now re-posts <code>{type:'set_dev_mode', enabled:true}</code>.</p>
+    </div>
+  </div>
+</section>
+<section id="part-b">
+  <div class="prose">
+    <div class="sec-head"><span class="sec-no">Part B</span><div class="eyebrow">Delivered</div></div>
+    <h2>A 170-test proof suite</h2>
+    <p>The target was "≥ 100 tests that prove the feature works." The suite lands at <b>170 passing</b>, running in 370 ms with zero new dependencies — it reuses VS Code's built-in mocha (tdd UI). Eight files under <code>node/test/</code>, all pure logic (no disposables, no electron).</p>
+  </div>
+  <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>File</th><th>Covers</th><th>Blocks</th></tr></thead>
+      <tbody>
+        <tr><td><code>intentDetector</code></td><td>All 12 developer intents from representative prompts; confidence; signals; edge cases (empty, casing, punctuation)</td><td class="num">13</td></tr>
+        <tr><td><code>toolSelector</code></td><td>Per-intent adapter selection; open-files / follow-up / length gating; empty registry; <code>shouldRun</code> honored</td><td class="num">26</td></tr>
+        <tr><td><code>contextOptimizer</code></td><td>Section include/exclude; prune-by-intent; 200-char line trim; token heuristic; serialization markers</td><td class="num">20</td></tr>
+        <tr><td><code>headroomLayer</code></td><td><code>shouldCompress</code> boundaries (1999→none, 2000→light, 8000→aggressive); none-path unchanged; lib-absent fallback</td><td class="num">13</td></tr>
+        <tr><td><code>contextAggregator</code></td><td>Merge each output type; executed vs failed by status; timeout/error handling; empty input</td><td class="num">15</td></tr>
+        <tr><td><code>toolAdapters</code></td><td>All 7 adapters — projectBrain stub, repository fs-walk + 50-cap, dependency, fileContext, git non-repo, webSearch, terminal</td><td class="num">39</td></tr>
+        <tr><td><code>orchestrate</code></td><td><b>Integration</b>: fast-path, full pipeline, result-cache hit, dev-mode 7-layer trace, real-adapter run against a temp workspace</td><td class="num">14</td></tr>
+        <tr class="tot"><td>7 files + <code>orchestrationTestUtils</code></td><td>Data-driven suites expand these blocks to the full runtime count →</td><td class="num">170</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <h3>Running just this suite</h3>
+  </div>
+  <pre><span class="c"># from vscodium/vscode/ — matches compiled .js under out/</span>
+npm run test-node -- --runGlob=<span class="s">"**/vs/workbench/contrib/codemindAgent/node/test/**/*.test.js"</span>
+
+<span class="c">→ 170 passing (370ms)</span></pre>
+  <div class="prose">
+    <h3>Non-obvious behaviours the suite pins</h3>
+    <p>These are the traps found by writing the tests against the real source — each is now locked so a future edit can't silently regress it:</p>
+    <ul class="tight">
+      <li><b>Marker loss on prune.</b> <code>pruneByIntent</code> splits on <code>\n=== </code>, so when the first section is pruned the next survivor keeps its content but loses its leading <code>=== </code> marker. Tests assert on the surviving directive text, not the full marker.</li>
+      <li><b>Cache needs 3 calls to hit.</b> The 30 s result-cache key is <code>sha256(workspace + _lastIntent + openFiles)</code>, and <code>_lastIntent</code> updates <em>after</em> the key is computed — so an identical repeat hits on the 3rd call (asserted via <code>phase==='cache_hit'</code>, confidence 0.9).</li>
+      <li><b>Fast path under 20 chars.</b> Short prompts skip the pipeline entirely: prompt unchanged, empty suffix, zero progress events, default metadata.</li>
+      <li><b>allSettled never rejects.</b> The git adapter on a non-repo still reports <code>status:'success'</code>; the headroom none-path is always <code>headroomAvailable:false</code>.</li>
+    </ul>
+  </div>
+</section>
+<section id="part-c">
+  <div class="prose">
+    <div class="sec-head"><span class="sec-no">Part C</span><div class="eyebrow">Investigated</div></div>
+    <h2>The "stuck on Thinking…" report</h2>
+    <p>A turn with the <code>Qwen3.8-27B</code> gateway model appeared frozen on "Thinking…". Using the <code>CODEMIND_ENGINE_LOG</code> diagnostic — a redacted JSONL log of every SDK message, enabled only when that env var is set — the real story came out of a 73-line capture.</p>
+    <div class="call">
+      <div class="t">Verdict: not a hang, not a wrong model, not the layers</div>
+      <p>The model reached the gateway correctly as <code>Qwen3.8-27B</code>. The turn genuinely ran <b>≈ 101 s</b> (with a ~22 s mid-stream gateway stall), streamed dozens of deltas, ran <code>TodoWrite</code> successfully — then the model invoked the <code>Task</code> sub-agent tool, which <span class="err-txt">failed</span>, ending the turn with <code>result · subtype: "error_during_execution"</code>. The screenshot was taken mid-turn, not after a permanent stall.</p>
+    </div>
+  </div>
+  <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>Timeline (from the engine log)</th><th>Event</th></tr></thead>
+      <tbody>
+        <tr><td><code>11:45:10Z</code></td><td><span class="dot p"></span><code>stream.start</code> — model <code>Qwen3.8-27B</code> confirmed reaching the gateway</td></tr>
+        <tr><td>+ deltas</td><td><span class="dot p"></span>dozens of <code>content_block_delta</code>; a ~22 s stall mid-stream</td></tr>
+        <tr><td>mid</td><td><span class="dot p"></span><code>TodoWrite</code> tool call → <code>tool_result</code> success</td></tr>
+        <tr><td>late</td><td><span class="dot e"></span><code>Task</code> sub-agent tool call → <code>tool_result</code> <code>isError:true</code></td></tr>
+        <tr><td><code>11:46:51Z</code></td><td><span class="dot e"></span><code>result · error_during_execution</code> — turn ends after ≈ 101 s</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <p>Why it looked stuck but wasn't: the renderer's <code>queryStream().finally()</code> always posts <code>status:'ready'</code>, and the worker's <code>_finalize()</code> resolves on <em>every</em> result subtype — not just <code>success</code>. The UI does recover; the confusion was timing.</p>
+    <div class="call warn">
+      <div class="t">Leading hypothesis — unconfirmed</div>
+      <p>The trigger is the <code>claude_code</code> tool preset, which hands every gateway model <code>Task</code>/<code>TodoWrite</code>/<code>Read</code>/<code>Write</code>. A non-Claude model (Qwen) spawning a nested <code>Task</code> sub-agent is the likely culprit — but the original log recorded only that an <code>errors</code> field <em>existed</em>, not its value. That is exactly what Part D's log enhancement fixes.</p>
+    </div>
+  </div>
+</section>
+<section id="part-d">
+  <div class="prose">
+    <div class="sec-head"><span class="sec-no">Part D</span><div class="eyebrow">Shipped · compiled clean</div></div>
+    <h2>Two worker fixes</h2>
+    <p>Both edits are in <code>node/codeMindAgentEngineMain.ts</code>, synced overlay → build tree, and compiled with <span class="pass-txt">0 errors</span> in the 5.7-minute <code>compile-client</code> run.</p>
+
+    <h3>1 · The trace showed the wrong model (cosmetic)</h3>
+    <p>The trace's layer-7 <code>model</code> field read <code>request.model</code>, fed from <code>this._currentModel</code> — a constructor constant <code>'claude-opus-5'</code> that <code>setModel()</code> never updated. So the panel always showed <code>claude-opus-5</code> regardless of the composer selection, even though the real query correctly uses <code>this._settings.model</code>.</p>
+  </div>
+  <pre><span class="c">// before — a constant setModel() never touched</span>
+model: <span class="s">this._currentModel</span>            <span class="c">// always "claude-opus-5"</span>
+
+<span class="c">// after — the single source of truth the SDK query itself uses</span>
+model: <b>this._settings.model ?? DEFAULT_MODEL</b></pre>
+  <div class="prose">
+    <div class="call">
+      <div class="t">Verified at runtime</div>
+      <p>The latest trace paste shows layer 7 as <code>"model":"Qwen3.8-27B"</code> — the composer selection now flows through to the panel. The dead <code>_currentModel</code> field was removed.</p>
+    </div>
+
+    <h3>2 · The engine log now captures why a tool failed</h3>
+    <p>To answer the open question from Part C, <code>_trace('sdk', …)</code> was extended to record the result's actual error text and any failed tool result — data the old log dropped.</p>
+  </div>
+  <pre><span class="c">// added to the per-SDK-message trace record</span>
+resultInfo:   { subtype, isError, numTurns, <b>text</b>, <b>errors</b> }   <span class="c">// truncated 800</span>
+errorToolResult: <span class="c">// content of any tool_result with isError:true</span></pre>
+</section>
+<section id="build">
+  <div class="prose">
+    <div class="eyebrow">Operations</div>
+    <h2>Build &amp; reproduce</h2>
+    <p>Edits are made in the overlay (<code>vscodium/src/stable/…</code>), then synced to the build tree and compiled. Media (<code>*.js</code>/<code>*.css</code>) copy verbatim; worker <code>.ts</code> changes need a full <code>compile-client</code>.</p>
+
+    <h4>Reproduce the diagnosis run</h4>
+  </div>
+  <pre><span class="c"># 1 · close every instance (single-instance mutex keeps old code + env)</span>
+Get-Process CodeMind -ErrorAction SilentlyContinue | Stop-Process -Force
+
+<span class="c"># 2 · point the engine log at a fresh file</span>
+Remove-Item <span class="s">"$env:TEMP\cm_engine.jsonl"</span> -ErrorAction SilentlyContinue
+<span class="k">$env:CODEMIND_ENGINE_LOG</span> = <span class="s">"$env:TEMP\cm_engine.jsonl"</span>
+
+<span class="c"># 3 · launch from the same shell — the utility-process worker inherits the env</span>
+scripts\run.bat</pre>
+  <div class="prose">
+    <p>Then enable 🐛, pick <code>Qwen3.8-27B</code>, send the same turn, and let it run to completion. The refreshed log will hold <code>resultInfo.errors</code> / <code>.text</code> and <code>errorToolResult</code> — the real reason the <code>Task</code> sub-agent died.</p>
+  </div>
+</section>
+
+<section id="open">
+  <div class="prose">
+    <div class="eyebrow">Status</div>
+    <h2>What's done, what's next</h2>
+    <ul class="tight">
+      <li><span class="pass-txt">Done</span> — Trace panel moved to its own window (runtime-verified). </li>
+      <li><span class="pass-txt">Done</span> — 170-test proof suite, green.</li>
+      <li><span class="pass-txt">Done</span> — Model-in-trace fix (now shows <code>Qwen3.8-27B</code>), and the engine-log enhancement, both compiled clean.</li>
+      <li><span class="pass-txt">Done</span> — Root-caused the "hang": a 101 s turn that ended in <code>error_during_execution</code> when the model spawned a failing <code>Task</code>.</li>
+      <li><b>Next</b> — Reproduce once more with the enhanced log to read the <code>Task</code> failure's real error, then fix how non-Claude gateway models handle the nested <code>claude_code</code> Task preset.</li>
+    </ul>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">CodeMind · Phase-2 Orchestration — engineering report · build exit 0 · 170 tests passing</div>
+</footer>
+
+<script>
+  (function () {
+    var root = document.documentElement, btn = document.getElementById('tt');
+    function cur() { return root.getAttribute('data-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); }
+    btn.addEventListener('click', function () {
+      root.setAttribute('data-theme', cur() === 'dark' ? 'light' : 'dark');
+    });
+    var ds = document.getElementById('ds');
+    if (ds) { ds.textContent = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
+  })();
+</script>

@@ -1,0 +1,190 @@
+/*---------------------------------------------------------------------------------------------
+ *  Orchestration Trace panel — self-contained styles for its own webview document.
+ *  The `.cm-trace-*` rules are ported verbatim from agent.css so a card renders identically
+ *  to how it did in the chat window; the `.trace-*` chrome (header, empty state, list) is
+ *  new and specific to this standalone panel.
+ *--------------------------------------------------------------------------------------------*/
+
+:root {
+	--cm-text-base: 13px;
+	--cm-text-sm: 11px;
+	--cm-text-xs: 10px;
+	--cm-space-1: 4px;
+	--cm-space-2: 8px;
+	--cm-space-3: 12px;
+	--cm-space-4: 16px;
+	--cm-radius-md: 10px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+	margin: 0;
+	padding: 0;
+	height: 100%;
+}
+
+body {
+	font-family: var(--vscode-font-family);
+	font-size: var(--vscode-font-size, var(--cm-text-base));
+	color: var(--vscode-foreground);
+	background: var(--vscode-editor-background);
+}
+
+#root {
+	display: flex;
+	flex-direction: column;
+	height: 100vh;
+	padding: var(--cm-space-4);
+	gap: var(--cm-space-3);
+}
+
+/* ---------- Header ---------- */
+.trace-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: var(--cm-space-3);
+	padding-bottom: var(--cm-space-3);
+	border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-input-border));
+}
+.trace-brand {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--cm-space-2);
+}
+.trace-mark {
+	color: var(--vscode-editorWarning-foreground);
+	margin-top: 2px;
+	flex-shrink: 0;
+}
+.trace-brand-text h1 {
+	margin: 0;
+	font-size: var(--cm-text-base);
+	font-weight: 600;
+}
+.trace-brand-text p {
+	margin: 2px 0 0;
+	font-size: var(--cm-text-sm);
+	color: var(--vscode-descriptionForeground);
+}
+.trace-clear {
+	flex-shrink: 0;
+	border: 1px solid var(--vscode-button-border, transparent);
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+	border-radius: var(--cm-radius-md);
+	padding: var(--cm-space-1) var(--cm-space-3);
+	font-size: var(--cm-text-sm);
+	cursor: pointer;
+}
+.trace-clear:hover { background: var(--vscode-button-secondaryHoverBackground); }
+
+/* ---------- Empty state ---------- */
+.trace-empty {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	color: var(--vscode-descriptionForeground);
+	gap: var(--cm-space-1);
+}
+.trace-empty p { margin: 0; }
+.trace-empty-hint { font-size: var(--cm-text-sm); max-width: 420px; }
+.trace-empty.hidden { display: none; }
+
+/* ---------- Trace list ---------- */
+.trace-list {
+	flex: 1;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-2);
+}
+
+/* ---------- Trace card (ported from agent.css .cm-trace-*) ---------- */
+.cm-trace-card {
+	border-left: 2px solid var(--vscode-editorWarning-foreground);
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 60%, transparent);
+	border-radius: var(--cm-radius-md);
+	padding: var(--cm-space-2) var(--cm-space-3);
+	margin-bottom: var(--cm-space-2);
+	font-size: var(--cm-text-xs);
+	cursor: pointer;
+}
+.cm-trace-summary {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-2);
+	list-style: none;
+	cursor: pointer;
+}
+.cm-trace-summary::-webkit-details-marker { display: none; }
+.cm-trace-summary::marker { content: ''; }
+.cm-trace-detail {
+	margin-top: var(--cm-space-2);
+	overflow: hidden;
+}
+.cm-trace-layer {
+	margin-bottom: var(--cm-space-2);
+}
+.cm-trace-layer-header {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-2);
+	font-size: var(--cm-text-sm);
+	font-weight: 500;
+	color: var(--vscode-foreground);
+	cursor: pointer;
+	padding: 2px 0;
+}
+.cm-trace-layer-index {
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	background: var(--vscode-badge-background);
+	color: var(--vscode-badge-foreground);
+	font-size: 9px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+}
+.cm-trace-layer-name { flex: 1; }
+.cm-trace-layer-status {
+	font-size: var(--cm-text-xs);
+	color: var(--vscode-descriptionForeground);
+}
+.cm-trace-io {
+	padding-left: 20px;
+	margin-top: 2px;
+}
+.cm-trace-io-label {
+	font-size: 9px;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	color: var(--vscode-descriptionForeground);
+	text-transform: uppercase;
+	margin-top: var(--cm-space-1);
+}
+.cm-trace-io-content {
+	font-size: var(--cm-text-xs);
+	font-family: var(--vscode-editor-font-family);
+	color: var(--vscode-foreground);
+	margin: 2px 0;
+	white-space: pre-wrap;
+	word-break: break-all;
+	max-height: 220px;
+	overflow: auto;
+	border-left: 1px solid var(--vscode-input-border);
+	padding-left: var(--cm-space-2);
+}
+.cm-trace-io-content.expanded { max-height: none; }
+.cm-layer-dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	display: inline-block;
+}

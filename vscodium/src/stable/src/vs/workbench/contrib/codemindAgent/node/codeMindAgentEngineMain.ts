@@ -689,7 +689,6 @@ class CodeMindAgentEngineMainService extends Disposable {
 		// Phase 2 tracking fields (Section 10)
 		this._workspaceFolder = process.cwd();
 		this._sessionTurnCount = 0;
-		this._currentModel = 'claude-opus-5';
 
 		// A.8 – Lazy Headroom pre-warm at worker startup
 		import('./orchestration/headroomLayer.js')
@@ -715,7 +714,6 @@ class CodeMindAgentEngineMainService extends Disposable {
 	private _toolAdapterRegistry: ToolAdapterRegistry;
 	private _workspaceFolder: string;
 	private _sessionTurnCount: number;
-	private _currentModel: string;
 
 	private _registerAdapter(adapter: any) {
 		this._toolAdapterRegistry.set(adapter.id, adapter);
@@ -774,7 +772,11 @@ class CodeMindAgentEngineMainService extends Disposable {
 			workspaceFolder: this._workspaceFolder,
 			sessionHistory: this._buildSessionHistory(),
 			isFollowUp: this._sessionTurnCount > 0,
-			model: this._currentModel,
+			// Single source of truth: the model the SDK query actually uses (:914).
+			// (Was `this._currentModel`, a constructor constant `setModel` never updated,
+			// so the trace's layer-7 model always read 'claude-opus-5' regardless of the
+			// composer selection — a cosmetic lie the user flagged in the trace panel.)
+			model: this._settings.model ?? DEFAULT_MODEL,
 			token: cancelToken,
 		};
 
@@ -1245,6 +1247,24 @@ class CodeMindAgentEngineMainService extends Disposable {
 					toolUseResult: (msg as { tool_use_result?: unknown }).tool_use_result === undefined
 						? undefined
 						: Object.keys(((msg as { tool_use_result?: object }).tool_use_result) ?? {}),
+					// A `result` with an error subtype is where a turn dies — the plain `extra`
+					// keys name `errors`/`result` but never their value, so a turn that ends in
+					// `error_during_execution` reads as a mystery. Capture the load-bearing
+					// fields (truncated; `_redact` still scrubs anything key-shaped).
+					resultInfo: msg.type === 'result'
+						? {
+							subtype: (msg as { subtype?: string }).subtype,
+							isError: (msg as { is_error?: boolean }).is_error,
+							numTurns: (msg as { num_turns?: number }).num_turns,
+							text: String((msg as { result?: unknown }).result ?? '').slice(0, 800),
+							errors: JSON.stringify((msg as { errors?: unknown }).errors ?? null).slice(0, 800),
+						}
+						: undefined,
+					// The content of an *errored* tool_result is why a tool call failed (e.g. a
+					// sub-agent Task that could not complete). Text-only, truncated.
+					errorToolResult: (((msg as { message?: { content?: unknown[] } }).message?.content ?? [])
+						.filter(b => (b as { type?: string; is_error?: boolean }).type === 'tool_result' && (b as { is_error?: boolean }).is_error)
+						.map(b => JSON.stringify((b as { content?: unknown }).content ?? '').slice(0, 800)))[0],
 				});
 				this._handleSdkMessage(msg, queryId);
 			}

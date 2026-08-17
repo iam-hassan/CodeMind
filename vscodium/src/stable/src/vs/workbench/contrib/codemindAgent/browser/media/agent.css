@@ -3433,6 +3433,7 @@ body.plan-mode .composer {
 .attachment-name {
 	overflow: hidden;
 	text-overflow: ellipsis;
+}
 
 /* B.7 – Trace card styles */
 .cm-trace-card {
@@ -3448,7 +3449,11 @@ body.plan-mode .composer {
 	display: flex;
 	align-items: center;
 	gap: var(--cm-space-2);
+	list-style: none;
+	cursor: pointer;
 }
+.cm-trace-summary::-webkit-details-marker { display: none; }
+.cm-trace-summary::marker { content: ''; }
 .cm-trace-detail {
 	margin-top: var(--cm-space-2);
 	overflow: hidden;
@@ -3502,8 +3507,8 @@ body.plan-mode .composer {
 	margin: 2px 0;
 	white-space: pre-wrap;
 	word-break: break-all;
-	max-height: 80px;
-	overflow: hidden;
+	max-height: 220px;
+	overflow: auto;
 	border-left: 1px solid var(--vscode-input-border);
 	padding-left: var(--cm-space-2);
 }
@@ -3513,9 +3518,6 @@ body.plan-mode .composer {
 	height: 7px;
 	border-radius: 50%;
 	display: inline-block;
-}
-	white-space: nowrap;
-	max-width: var(--cm-size-160px);
 }
 
 .attachment-remove {

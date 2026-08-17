@@ -456,3 +456,42 @@ registerAction2(class CloseCodeMindConsensusAction extends Action2 {
 	}
 });
 
+// Phase-2 dev-mode Orchestration Trace window — a separate editor tab (mirrors consensus)
+// that displays the 7-layer pipeline trace instead of rendering it inside the chat bubble.
+import { CodeMindOrchestrationTracePanel } from './codeMindOrchestrationTracePanel.js';
+
+registerAction2(class OpenCodeMindTraceAction extends Action2 {
+	constructor() {
+		super({
+			id: 'workbench.action.openCodeMindTrace',
+			title: {
+				value: localize('openCodeMindTrace', 'Open Orchestration Trace'),
+				original: 'Open Orchestration Trace'
+			},
+			f1: true
+		});
+	}
+
+	run(accessor: ServicesAccessor): void {
+		const instantiationService = accessor.get(IInstantiationService);
+		CodeMindOrchestrationTracePanel.open(instantiationService);
+	}
+});
+
+registerAction2(class CloseCodeMindTraceAction extends Action2 {
+	constructor() {
+		super({
+			id: 'workbench.action.closeCodeMindTrace',
+			title: {
+				value: localize('closeCodeMindTrace', 'Close Orchestration Trace'),
+				original: 'Close Orchestration Trace'
+			},
+			f1: false
+		});
+	}
+
+	run(): void {
+		CodeMindOrchestrationTracePanel.close();
+	}
+});
+

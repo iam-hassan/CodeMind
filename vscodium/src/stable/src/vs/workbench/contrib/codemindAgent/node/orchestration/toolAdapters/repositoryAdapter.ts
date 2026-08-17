@@ -63,10 +63,15 @@ export const repositoryAdapter: ToolAdapter = {
             }
         }
 
-        // 3. Project entry points (names only)
-        const entryPoints = ['index.ts', 'index.js', 'main.ts', 'main.js', 'app.ts', 'app.js', 'package.json']
-            .map(e => join(cwd, e))
-            .filter(async (p) => { try { await stat(p); return true; } catch { return false; } });
+        // 3. Project entry points (names only) — keep only those that exist.
+        // Array.filter(async …) kept every candidate (a Promise is always truthy),
+        // so non-existent entry points were reported as real. Resolve the stats first.
+        const candidates = ['index.ts', 'index.js', 'main.ts', 'main.js', 'app.ts', 'app.js', 'package.json']
+            .map(e => join(cwd, e));
+        const candidateExists = await Promise.all(candidates.map(async (p) => {
+            try { await stat(p); return true; } catch { return false; }
+        }));
+        const entryPoints = candidates.filter((_, i) => candidateExists[i]);
 
         const finalPaths = [...new Set([...paths, ...entryPoints])].slice(0, 50);
 

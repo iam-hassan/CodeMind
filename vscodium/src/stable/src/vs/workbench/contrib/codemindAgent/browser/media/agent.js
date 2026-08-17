@@ -31,102 +31,9 @@ const expandedThinking = new Set(); // message ids whose reasoning the reader ex
 // afterwards, so closing one stays closed instead of springing back open on the next tick.
 const seenTools = new Set();
 
-// B.4 – Dev mode toggle state
+// B.4 – Dev mode toggle state. The trace itself is rendered by the separate Orchestration
+// Trace window (media/trace.js); this flag only drives the 🐛 header toggle and its banner.
 let devModeEnabled = false;
-const BUG_ICON = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <circle cx="8" cy="9" r="4" stroke="currentColor" stroke-width="1.5"/>
-  <circle cx="5.5" cy="4.5" r="1.5" stroke="currentColor" stroke-width="1.2"/>
-  <circle cx="10.5" cy="4.5" r="1.5" stroke="currentColor" stroke-width="1.2"/>
-  <line x1="5.5" y1="6" x2="6.5" y2="7.5" stroke="currentColor" stroke-width="1.2"/>
-  <line x1="10.5" y1="6" x2="9.5" y2="7.5" stroke="currentColor" stroke-width="1.2"/>
-  <line x1="4" y1="9" x2="2" y2="9" stroke="currentColor" stroke-width="1.2"/>
-  <line x1="12" y1="9" x2="14" y2="9" stroke="currentColor" stroke-width="1.2"/>
-  <line x1="4.5" y1="11.5" x2="2.5" y2="13" stroke="currentColor" stroke-width="1.2"/>
-  <line x1="11.5" y1="11.5" x2="13.5" y2="13" stroke="currentColor" stroke-width="1.2"/>
-</svg>`;
-
-// B.5 – Trace card rendering
-function renderTraceCard(trace, queryId) {
-    const bubble = document.querySelector(`[data-query-id="${queryId}"]`);
-    if (!bubble) return;
-
-    const card = document.createElement('div');
-    card.className = 'cm-trace-card';
-    card.dataset.queryId = queryId;
-
-    const totalMs = trace.totalDurationMs || 0;
-    let borderColor = 'var(--vscode-testing-iconPassed)';
-    if (totalMs >= 1500 || trace.timedOut) borderColor = 'var(--vscode-errorForeground)';
-    else if (totalMs >= 500) borderColor = 'var(--vscode-editorWarning-foreground)';
-    card.style.borderLeftColor = borderColor;
-
-    const dots = (trace.layers || []).map((l, i) => {
-        let color = 'var(--vscode-testing-iconPassed)';
-        if (l.status === 'timeout' || l.status === 'error') color = 'var(--vscode-errorForeground)';
-        else if (l.durationMs >= 200) color = 'var(--vscode-editorWarning-foreground)';
-        else if (l.status === 'skipped') color = 'var(--vscode-descriptionForeground)';
-        return `<span class="cm-layer-dot" style="background:${color}" title="${l.layerName}: ${l.status} ${l.durationMs}ms"></span>`;
-    }).join('');
-
-    const reduction = trace.layers?.find(l => l.layerName === 'Headroom Compression');
-    const tokenInfo = reduction
-        ? `${reduction.inputTokenEstimate}→${reduction.outputTokenEstimate} (${Math.round((1 - reduction.compressionRatio) * 100)}%)`
-        : `${trace.layers?.[trace.layers.length - 1]?.outputTokenEstimate || 0} tokens`;
-
-    card.innerHTML = `
-        <div class="cm-trace-summary">
-            <span style="font-size:10px;">${BUG_ICON}</span>
-            <span>Orchestration · ${totalMs}ms · ${trace.intent || ''}</span>
-            <span style="display:flex;gap:2px;margin:0 8px;">${dots}</span>
-            <span style="opacity:0.6;">${tokenInfo}</span>
-        </div>
-        <div class="cm-trace-detail" hidden></div>
-    `;
-
-    const detail = card.querySelector('.cm-trace-detail');
-    (trace.layers || []).forEach((layer, idx) => {
-        const section = document.createElement('div');
-        section.className = 'cm-trace-layer';
-        section.innerHTML = `
-            <div class="cm-trace-layer-header">
-                <span class="cm-trace-layer-index">${idx + 1}</span>
-                <span class="cm-trace-layer-name">${layer.layerName}</span>
-                <span class="cm-trace-layer-status">${layer.status === 'pass' ? '✓' : layer.status === 'timeout' ? '⏱' : layer.status === 'error' ? '✗' : '—'} ${layer.durationMs}ms</span>
-            </div>
-            <div class="cm-trace-io">
-                <div class="cm-trace-io-label">INPUT</div>
-                <pre class="cm-trace-io-content">${JSON.stringify(layer.input || {}, null, 2).slice(0, 400)}</pre>
-                <div class="cm-trace-io-label">OUTPUT</div>
-                <pre class="cm-trace-io-content">${JSON.stringify(layer.output || {}, null, 2).slice(0, 400)}</pre>
-            </div>
-        `;
-        section.querySelector('.cm-trace-layer-header').addEventListener('click', () => {
-            const pre = section.querySelectorAll('.cm-trace-io-content');
-            pre.forEach(p => p.classList.toggle('expanded'));
-        });
-        detail.appendChild(section);
-    });
-
-    // Copy trace button
-    const copyBtn = document.createElement('button');
-    copyBtn.textContent = '⎘';
-    copyBtn.style.cssText = 'position:absolute;top:4px;right:8px;font-size:10px;opacity:0.6;background:none;border:none;cursor:pointer;';
-    copyBtn.onclick = (e) => {
-        e.stopImmediatePropagation();
-        navigator.clipboard.writeText(JSON.stringify(trace, null, 2));
-        copyBtn.textContent = '✓';
-        setTimeout(() => { copyBtn.textContent = '⎘'; }, 1200);
-    };
-    card.style.position = 'relative';
-    card.appendChild(copyBtn);
-
-    // Toggle expand
-    card.querySelector('.cm-trace-summary').addEventListener('click', () => {
-        detail.hidden = !detail.hidden;
-    });
-
-    bubble.parentNode.insertBefore(card, bubble);
-}
 
 /**
  * Section 6.1: which message ids have not yet played their entry animation. Only ids that
@@ -241,7 +148,7 @@ const mentionMenu = document.getElementById('mentionMenu');
 const sessionTokensEl = document.getElementById('sessionTokens');
 const settingsBtn = document.getElementById('settingsBtn');
 const historyBtn = document.getElementById('historyBtn');
-const devModeBtn = document.getElementById('devModeBtn');
+let devModeBtn = document.getElementById('devModeBtn');
 const micBtn = document.getElementById('micBtn');
 const sessionNameEl = document.getElementById('sessionName');
 const sessionTagsEl = document.getElementById('sessionTags');
@@ -399,13 +306,35 @@ function wirePanelChrome() {
 		micBtn.addEventListener('click', toggleVoiceInput);
 	}
 
-	// B.4 – Dev mode toggle button (bug icon)
+	// B.4 – Dev mode toggle button (bug icon).
+	// The button used to live inside the lazily-created, initially-hidden modal
+	// panel host (panels.js), so at module-load getElementById returned null and
+	// the click handler was never wired — dev mode could never be turned on and
+	// no trace card ever rendered. Mount it in the always-present header instead.
+	if (!devModeBtn) {
+		const headerActions = document.querySelector('.header-actions');
+		if (headerActions) {
+			const btn = document.createElement('button');
+			btn.className = 'icon-btn';
+			btn.id = 'devModeBtn';
+			btn.setAttribute('aria-label', 'Toggle dev mode');
+			btn.title = 'Dev mode (orchestration traces)';
+			btn.textContent = '🐛';
+			headerActions.insertBefore(btn, headerActions.firstChild);
+			devModeBtn = btn;
+		}
+	}
+
 	if (devModeBtn) {
 		const saved = window.localStorage?.getItem('codemind.devMode');
 		if (saved === 'true') {
 			devModeEnabled = true;
 			devModeBtn.style.color = 'var(--vscode-editorWarning-foreground)';
 			showDevModeBanner();
+			// A window reload restores our UI state from localStorage, but the worker
+			// starts fresh with dev mode off. Without re-syncing it, the banner would
+			// claim traces are active while the worker emits none — a silent no-card trap.
+			vscode.postMessage({ type: 'set_dev_mode', enabled: true });
 		}
 
 		devModeBtn.addEventListener('click', () => {
@@ -1081,11 +1010,30 @@ function handleExtensionMessage(event) {
 		case 'focusInput':
 			inputEl.focus();
 			break;
-			case 'orchestrationTrace':
-				if (devModeEnabled) {
-					renderTraceCard(msg.payload.trace, msg.payload.queryId || msg.payload.trace?.queryId);
+			case 'orchestrationProgress': {
+				// Live spinner label for the pre-query pipeline (Section 11.2). Shown to all
+				// users, not just dev mode. Only while busy, and it gives way to the model's
+				// own "Thinking…" as soon as the first token arrives (noteFirstToken).
+				const p = msg.payload || {};
+				if (!isBusy) break;
+				let label = '';
+				if (p.phase === 'cache_hit' || p.status === 'cache_hit') {
+					label = 'Using cached context…';
+				} else if (p.phase === 'intent_detection') {
+					label = (p.status === 'complete' && p.intent)
+						? `Intent: ${String(p.intent).replace(/_/g, ' ').toLowerCase()}`
+						: 'Detecting intent…';
+				} else if (p.phase === 'tool_execution') {
+					if (p.status === 'complete') {
+						label = 'Optimizing context…';
+					} else {
+						const n = p.toolId ? String(p.toolId).split(',').filter(Boolean).length : 0;
+						label = n ? `Gathering context · ${n} tool${n === 1 ? '' : 's'}…` : 'Gathering context…';
+					}
 				}
+				if (label) { statusText.textContent = label; }
 				break;
+			}
 	}
 }
 
@@ -3194,6 +3142,9 @@ function renderMessage(msg) {
 		: '';
 	const tools = scratch && scratch.tools.size ? renderTools(scratch.tools) : '';
 	const meta = isAssistant && msg.metadata && !msg.streaming ? renderMeta(msg.metadata) : '';
+	// B.2/B.3 – The dev-mode orchestration trace is now shown in a separate window
+	// (the Orchestration Trace panel, mirroring Multi-Agent Consensus), not inside the
+	// chat bubble. The workbench routes each trace there via pushTrace.
 
 	// Section 6.1: the class is only on the render that first draws a message which arrived
 	// in this session, and `settleEntering` takes it off again once the animation has run.

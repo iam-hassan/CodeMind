@@ -85,10 +85,22 @@ export function optimizeContext(
 
     const tokenEst = Math.floor(trimmed.length / 4);
 
+    // Report only sections that actually contributed content. The old
+    // Object.keys(...).filter(truthy) counted empty arrays (always truthy) and
+    // non-section bookkeeping keys (toolsExecuted/toolsFailed/collectionDurationMs),
+    // so the trace/suffix listed sections that were never serialized.
+    const sectionsIncluded: string[] = [];
+    if (aggregated.projectBrain?.available) sectionsIncluded.push('projectBrain');
+    if (aggregated.repository) sectionsIncluded.push('repository');
+    if (aggregated.currentFiles?.length) sectionsIncluded.push('currentFiles');
+    if (aggregated.dependencies?.packages?.length) sectionsIncluded.push('dependencies');
+    if (aggregated.gitState?.available) sectionsIncluded.push('gitState');
+    if (aggregated.webResults?.length) sectionsIncluded.push('webResults');
+
     return {
         serializedContext: trimmed,
         estimatedTokens: tokenEst,
-        sectionsIncluded: Object.keys(aggregated).filter(k => (aggregated as any)[k]),
+        sectionsIncluded,
         sectionsRemoved: pruned.removedSections,
         optimizationDurationMs: Date.now() - start,
     };

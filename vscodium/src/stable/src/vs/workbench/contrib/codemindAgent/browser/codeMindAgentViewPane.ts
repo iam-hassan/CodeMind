@@ -63,6 +63,7 @@ import {
 } from '../common/codeMindAgentEngineService.js';
 import { commandRegistry, ICodeMindColorTheme, ICodeMindCommandContext, ICodeMindOutputStyle, ICodeMindProjectInsights, ICodeMindSessionSummary, OUTPUT_STYLES, PERMISSION_MODES, runCompaction } from './codeMindCommands.js';
 import { CodeMindConsensusPanel } from './codeMindConsensusPanel.js';
+import { CodeMindOrchestrationTracePanel } from './codeMindOrchestrationTracePanel.js';
 import {
 	companionHatchPrompt,
 	companionIntroText,
@@ -173,6 +174,8 @@ type WebviewInbound =
 	| { type: 'deleteProviderKey'; payload: { providerId: string } }
 	| { type: 'validateProviderKey'; payload: { providerId?: string; key?: string; baseUrl?: string } }
 	| { type: 'fetchProviderModels'; payload: { providerId: string; key?: string; baseUrl?: string } }
+	/** Dev-mode toggle (bug icon): turns Phase 2 orchestration tracing on/off. */
+	| { type: 'set_dev_mode'; enabled?: boolean }
 	/**
 	 * Probe an endpoint the user has typed but not yet saved: work out whether it
 	 * speaks the Anthropic or the OpenAI wire format and list its models in one go.
@@ -337,6 +340,9 @@ type WebviewOutbound =
 	| { type: 'tool'; payload: { streamId: string; id: string; toolName: string; input?: unknown; result?: string; isError?: boolean; status: 'running' | 'done'; parentId?: string } }
 	| { type: 'toolDelta'; payload: { streamId: string; id: string; partialJson: string } }
 	| { type: 'toolProgress'; payload: { id: string; toolName: string; elapsedSeconds: number; toolUseId?: string } }
+	/** Phase 2 orchestration: per-layer trace (dev mode) and live pipeline progress. */
+	| { type: 'orchestrationTrace'; payload: { trace: unknown; queryId?: string } }
+	| { type: 'orchestrationProgress'; payload: { queryId?: string; phase?: string; status?: string; intent?: string; toolId?: string; message?: string } }
 	| {
 		type: 'permissionRequest';
 		payload: {
@@ -1116,8 +1122,16 @@ export class CodeMindAgentViewPane extends ViewPane {
 			case 'setPermissionMode':
 				this._setPermissionModeFromPanel(message.payload.mode);
 				break;
-			case 'orchestration_trace':
-				this._postMessage({ type: 'orchestrationTrace', payload: message.payload });
+			case 'set_dev_mode':
+				// The bug-icon toggle in the header. Turning dev mode on makes the worker
+				// collect a per-layer orchestration trace and emit an 'orchestration_trace'
+				// event, which we route to the separate Orchestration Trace window (mirrors
+				// the Multi-Agent Consensus window). Enabling dev mode opens that window so
+				// the trace has somewhere to land.
+				this._engineService.setDevMode(message.enabled === true);
+				if (message.enabled === true) {
+					this._commandService.executeCommand('workbench.action.openCodeMindTrace').catch(() => { });
+				}
 				break;
 			case 'draftChanged':
 				this._draft = message.payload;
@@ -3519,6 +3533,24 @@ export class CodeMindAgentViewPane extends ViewPane {
 
 		// Subscribe to engine events for this query only.
 		const eventListener = Event.filter(this._engineService.onEvent, e => e.queryId === streamId)(({ event }) => {
+			// Phase 2 orchestration events carry `type` (not `kind`) and never fall into the
+			// `kind` switch below. Progress updates drive the spinner label; the trace event
+			// (dev mode only) feeds the layer-by-layer trace card. Forward verbatim.
+			const orch = event as any;
+			if (orch.type === 'orchestration_trace') {
+				// Route the trace to the separate Orchestration Trace window rather than the
+				// chat webview. The panel buffers it (and renders live if open), so the chat
+				// bubble no longer carries the trace card.
+				CodeMindOrchestrationTracePanel.pushTrace(orch.trace);
+				return;
+			}
+			if (orch.type === 'orchestration_progress') {
+				this._postMessage({
+					type: 'orchestrationProgress',
+					payload: { queryId: streamId, phase: orch.phase, status: orch.status, intent: orch.intent, toolId: orch.toolId, message: orch.message },
+				});
+				return;
+			}
 			switch (event.kind) {
 				case 'system':
 					model = event.model;
