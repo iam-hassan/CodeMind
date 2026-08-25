@@ -54,6 +54,24 @@ done
 printf 'CodeMind: %s\n' "${BIN#"${ROOT}/"}"
 printf 'folder:   %s\n\n' "${FOLDER}"
 
+# --- Optional: local Headroom compression proxy (Layer 6) -------------------
+# Entirely optional and non-fatal. CodeMind compresses the pre-fetched context
+# through this LOCAL proxy when it is up and passes it through unchanged when it
+# is not, so the launch never depends on it and nothing leaves the machine.
+# headroom-ai ships no CLI `bin`, so this only fires if a `headroom` command is
+# separately on PATH; otherwise we print one line and carry on.
+if command -v headroom >/dev/null 2>&1; then
+	if (exec 3<>/dev/tcp/127.0.0.1/7878) 2>/dev/null; then
+		exec 3>&- 2>/dev/null || true
+		printf 'Headroom: proxy already running on :7878\n'
+	else
+		printf 'Headroom: starting local proxy on :7878\n'
+		headroom proxy --port 7878 >/dev/null 2>&1 &
+	fi
+else
+	printf 'Headroom: no `headroom` CLI on PATH — running without compression (optional).\n'
+fi
+
 # cwd has to be the checkout: the workbench loads out/ relative to it, and the
 # leading "." tells Electron which app to run — the folder follows it.
 cd "${VSCODE}" || exit 1

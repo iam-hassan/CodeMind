@@ -201,7 +201,7 @@ export class CodeMindOrchestrationTracePanel extends Disposable {
 				</span>
 				<div class="trace-brand-text">
 					<h1>Orchestration Trace</h1>
-					<p>The 7-layer context pipeline, one card per turn — inspect each layer's input and output.</p>
+					<p>Headroom compression, one card per turn — what went in, and whether the local proxy optimized it.</p>
 				</div>
 			</div>
 			<button id="clearBtn" class="trace-clear" title="Clear all traces">Clear</button>
@@ -209,7 +209,7 @@ export class CodeMindOrchestrationTracePanel extends Disposable {
 
 		<div id="emptyState" class="trace-empty">
 			<p>No traces captured yet.</p>
-			<p class="trace-empty-hint">Enable 🐛 dev mode in the CodeMind chat header, then send a message — each turn's pipeline trace appears here.</p>
+			<p class="trace-empty-hint">Enable 🐛 dev mode in the CodeMind chat header, then send a message — each turn shows its input and whether the local Headroom proxy compressed the request.</p>
 		</div>
 
 		<div id="traceList" class="trace-list"></div>

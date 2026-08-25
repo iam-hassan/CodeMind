@@ -1,963 +1,803 @@
-You are the senior systems engineer for CodeMind. You are about to implement Phase 2:
-the CodeMind Agent — an Adaptive AI Agent Orchestration Engine that sits between every
-developer request and the Claude Code SDK. This is the most architecturally significant
-feature in the entire project.
+You are the systems architect for CodeMind. You are about to do something more
+important than the Phase 2 implementation already built: you are going to replace
+the parallel reimplementation with a correct one that is wired to what claude-code
+actually does, and implement Headroom as the sole genuine new layer.
 
-Before writing a single line of code, you must read and fully understand:
+The problem with the current Phase 2 orchestration engine is this: it runs beside
+claude-code in a separate parallel pipeline, does its own intent classification,
+runs its own adapters (repository walk, git commands, file reads), builds its own
+context block, and prepends it to the prompt before the SDK call. Claude-code then
+does ALL OF THAT AGAIN internally — its own tool selection, its own file reads, its
+own git operations, its own context management. The user gets double latency and
+double work, and the "layers" in the dev trace are measuring shadow copies of real
+operations, not the real operations themselves.
 
-STEP 0 — MANDATORY PRE-READING (do not skip any item)
+The correct architecture:
 
-  0.1 Read the FYP document in full:
-        extract-text CODEMIND_PHASE2_ORCHESTRATION.md   (no — read the FYP doc)
-      The FYP document is at one of these locations — find it:
-        find . -name "CodeMind_FYP_Main_Features.docx" -o -name "*.docx" | head -5
-      Extract and read it fully before proceeding.
-      Internalize Section 4 (Feature 2 — CodeMind Agent) completely. Every step in
-      that section maps to a concrete implementation requirement below.
+  The Phase 2 layers ARE the claude-code internal operations, observed and measured.
+  The dev trace shows what claude-code ACTUALLY did — its real tool calls, its real
+  context decisions, its real token counts.
+  Headroom is the one genuinely new layer that claude-code does not have, and it runs
+  on the real context that claude-code produced, not a shadow copy.
 
-  0.2 Read the current codebase:
-        find vscodium/src/stable/src/vs/workbench/contrib/codemindAgent -type f | sort
-      Read every file. Understand the five-layer architecture:
-        common/codeMindAgentEngineService.ts    — the ICodeMindEngineEvent union
-        node/codeMindAgentEngineMain.ts         — the utility-process worker (YOUR primary target)
-        electron-sandbox/codeMindAgentEngineService.ts
-        browser/codeMindAgentViewPane.ts
-        browser/codemindAgent.contribution.ts
-      The orchestration engine lives entirely in the node worker and new files
-      alongside it. The rest of the layers stay unchanged except for new event types.
+STEP 0 — READ EVERYTHING BEFORE TOUCHING ANYTHING
 
-  0.3 Understand the Headroom TypeScript SDK:
-      The npm package is headroom-ai. Its TypeScript API provides:
-        import { compress } from 'headroom-ai'
-        compress(messages, { model: string }): Promise<CompressedMessages>
-      Run: npm info headroom-ai to get the current version.
-      Install it in the claude-code/ tree (where the SDK already lives):
-        cd claude-code && npm install headroom-ai
-      After install, read its type definitions:
-        find claude-code/node_modules/headroom-ai -name "*.d.ts" | head -10
-      Read those .d.ts files completely so you understand the exact compress() API,
-      what CompressedMessages contains, and what options are available.
-      If the package is not found, use the documented API from the README:
-        compress(messages: Message[], options: { model: string }): Promise<Message[]>
+  0.1 Read the entire claude-code/src/ tree structure:
+        find claude-code/src -type f -name "*.ts" | sort
+      Read every file that covers:
+        - Intent/routing: anything named *router*, *intent*, *classify*, *route*
+        - Tool selection: src/tools/index.ts or equivalent registry
+        - Tool execution: how tools are dispatched and run
+        - Context management: src/context/, src/memory/, anything compacting or
+          summarizing conversation history
+        - Token counting: any file that counts tokens or estimates context size
+        - The compact() function or conversation history management
+        - How the SDK's query() call is constructed before it fires
 
-  0.4 Read the Phase 3 implementation report (the document passed alongside this prompt)
-      to understand what has already been built and which APIs already exist.
+  0.2 Read the current Phase 2 implementation:
+        find vscodium/src/stable/src/vs/workbench/contrib/codemindAgent/node -type f | sort
+      Read every file Claude Code created for Phase 2.
 
-  0.5 Read the existing node/codeMindAgentEngineMain.ts in full. Understand exactly where
-      queryStream() calls query() on the Claude Agent SDK. The orchestration engine
-      intercepts the request BEFORE this call and transforms it.
+  0.3 Read node/codeMindAgentEngineMain.ts in full.
+      Find exactly where orchestrate() is called and where query() fires.
 
-Only after all five reads are complete, begin implementation.
+  0.4 Read claude-code/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
+      Find the SDKMessage types. Specifically:
+        - The 'system' message type (session init, model info)
+        - The 'assistant' message type with content blocks
+        - The 'tool_use' content block (tool name, input, id)
+        - The 'tool_result' content block (output, isError)
+        - The 'result' message (usage, cost, session_id, totalTokens)
 
----
+      The SDK already streams ALL of this information through the existing
+      ICodeMindEngineEvent channel. The dev trace layers must read FROM these
+      events, not from separate operations.
 
-ARCHITECTURE OVERVIEW
+  0.5 Read npm info headroom-ai and the headroom-ai package README.
+      Understand the compress() API: what it takes, what it returns, and
+      what "compression" means for a message array.
 
-The orchestration engine is a TypeScript module that wraps every call to the Claude
-Agent SDK's query() function. Every prompt the user sends flows through this pipeline:
-
-  Developer prompt
-       │
-       ▼
-  [1] Intent Detection Engine
-       │ classified intent category
-       ▼
-  [2] Tool Selection Engine
-       │ list of tools to execute
-       ▼
-  [3] Tool Execution Layer (parallel)
-       │ raw tool outputs
-       ▼
-  [4] Context Aggregation Engine
-       │ merged structured context object
-       ▼
-  [5] Context Optimization Engine
-       │ pruned, deduplicated, ranked context
-       ▼
-  [6] Headroom Compression Layer
-       │ token-optimized prompt
-       ▼
-  [7] Claude Agent SDK query()
-       │
-       ▼
-  Developer response (streamed as before)
-
-The orchestration engine does not change the ICodeMindEngineEvent stream contract.
-From the perspective of the renderer and the ViewPane, every event still arrives
-identically. The only difference is what goes into the Claude Agent SDK — the prompt
-is enriched and compressed before it ever reaches the model.
-
-The orchestration pipeline runs in node/codeMindOrchestrationEngine.ts (new file)
-and is called from codeMindAgentEngineMain.ts before the query() call.
+Only after reading all of the above, implement everything below.
 
 ---
 
-SECTION 1 — FILE STRUCTURE
+SECTION 1 — REMAP THE 7 LAYERS TO REAL CLAUDE-CODE OPERATIONS
 
-Create these new files in the node/ layer alongside codeMindAgentEngineMain.ts:
+This section defines what each layer ACTUALLY IS in the new architecture.
+No layer runs its own separate implementation. Each layer observes, measures,
+or extends a real operation that the claude-code SDK already performs.
 
-  node/codeMindOrchestrationEngine.ts    — the main pipeline coordinator
-  node/orchestration/intentDetector.ts   — Step 1: intent classification
-  node/orchestration/toolSelector.ts     — Step 2: tool selection
-  node/orchestration/toolExecutor.ts     — Step 3: parallel tool execution
-  node/orchestration/contextAggregator.ts — Step 4: context aggregation
-  node/orchestration/contextOptimizer.ts — Step 5: context pruning and ranking
-  node/orchestration/headroomLayer.ts    — Step 6: Headroom compression
-  node/orchestration/toolAdapters/
-    projectBrainAdapter.ts              — stub (Phase 1 not yet built)
-    repositoryAdapter.ts                — real implementation
-    dependencyAdapter.ts                — real implementation
-    gitAdapter.ts                       — real implementation
-    webSearchAdapter.ts                 — real implementation (delegates to SDK tool)
-    fileContextAdapter.ts               — real implementation
-    terminalAdapter.ts                  — real implementation
+LAYER 1 — Intent Classification (KEEP, LIGHTWEIGHT)
 
-All imports must be relative with .js extensions (the existing project convention).
-TypeScript strict mode is on. No any casts without a comment explaining why.
+  This layer stays as a fast in-memory keyword classifier, but its purpose changes.
+  It is no longer used to "select tools" (claude-code selects its own tools).
+  Its purpose is LABELING: classify the user's prompt so the dev trace can display
+  what kind of request this was, and so Headroom (Layer 6) can make smarter
+  compression decisions.
 
----
+  Input: the raw user prompt string.
+  Output: { intent, confidence, signals } — same as current intentDetector.ts.
+  Side effects: none. Does not modify the prompt. Does not select tools.
+  Timing: still < 1ms (pure in-memory). Still runs before the SDK call.
 
-SECTION 2 — STEP 1: INTENT DETECTION ENGINE
+  Keep intentDetector.ts unchanged. Keep the intent result in the trace.
+  REMOVE: all tool selection logic that uses the intent to pick adapters.
+  The intent is now metadata only.
 
-File: node/orchestration/intentDetector.ts
+LAYER 2 — Tool Registry Snapshot (NEW IMPLEMENTATION)
 
-The intent classifier analyzes every developer prompt and assigns it one of twelve
-intent categories defined in the FYP document. It must be fast (< 50ms) because it
-runs before every request. It must not make an API call to classify.
+  This layer replaces the current toolSelector.ts with something honest.
+  Instead of Claude Code's own tool registry pretending to "select" tools,
+  this layer reads what tools the claude-code SDK will make available for
+  this session and records them as the "selected" set.
 
-2.1 Intent categories (implement all twelve as a TypeScript enum):
+  Implementation:
+    Read from claude-code/src/tools/index.ts (or wherever tools are registered)
+    the canonical list of tool names available in the 'claude_code' preset.
+    This is static — it does not change per-request.
+    Record it in the trace as "available tools: [BashTool, ReadTool, WriteTool, ...]"
 
-  enum DeveloperIntent {
-    CODE_GENERATION      = 'code_generation',
-    MEMORY_RETRIEVAL     = 'memory_retrieval',
-    ARCHITECTURE         = 'architecture',
-    WEB_SEARCH           = 'web_search',
-    GIT_OPERATIONS       = 'git_operations',
-    TERMINAL_EXECUTION   = 'terminal_execution',
-    DOCUMENTATION        = 'documentation',
-    DEBUGGING            = 'debugging',
-    CODE_REVIEW          = 'code_review',
-    TESTING              = 'testing',
-    PROJECT_ANALYSIS     = 'project_analysis',
-    MULTI_TOOL_WORKFLOW  = 'multi_tool_workflow',
-  }
+  This is honest: the "selected" tools are the ones claude-code ACTUALLY uses,
+  which is the full preset, not a phantom subset your old code computed.
 
-2.2 Classifier implementation:
+  Input: the session's tool preset name ('claude_code').
+  Output: { preset: string; toolNames: string[]; count: number }
+  Timing: ~0ms (reads a static list, no I/O).
 
-  The classifier is rule-based with weighted keyword matching. It is NOT an LLM call.
-  Each intent category has a set of signal patterns (keywords, phrases, question forms)
-  with weights. The category with the highest cumulative weight wins.
+LAYER 3 — Tool Execution Observer (COMPLETELY REWRITTEN)
 
-  Implement the pattern set for every intent. Examples (expand these — do not limit
-  to just the examples listed here):
+  This is the most important change. The current toolExecutor.ts runs SEPARATE
+  filesystem/git/repo operations that duplicate what claude-code does. That is wrong.
 
-    CODE_GENERATION:
-      'implement', 'build', 'create', 'write a', 'add a', 'generate', 'make a',
-      'set up', 'integrate', 'develop', weights: high for verbs at start of sentence
+  The new Layer 3 OBSERVES the real tool calls that stream back from the SDK.
+  It does not run anything. It listens to the ICodeMindEngineEvent stream and
+  records every tool_use_start, tool_use_delta, and tool_result event.
 
-    MEMORY_RETRIEVAL:
-      'what database', 'what framework', 'what are we using', 'what did we decide',
-      'which library', 'what is our', 'remind me', 'what was the reason',
-      question words at start (what/which/when/why) + project-specific nouns
+  Implementation:
+    In codeMindAgentEngineMain.ts, in the _handleSdkMessage() function (or wherever
+    SDK events are processed), intercept every SDKMessage of type 'assistant' that
+    contains a tool_use content block:
 
-    WEB_SEARCH:
-      'search for', 'look up', 'find the latest', 'what is the current price',
-      'what does X support', 'fetch', 'get information about', 'pricing'
+      if (msg.type === 'assistant') {
+        for (const block of msg.content) {
+          if (block.type === 'tool_use') {
+            // Layer 3 data: record this real tool call
+            this._traceCollector.recordToolCall({
+              toolName: block.name,
+              toolId: block.id,
+              input: block.input,
+              startMs: Date.now()
+            });
+          }
+        }
+      }
 
-    GIT_OPERATIONS:
-      'commit', 'push', 'pull', 'branch', 'merge', 'rebase', 'stash',
-      'git', 'history', 'diff', 'blame'
+    Also intercept every 'user' message that contains a tool_result block:
+      if (msg.type === 'user') {
+        for (const block of msg.content) {
+          if (block.type === 'tool_result') {
+            this._traceCollector.recordToolResult({
+              toolId: block.tool_use_id,
+              content: block.content,
+              isError: block.is_error,
+              durationMs: Date.now() - this._traceCollector.getToolStartMs(block.tool_use_id)
+            });
+          }
+        }
+      }
 
-    TERMINAL_EXECUTION:
-      'run', 'execute', 'npm', 'yarn', 'bun', 'pnpm', 'pip', 'cargo',
-      'test', starts with a shell command pattern (word ending in .sh, /, ./), '&&'
+  The _traceCollector is a new lightweight class (TraceCollector) that accumulates
+  Layer 3 data during a streaming turn. It is created at the start of each turn
+  and finalized when the 'result' message arrives.
 
-    DEBUGGING:
-      'error', 'bug', 'fix', 'broken', 'failing', 'exception', 'crash',
-      'why is', 'why does', 'help me understand this error'
+  Layer 3 trace output shows REAL tool calls:
+    { tools: [
+        { name: 'Read', id: '...', inputSummary: 'src/auth/login.tsx',
+          durationMs: 143, status: 'success', outputTokens: 420 },
+        { name: 'Bash', id: '...', inputSummary: 'npm test --watch=false',
+          durationMs: 2840, status: 'success', outputTokens: 180 },
+        ...
+    ], totalTools: 5, totalDurationMs: 3200 }
 
-    CODE_REVIEW:
-      'review', 'check', 'is this correct', 'any issues', 'feedback',
-      'improve', 'optimize', 'refactor'
+  This is what makes the dev trace genuinely meaningful — it shows the actual
+  claude-code tools that actually ran, with actual timings and actual outputs,
+  not shadow copies.
 
-    MULTI_TOOL_WORKFLOW:
-      combines signals from 2+ other categories in the same prompt
-      detection: if the top two categories both exceed a threshold, return MULTI_TOOL
+  Delete toolExecutor.ts. Delete all tool adapter files EXCEPT:
+    projectBrainAdapter.ts (keep the stub — Phase 1 still needs this slot)
+    headroomAdapter.ts (new file, see Layer 6)
+  Delete repositoryAdapter.ts, fileContextAdapter.ts, dependencyAdapter.ts,
+  gitAdapter.ts, webSearchAdapter.ts, terminalAdapter.ts.
+  They are replaced by observation of the real tools.
 
-  Implementation approach:
-    function classifyIntent(prompt: string): IntentClassification {
-      // returns { intent: DeveloperIntent; confidence: number; signals: string[] }
+LAYER 4 — Context Aggregation Observer (REWRITTEN)
+
+  The current contextAggregator.ts merges shadow adapter outputs. Replace it with
+  an observer that aggregates real information from the SDK's 'result' message.
+
+  The SDK 'result' message contains:
+    - totalInputTokens (how much context was sent to the model)
+    - totalOutputTokens (how much the model generated)
+    - numTurns (how many tool-use rounds happened)
+    - session_id (the session this turn belongs to)
+    - total_cost_usd (cost of this turn)
+
+  Layer 4 reads these from the result message and aggregates with the
+  Layer 3 tool call data to produce:
+
+    { contextTokensSent: number;     // from result.totalInputTokens
+      toolCallsExecuted: number;     // from Layer 3 collector
+      uniqueFilesRead: string[];     // extracted from Read tool inputs in Layer 3
+      bashCommandsRun: string[];     // extracted from Bash tool inputs in Layer 3
+      webSearchesRun: number;        // count of WebSearch tool calls in Layer 3
+      sessionId: string;             // from result.session_id
+      cost: number;                  // from result.total_cost_usd
     }
-    The signals array lists which keywords triggered the classification — this is
-    used by the toolSelector to make fine-grained tool selection decisions.
 
-2.3 Fast path:
-  If the prompt starts with '/' (slash command), return TERMINAL_EXECUTION with
-  confidence 1.0 immediately. Do not run pattern matching.
-  If the prompt is a single word or fewer than 5 characters, return CODE_GENERATION
-  with confidence 0.5 (low confidence triggers a broader tool selection).
+  This gives REAL aggregated data. The "context" is what actually went to the model,
+  not what a shadow pipeline estimated.
 
-2.4 Export:
-  export function classifyIntent(prompt: string): IntentClassification
-  export interface IntentClassification { intent: DeveloperIntent; confidence: number; signals: string[] }
+  Delete contextAggregator.ts and replace with a TraceCollector method:
+    finalizeAggregation(resultMessage: SDKResultMessage): Layer4Data
 
----
+LAYER 5 — Context Optimization Observer (REWRITTEN)
 
-SECTION 3 — STEP 2: TOOL SELECTION ENGINE
+  The current contextOptimizer.ts prunes a shadow context that claude-code ignores.
+  Replace it with an observer of the SDK's own compact() behavior.
 
-File: node/orchestration/toolSelector.ts
+  Claude-code has its own context compaction (the /compact command and auto-compact).
+  When compaction happens, the SDK emits a 'system' message with type 'compacted'
+  or equivalent. Layer 5 observes this.
 
-The tool selector takes the intent classification and returns the set of tool adapters
-to execute. Selection is dynamic — no intent has a hardcoded fixed set of tools.
+  Read claude-code/src/ to find:
+    - How the SDK signals that context was compacted
+    - What data it provides about the compaction (tokens before/after)
+    - Any event in the ICodeMindEngineEvent flow related to compaction
 
-3.1 Tool adapter registry:
-
-  interface ToolAdapter {
-    id: string
-    name: string
-    execute(request: OrchestrationRequest): Promise<ToolOutput>
-    shouldRun(intent: IntentClassification, context: SelectionContext): boolean
-  }
-
-  interface SelectionContext {
-    hasOpenFiles: boolean
-    workspaceFolder: string
-    promptLength: number
-    hasImageAttachments: boolean
-    isFollowUp: boolean     // true if this is not the first turn in the session
-  }
-
-  The registry is a Map<string, ToolAdapter> populated at startup.
-
-3.2 Selection logic — implement this decision table fully:
-
-  MEMORY_RETRIEVAL:
-    Always: projectBrainAdapter (stub — returns empty context until Phase 1)
-    Never:  webSearchAdapter, repositoryAdapter (memory questions don't need code)
-
-  CODE_GENERATION (confidence >= 0.7):
-    Always: projectBrainAdapter, repositoryAdapter, fileContextAdapter
-    If signals contain dependency keywords: dependencyAdapter
-    If confidence < 0.7: add projectBrainAdapter only (unclear intent, minimal context)
-
-  ARCHITECTURE:
-    Always: projectBrainAdapter, repositoryAdapter
-    If session has history: fileContextAdapter
-
-  WEB_SEARCH:
-    Always: webSearchAdapter
-    If signals also contain project keywords: projectBrainAdapter
-
-  GIT_OPERATIONS:
-    Always: gitAdapter
-    If signals contain 'commit message' or 'PR': fileContextAdapter
-
-  TERMINAL_EXECUTION:
-    Always: terminalAdapter
-    No other adapters (terminal commands need minimal context)
-
-  DEBUGGING:
-    Always: fileContextAdapter, repositoryAdapter
-    If signals contain 'test': terminalAdapter (run tests to reproduce)
-    If signals contain library/package names: dependencyAdapter
-
-  CODE_REVIEW:
-    Always: fileContextAdapter, repositoryAdapter
-    If signals contain 'latest' or 'best practice': webSearchAdapter
-
-  TESTING:
-    Always: fileContextAdapter, dependencyAdapter, terminalAdapter
-
-  PROJECT_ANALYSIS:
-    Always: repositoryAdapter, gitAdapter, dependencyAdapter, projectBrainAdapter
-
-  MULTI_TOOL_WORKFLOW:
-    Union of tools from both top detected intents, deduplicated.
-
-3.3 Export:
-  export function selectTools(
-    intent: IntentClassification,
-    context: SelectionContext,
-    registry: ToolAdapterRegistry
-  ): ToolAdapter[]
-
----
-
-SECTION 4 — STEP 3: TOOL EXECUTION LAYER (PARALLEL)
-
-File: node/orchestration/toolExecutor.ts
-
-4.1 Parallel execution:
-
-  All selected tools run simultaneously using Promise.allSettled(). No tool waits
-  for another. The total time is max(individual tool times), not sum.
-
-  async function executeTools(
-    tools: ToolAdapter[],
-    request: OrchestrationRequest,
-    onProgress: (event: ToolProgressEvent) => void,
-    token: CancellationToken
-  ): Promise<ToolOutput[]>
-
-  Progress events are sent to the renderer via the existing ICodeMindEngineEvent
-  channel so the user sees which tools are running. Add a new event type:
-    { type: 'orchestration_progress'; phase: OrchestrationPhase; toolId: string; status: 'running' | 'complete' | 'failed'; durationMs?: number }
-
-4.2 Timeout and failure handling:
-
-  Each tool has a configurable timeout (default 5000ms, 10000ms for webSearchAdapter).
-  If a tool times out: its output is replaced with a timeout marker and execution
-  continues. The orchestration pipeline never stalls because one tool is slow.
-
-  If a tool throws: its output is an error marker. It does not affect other tools.
-  Record the error internally for the /doctor command to report.
-
-4.3 Cancellation:
-
-  Pass the CancellationToken from the outer queryStream() call to every tool.
-  If the token is cancelled, abort all in-flight tool promises immediately.
-
----
-
-SECTION 5 — STEP 4: CONTEXT AGGREGATION ENGINE
-
-File: node/orchestration/contextAggregator.ts
-
-5.1 Aggregated context structure:
-
-  interface AggregatedContext {
-    projectBrain: ProjectBrainContext | null      // from projectBrainAdapter
-    repository: RepositoryContext | null          // from repositoryAdapter
-    currentFiles: FileContext[]                   // from fileContextAdapter
-    dependencies: DependencyContext | null        // from dependencyAdapter
-    gitState: GitContext | null                   // from gitAdapter
-    webResults: WebSearchResult[]                 // from webSearchAdapter
-    terminalContext: TerminalContext | null        // from terminalAdapter
-    collectionDurationMs: number
-    toolsExecuted: string[]
-    toolsFailed: string[]
-  }
-
-5.2 Aggregation:
-
-  function aggregateToolOutputs(outputs: ToolOutput[]): AggregatedContext
-
-  Each ToolOutput carries its adapter id. Route each to the appropriate field.
-  Failed or timed-out tool outputs are recorded in toolsFailed and their
-  corresponding context field remains null.
-
-5.3 Structured context serialization:
-
-  function serializeContext(context: AggregatedContext, intent: DeveloperIntent): string
-
-  This function converts the aggregated context into a structured text block that
-  will be prepended to the prompt. The format matches the FYP document's examples
-  exactly. For CODE_GENERATION, it produces blocks like:
-
-    === PROJECT CONTEXT ===
-    Framework: Next.js 16
-    Auth: Clerk
-    Database: Supabase
-    [... from projectBrainAdapter, even if stub returns placeholders]
-
-    === REPOSITORY ===
-    Current file: src/auth/LoginController.tsx
-    Related files: src/auth/AuthProvider.tsx, src/lib/clerk.ts
-    Auth folder structure: [list]
-
-    === DEPENDENCIES ===
-    @clerk/nextjs: 4.2.1
-    [relevant packages only]
-
-    === GIT STATE ===
-    Branch: feat/auth-redesign
-    Last commit: "Add Clerk provider wrapper"
-    Modified files: [list]
-
-  For MEMORY_RETRIEVAL, serialize ONLY the projectBrain section.
-  For WEB_SEARCH, serialize web results first, then project context if present.
-  The serialization must be compact — no verbose labels, no padding, no repetition.
-
----
-
-SECTION 6 — STEP 5: CONTEXT OPTIMIZATION ENGINE
-
-File: node/orchestration/contextOptimizer.ts
-
-6.1 Optimization passes (run in this order):
-
-  Pass 1 — Deduplication:
-    Scan the serialized context for repeated information. If the same fact appears
-    in two tool outputs (e.g. the framework name appears in both projectBrain and
-    repository output), keep only the projectBrain instance and remove the duplicate.
-    Use case-insensitive exact string matching for facts; semantic deduplication is
-    out of scope for this phase.
-
-  Pass 2 — Relevance pruning:
-    Given the intent classification and its signals, remove context sections that
-    are not relevant to this specific request.
-    Rules:
-      TERMINAL_EXECUTION: remove repository, dependencies, git state
-      MEMORY_RETRIEVAL: remove repository, dependencies, git state, web results
-      WEB_SEARCH (pure): remove repository, dependencies, git state
-      All others: keep all sections
-
-  Pass 3 — File context trimming:
-    For file context, retain at most 200 lines per file.
-    If the open file is longer than 200 lines, include lines 0-100 (the top) and
-    the 50 lines surrounding the current cursor position.
-    If no cursor position is known, include lines 0-150.
-    Add a comment: "[... N lines omitted ...]" where N is the omitted line count.
-
-  Pass 4 — Conversation history condensing:
-    If the aggregated context includes conversation history from a prior turn, keep
-    only the last 3 turns verbatim. For older turns, include only: the user's
-    one-line summary (first sentence of their prompt) and the assistant's decision
-    (first sentence of its response). Prefix these with "[summarized]".
-
-6.2 Token estimation:
-  After optimization, estimate the token count of the combined context + original
-  prompt using a simple heuristic: characters / 4 (a reasonable approximation for
-  English + code text).
-
-  Return an OptimizedContext that includes:
-    serializedContext: string
-    estimatedTokens: number
-    sectionsIncluded: string[]
-    sectionsRemoved: string[]
-    optimizationDurationMs: number
-
----
-
-SECTION 7 — STEP 6: HEADROOM COMPRESSION LAYER
-
-File: node/orchestration/headroomLayer.ts
-
-7.1 Import and initialization:
-
-  The Headroom TypeScript SDK is installed in claude-code/node_modules.
-  Dynamic import it at runtime (the same pattern used for the Claude Agent SDK):
-    const headroomPath = resolveHeadroomPath()  // climb from import.meta.url
-    const { compress } = await import(headroomPath)
-
-  resolveHeadroomPath() climbs from the worker's import.meta.url the same way the
-  existing engine main resolves the SDK path — find the claude-code/ sibling and
-  resolve claude-code/node_modules/headroom-ai/dist/index.js (or whatever the
-  package's main entry is — read package.json to find it).
-
-  If the import fails for any reason (package not installed, wrong Node version):
-    log a warning: "Headroom not available — forwarding prompt unchanged"
-    return the original prompt unmodified. The orchestration pipeline must always
-    complete even without Headroom.
-
-7.2 Compression decision:
-
-  The FYP document specifies adaptive compression:
-    estimatedTokens < 2000:  no compression, forward unchanged (small prompts)
-    estimatedTokens < 8000:  light compression (compress context sections only)
-    estimatedTokens >= 8000: aggressive compression (compress everything)
-
-  Implement this as:
-    function shouldCompress(estimatedTokens: number): CompressionMode
-    type CompressionMode = 'none' | 'light' | 'aggressive'
-
-7.3 Compression implementation:
-
-  NONE: return the optimized context and prompt unchanged.
-
-  LIGHT: run Headroom compress() on the context block only, not on the user's
-         original prompt text. The user's words are preserved verbatim.
-         Reconstruct the full message as: compressedContext + '\n\n' + originalPrompt.
-
-  AGGRESSIVE: run Headroom compress() on the full combined context + prompt.
-
-  The model parameter for compress() is the model currently configured for the
-  session (read from the engine's model setting).
-
-7.4 Post-compression reporting:
-
-  Emit an orchestration event reporting:
-    originalTokens: number (estimated before compression)
-    compressedTokens: number (estimated after compression)
-    compressionMode: CompressionMode
-    headroomAvailable: boolean
-
-  This data appears in the /cost command output and in the session footer.
-
----
-
-SECTION 8 — STEP 7: TOOL ADAPTERS
-
-Implement each adapter. Read the corresponding tools in claude-code/src/tools/ before
-implementing — the adapters delegate to the same operations, not reimplementations.
-
-8.1 projectBrainAdapter.ts (STUB — Phase 1 not yet built)
-
-  Returns a hard-coded ProjectBrainContext with empty arrays and a note:
-    { available: false, reason: 'Project Brain not yet initialized (Phase 1)', facts: [], decisions: [] }
-  This stub is replaced when Phase 1 is implemented. The orchestration pipeline
-  works correctly with the stub — it just produces no project-knowledge context.
-
-8.2 repositoryAdapter.ts
-
-  Uses the existing GlobTool and GrepTool patterns (the claude-code SDK's built-in
-  tools) but runs them BEFORE the SDK call, not inside it.
-
-  Collect:
-    - The open file's path and its directory (from the request's cwd)
-    - Files in the same directory as the open file
-    - Files in any directory named 'auth/', 'api/', 'lib/', 'utils/', 'services/',
-      'components/', 'hooks/', 'store/', 'routes/' that exist in the workspace
-    - The project's entry files: index.ts, main.ts, app.ts, package.json
-      (read the names only, not full content — full content is for fileContextAdapter)
-
-  Implementation: use Node's fs/promises (readdir, stat) and glob patterns. Do not
-  shell out. Keep the list to at most 50 paths.
-
-  Returns: { openFile: string; relatedFiles: string[]; projectEntryPoints: string[] }
-
-8.3 fileContextAdapter.ts
-
-  Reads the content of the currently open files in the editor. The request object
-  carries the open file paths (obtained from the viewPane's file context — see the
-  attachment/@ mention system already built in Phase 3).
-
-  For each open file:
-    Read the file content using Node's fs/promises.readFile.
-    Apply the 200-line trimming from Section 6.3 immediately (do not return more).
-    Detect language from extension for syntax-aware labeling.
-
-  Returns: FileContext[] where each entry is { path: string; language: string; content: string; trimmed: boolean }
-
-8.4 dependencyAdapter.ts
-
-  Reads the project's package.json (or requirements.txt, Cargo.toml, go.mod depending
-  on what exists in the workspace root).
-
-  For Node projects:
-    Read package.json dependencies and devDependencies.
-    Return only packages that are relevant to the current request (filter by
-    the intent signals — if the prompt mentions 'auth', return auth-related packages;
-    if no specific signals, return all dependencies capped at 30 entries).
-
-  For non-Node projects: return an empty list with a note of the project type found.
-
-8.5 gitAdapter.ts
-
-  Runs git commands using Node's child_process.execFile with the workspace folder
-  as cwd. Use execFile, never exec (shell injection risk).
-
-  Collect:
-    git rev-parse --abbrev-ref HEAD          — current branch name
-    git log --oneline -5                     — last 5 commits (one line each)
-    git diff --stat HEAD                     — modified files summary (not full diff)
-    git status --short                       — current working tree status
-
-  Timeout: 3000ms per command. If git is not available or not a git repo, return
-  { available: false }.
-
-  Returns: GitContext with branch, recentCommits, modifiedFiles, status fields.
-
-8.6 webSearchAdapter.ts
-
-  Delegates to the Claude Agent SDK's built-in web search tool rather than
-  reimplementing search. This adapter is only executed for WEB_SEARCH intent.
-
-  Strategy: instead of running web search before the SDK call (which would require
-  a separate API call), the webSearchAdapter enriches the prompt with a directive:
-    "[Search: {extracted search terms from the prompt}]"
-  This signals to the orchestration-aware system prompt that a web search was
-  requested, and the Claude Agent SDK's own WebSearchTool will execute it.
-
-  Extract search terms from the prompt using simple keyword extraction:
-    remove common words (the, a, an, is, are, what, how, etc.)
-    extract the noun phrases and technical terms
-    return at most 5 terms joined as a search query
-
-  Returns: WebSearchResult[] = []  (empty — results come from the SDK's own tool)
-  Also returns: injectedDirective: string (the [Search: ...] text to prepend)
-
-8.7 terminalAdapter.ts
-
-  For TERMINAL_EXECUTION intent, the adapter reads the current shell environment
-  to provide context. It does NOT run commands proactively.
-
-  Collect:
-    The working directory (cwd from the request)
-    The shell type (SHELL env var or 'cmd.exe' on Windows)
-    Whether a dev server appears to be running (check if common ports 3000, 8080,
-    5173 are in use — use a fast TCP connect attempt with 100ms timeout)
-    The result of reading package.json scripts (if present)
-
-  Returns: TerminalContext with { cwd, shell, devServerRunning, availableScripts }
-
----
-
-SECTION 9 — STEP 8: ORCHESTRATION REQUEST AND MAIN COORDINATOR
-
-File: node/codeMindOrchestrationEngine.ts
-
-9.1 OrchestrationRequest interface:
-
-  interface OrchestrationRequest {
-    queryId: string
-    userPrompt: string
-    openFiles: string[]           // paths of currently open files in editor
-    workspaceFolder: string
-    sessionHistory: TurnSummary[] // the last N turns for context
-    isFollowUp: boolean
-    model: string
-    token: CancellationToken
-  }
-
-  interface TurnSummary {
-    userPromptFirstLine: string
-    assistantResponseFirstLine: string
-    turnIndex: number
-  }
-
-9.2 OrchestrationResult interface:
-
-  interface OrchestrationResult {
-    enrichedPrompt: string          // the final prompt to pass to the Claude Agent SDK
-    systemPromptSuffix: string      // appended to the SDK system prompt
-    orchestrationMetadata: {
-      intent: DeveloperIntent
-      confidence: number
-      toolsExecuted: string[]
-      toolsFailed: string[]
-      originalTokenEstimate: number
-      finalTokenEstimate: number
-      compressionMode: CompressionMode
-      headroomAvailable: boolean
-      totalDurationMs: number
+  Layer 5 records:
+    { compactionOccurred: boolean;
+      tokensBeforeCompaction?: number;
+      tokensAfterCompaction?: number;
+      compactionRatio?: number;
+      isFirstTurn: boolean;      // no compaction on first turn
+      estimatedContextUsage: number;  // % of context window used
     }
-  }
 
-9.3 Main orchestration function:
+  If no compaction signal is available from the SDK, Layer 5 records:
+    { compactionOccurred: false; estimatedContextUsage: fromLayer4.contextTokensSent / contextWindowSize }
 
-  async function orchestrate(
-    request: OrchestrationRequest,
-    registry: ToolAdapterRegistry,
-    onProgress: (event: OrchestrationProgressEvent) => void
-  ): Promise<OrchestrationResult>
+  The context window size is read from the model's known limits (200k for opus,
+  read from a static map keyed by model name).
+
+  Keep contextOptimizer.ts as a file but replace its contents entirely.
+  It now only contains the Layer 5 observer logic and no string manipulation.
+
+LAYER 6 — HEADROOM COMPRESSION (THE GENUINE NEW CONTRIBUTION)
+
+  This is the only layer that adds something claude-code does not have.
+  This is the actual academic contribution of Phase 2.
+
+  Headroom (npm package headroom-ai) is a context compression library that
+  reduces the size of message arrays while preserving semantic meaning.
+  Claude-code does NOT have this. It is genuinely new.
+
+  Where it runs:
+    Headroom runs on the CONVERSATION HISTORY before it is passed to the SDK
+    query() call. Claude-code passes the full conversation history to every turn.
+    Headroom compresses that history to reduce input tokens while preserving context.
 
   Implementation:
 
-    const t0 = Date.now()
+  6.1 Install headroom-ai in claude-code/:
+        cd claude-code && npm install headroom-ai
+      Read the installed package's TypeScript types:
+        find claude-code/node_modules/headroom-ai -name "*.d.ts" | head -5
+      Read every .d.ts file to understand the exact API.
 
-    // Step 1: Intent
-    onProgress({ phase: 'intent_detection', status: 'running' })
-    const intent = classifyIntent(request.userPrompt)
-    onProgress({ phase: 'intent_detection', status: 'complete', result: intent.intent })
+  6.2 Find where conversation history is passed to the SDK query() call in
+      codeMindAgentEngineMain.ts. The claude-code SDK's query() function accepts
+      a 'messages' or 'history' option — read the SDK types to find the exact
+      parameter name. This is the array Headroom will compress.
 
-    // Step 2: Tool selection
-    const selectionContext: SelectionContext = {
-      hasOpenFiles: request.openFiles.length > 0,
-      workspaceFolder: request.workspaceFolder,
-      promptLength: request.userPrompt.length,
-      hasImageAttachments: false,  // not yet plumbed through
-      isFollowUp: request.isFollowUp,
+  6.3 Implement headroomLayer.ts (completely rewritten):
+
+      import type { CancellationToken } from '../../../base/common/cancellation.js';
+
+      let _compress: Function | null = null;
+      let _headroomAvailable: boolean | null = null;
+
+      export async function prewarmHeadroom(): Promise<void> {
+        try {
+          const headroomPath = resolveHeadroomPath(); // climb to claude-code/node_modules/headroom-ai
+          const mod = await import(headroomPath);
+          _compress = mod.compress ?? mod.default?.compress ?? null;
+          _headroomAvailable = _compress !== null;
+        } catch {
+          _headroomAvailable = false;
+        }
+      }
+
+      export interface HeadroomResult {
+        messages: unknown[];          // the compressed message array
+        originalMessageCount: number;
+        compressedMessageCount: number;
+        estimatedTokensBefore: number;
+        estimatedTokensAfter: number;
+        compressionRatio: number;
+        mode: 'none' | 'light' | 'aggressive';
+        headroomAvailable: boolean;
+        durationMs: number;
+      }
+
+      export async function compressHistory(
+        messages: unknown[],
+        model: string,
+        token: CancellationToken
+      ): Promise<HeadroomResult> {
+        const t0 = Date.now();
+
+        // Estimate tokens before (chars/4 heuristic)
+        const jsonBefore = JSON.stringify(messages);
+        const tokensBefore = Math.ceil(jsonBefore.length / 4);
+
+        // Decision thresholds (from original spec)
+        let mode: 'none' | 'light' | 'aggressive';
+        if (tokensBefore < 2000) mode = 'none';
+        else if (tokensBefore < 8000) mode = 'light';
+        else mode = 'aggressive';
+
+        if (mode === 'none' || _headroomAvailable === false) {
+          return {
+            messages,
+            originalMessageCount: messages.length,
+            compressedMessageCount: messages.length,
+            estimatedTokensBefore: tokensBefore,
+            estimatedTokensAfter: tokensBefore,
+            compressionRatio: 1.0,
+            mode: 'none',
+            headroomAvailable: _headroomAvailable ?? false,
+            durationMs: Date.now() - t0
+          };
+        }
+
+        if (_headroomAvailable === null) await prewarmHeadroom();
+        if (!_compress) {
+          return { messages, originalMessageCount: messages.length,
+            compressedMessageCount: messages.length,
+            estimatedTokensBefore: tokensBefore, estimatedTokensAfter: tokensBefore,
+            compressionRatio: 1.0, mode: 'none', headroomAvailable: false,
+            durationMs: Date.now() - t0 };
+        }
+
+        try {
+          // For 'light': only compress messages older than the last 3
+          // For 'aggressive': compress all messages
+          const toCompress = mode === 'light'
+            ? messages.slice(0, Math.max(0, messages.length - 3))
+            : messages;
+          const preserved = mode === 'light'
+            ? messages.slice(Math.max(0, messages.length - 3))
+            : [];
+
+          const compressed = await _compress(toCompress, { model });
+          const result = [...(compressed as unknown[]), ...preserved];
+
+          const jsonAfter = JSON.stringify(result);
+          const tokensAfter = Math.ceil(jsonAfter.length / 4);
+
+          return {
+            messages: result,
+            originalMessageCount: messages.length,
+            compressedMessageCount: result.length,
+            estimatedTokensBefore: tokensBefore,
+            estimatedTokensAfter: tokensAfter,
+            compressionRatio: tokensAfter / Math.max(1, tokensBefore),
+            mode,
+            headroomAvailable: true,
+            durationMs: Date.now() - t0
+          };
+        } catch (e) {
+          // compression failed — return original unchanged
+          return {
+            messages,
+            originalMessageCount: messages.length,
+            compressedMessageCount: messages.length,
+            estimatedTokensBefore: tokensBefore,
+            estimatedTokensAfter: tokensBefore,
+            compressionRatio: 1.0,
+            mode: 'none',
+            headroomAvailable: true,  // available but failed this call
+            durationMs: Date.now() - t0
+          };
+        }
+      }
+
+  6.4 Wire Headroom into codeMindAgentEngineMain.ts:
+
+      Find where the messages/history array is passed to query(). Before that call:
+
+        const headroomResult = await compressHistory(
+          conversationHistory,  // the actual variable name — read the file
+          this._settings.model ?? DEFAULT_MODEL,
+          cancelToken
+        );
+
+        // Use the compressed history for the SDK call
+        const sdkOptions = {
+          ...existingOptions,
+          // replace the history with the compressed version:
+          messages: headroomResult.messages  // or history: headroomResult.messages
+        };
+
+        // Record Layer 6 data for the trace
+        this._traceCollector.recordHeadroom(headroomResult);
+
+  6.5 If the SDK's query() does not accept a messages/history parameter
+      (because the SDK manages its own session state internally and you cannot
+      inject a compressed history), do the following instead:
+
+      Run Headroom on the ENRICHED PROMPT STRING that gets prepended to the
+      user's message (the context block that the orchestration engine builds).
+      This is the fallback that still demonstrates Headroom compression on real
+      content even if the SDK's message array is not accessible.
+
+      In this fallback mode, compress the context string:
+        const contextAsMessage = [{ role: 'user', content: contextString }]
+        const result = await compressHistory(contextAsMessage, model, token)
+        const compressedContext = (result.messages[0] as any)?.content ?? contextString
+
+  6.6 Headroom pre-warm in the worker constructor:
+      After adapter registry initialization, add:
+        import('./orchestration/headroomLayer.js')
+          .then(m => m.prewarmHeadroom())
+          .catch(() => {});
+
+LAYER 7 — Claude Agent SDK (UNCHANGED STRUCTURALLY)
+
+  The SDK call stays exactly as it is. Layer 7 in the trace shows the INPUT
+  to the SDK call (final prompt length, model, suffix length, message count
+  before and after Headroom), and records "streaming: true" for the output.
+  The actual SDK response continues to stream through the existing event channel.
+
+  One change: record the message count AFTER Headroom compression as input:
+    { finalPromptChars, model, messagesBeforeHeadroom, messagesAfterHeadroom,
+      headroomApplied: headroomResult.mode !== 'none',
+      tokensSaved: headroomResult.estimatedTokensBefore - headroomResult.estimatedTokensAfter }
+
+---
+
+SECTION 2 — TRACECOLLETOR CLASS
+
+Create node/orchestration/traceCollector.ts:
+
+  This class accumulates real data from the SDK event stream during a single turn.
+  It replaces the ad-hoc trace building in codeMindOrchestrationEngine.ts.
+
+  interface ToolCallRecord {
+    toolName: string;
+    toolId: string;
+    inputSummary: string;    // first 200 chars of JSON.stringify(input)
+    startMs: number;
+    endMs?: number;
+    durationMs?: number;
+    status?: 'success' | 'error';
+    outputSummary?: string;  // first 200 chars of output content
+    outputTokenEstimate?: number;
+  }
+
+  export class TraceCollector {
+    private _tools = new Map<string, ToolCallRecord>();
+    private _layer1: IntentClassification | null = null;
+    private _layer2: Layer2Data | null = null;
+    private _layer6: HeadroomResult | null = null;
+    private _startMs = Date.now();
+
+    recordIntent(c: IntentClassification) { this._layer1 = c; }
+    recordToolRegistry(d: Layer2Data) { this._layer2 = d; }
+
+    recordToolCall(d: { toolName, toolId, input, startMs }) {
+      this._tools.set(d.toolId, {
+        toolName: d.toolName,
+        toolId: d.toolId,
+        inputSummary: JSON.stringify(d.input).slice(0, 200),
+        startMs: d.startMs
+      });
     }
-    const selectedTools = selectTools(intent, selectionContext, registry)
 
-    // Step 3: Parallel execution
-    onProgress({ phase: 'tool_execution', status: 'running', tools: selectedTools.map(t => t.id) })
-    const toolOutputs = await executeTools(selectedTools, request, onProgress, request.token)
-    onProgress({ phase: 'tool_execution', status: 'complete' })
+    recordToolResult(d: { toolId, content, isError, durationMs }) {
+      const rec = this._tools.get(d.toolId);
+      if (!rec) return;
+      rec.endMs = Date.now();
+      rec.durationMs = d.durationMs;
+      rec.status = d.isError ? 'error' : 'success';
+      rec.outputSummary = JSON.stringify(d.content).slice(0, 200);
+      rec.outputTokenEstimate = Math.ceil(JSON.stringify(d.content).length / 4);
+    }
 
-    // Step 4: Aggregation
-    const aggregated = aggregateToolOutputs(toolOutputs)
-    const serialized = serializeContext(aggregated, intent.intent)
+    getToolStartMs(toolId: string): number {
+      return this._tools.get(toolId)?.startMs ?? Date.now();
+    }
 
-    // Step 5: Optimization
-    const optimized = optimizeContext(serialized, request.userPrompt, intent)
+    recordHeadroom(r: HeadroomResult) { this._layer6 = r; }
 
-    // Step 6: Headroom
-    const compressed = await compressContext(optimized, request.model, request.token)
+    finalize(resultMsg: SDKResultMessage, queryId: string, devMode: boolean): OrchestrationTrace | null {
+      if (!devMode) return null;  // no trace data collected when dev mode is off
 
-    // Build final prompt
-    const enrichedPrompt = compressed.context
-      ? `${compressed.context}\n\n---\n\n${request.userPrompt}`
-      : request.userPrompt
+      const tools = [...this._tools.values()];
+      const layer3: Layer3Data = {
+        tools: tools.map(t => ({
+          name: t.toolName, id: t.toolId,
+          inputSummary: t.inputSummary,
+          durationMs: t.durationMs ?? 0,
+          status: t.status ?? 'success',
+          outputSummary: t.outputSummary ?? '',
+          outputTokenEstimate: t.outputTokenEstimate ?? 0
+        })),
+        totalTools: tools.length,
+        totalDurationMs: tools.reduce((s, t) => s + (t.durationMs ?? 0), 0)
+      };
 
-    const systemPromptSuffix = buildSystemPromptSuffix(intent, aggregated)
+      const uniqueFiles = tools
+        .filter(t => t.toolName === 'Read')
+        .map(t => { try { return JSON.parse(t.inputSummary)?.file_path ?? ''; } catch { return ''; } })
+        .filter(Boolean);
+
+      const layer4: Layer4Data = {
+        contextTokensSent: resultMsg.usage?.input_tokens ?? 0,
+        toolCallsExecuted: tools.length,
+        uniqueFilesRead: uniqueFiles,
+        bashCommandsRun: tools.filter(t => t.toolName === 'Bash')
+          .map(t => { try { return JSON.parse(t.inputSummary)?.command?.slice(0, 80) ?? ''; } catch { return ''; } }),
+        webSearchesRun: tools.filter(t => t.toolName.toLowerCase().includes('search')).length,
+        sessionId: resultMsg.session_id ?? '',
+        cost: resultMsg.total_cost_usd ?? 0
+      };
+
+      const layer5: Layer5Data = {
+        compactionOccurred: false,  // updated if compaction event observed
+        estimatedContextUsage: (resultMsg.usage?.input_tokens ?? 0) / getContextWindowSize(/* model */),
+        isFirstTurn: false
+      };
+
+      return {
+        queryId,
+        timestamp: this._startMs,
+        totalDurationMs: Date.now() - this._startMs,
+        cacheHit: false,
+        timedOut: false,
+        layers: [
+          buildLayerTrace('intentDetection', 1, this._layer1?.input, this._layer1, this._layer1 ? 'pass' : 'skipped', 1),
+          buildLayerTrace('toolRegistry', 2, this._layer2?.input, this._layer2, 'pass', 0),
+          buildLayerTrace('toolExecution', 3, { selectedTools: this._layer2?.toolNames }, layer3, 'pass', layer3.totalDurationMs),
+          buildLayerTrace('contextAggregation', 4, { toolCount: tools.length }, layer4, 'pass', 0),
+          buildLayerTrace('contextOptimization', 5, { inputTokens: layer4.contextTokensSent }, layer5, 'pass', 0),
+          buildLayerTrace('headroomCompression', 6, this._layer6 ? { tokensBefore: this._layer6.estimatedTokensBefore, mode: this._layer6.mode } : { skipped: true }, this._layer6 ?? { mode: 'none', headroomAvailable: false }, this._layer6 ? 'pass' : 'skipped', this._layer6?.durationMs ?? 0),
+          buildLayerTrace('claudeAgentSDK', 7, { model: resultMsg.model, messagesAfterHeadroom: this._layer6?.compressedMessageCount }, { streaming: true }, 'pass', 0),
+        ]
+      };
+    }
+  }
+
+---
+
+SECTION 3 — REWIRE codeMindOrchestrationEngine.ts
+
+Replace the body of orchestrate() with the new wiring.
+The function signature stays the same. The orchestration events stay the same.
+
+  export async function orchestrate(
+    request: OrchestrationRequest,
+    _registry: ToolAdapterRegistry,  // registry is kept for API compatibility but no adapters run
+    onProgress: (e: any) => void
+  ): Promise<OrchestrationResult> {
+    const t0 = Date.now();
+
+    // Fast paths (unchanged from original)
+    if (request.userPrompt.trim().length < 20) { return fastPathResult(request); }
+
+    // Layer 1: Intent (still runs, is still labeling metadata)
+    onProgress({ type:'orchestration_progress', queryId:request.queryId,
+                  phase:'intent_detection', status:'running' });
+    const intent = classifyIntent(request.userPrompt);
+
+    // Layer 2: Tool registry snapshot
+    const toolRegistry = getClaudeCodeToolRegistry();  // reads static tool list from SDK
+
+    // Layers 3-5 are OBSERVED during the SDK stream, not run here.
+    // The TraceCollector in the engine main accumulates them.
+    // We just emit progress so the UI updates.
+    onProgress({ type:'orchestration_progress', queryId:request.queryId,
+                  phase:'complete', status:'complete',
+                  intent: intent.intent,
+                  durationMs: Date.now() - t0 });
+
+    // The enriched prompt is now ONLY the intent suffix, not a shadow context block.
+    // Real context comes from claude-code's own tools during the turn.
+    const systemPromptSuffix = buildMinimalSuffix(intent);
 
     return {
-      enrichedPrompt,
+      enrichedPrompt: request.userPrompt,    // unchanged — no shadow context prepended
       systemPromptSuffix,
       orchestrationMetadata: {
         intent: intent.intent,
         confidence: intent.confidence,
-        toolsExecuted: aggregated.toolsExecuted,
-        toolsFailed: aggregated.toolsFailed,
-        originalTokenEstimate: optimized.estimatedTokens,
-        finalTokenEstimate: compressed.estimatedTokens,
-        compressionMode: compressed.mode,
-        headroomAvailable: compressed.headroomAvailable,
-        totalDurationMs: Date.now() - t0,
+        toolsExecuted: [],       // filled in by TraceCollector after the turn
+        toolsFailed: [],
+        originalTokenEstimate: 0,
+        finalTokenEstimate: 0,
+        compressionMode: 'none', // filled in by Headroom layer
+        headroomAvailable: false,
+        totalDurationMs: Date.now() - t0
       }
-    }
+    };
+  }
 
-9.4 buildSystemPromptSuffix:
-
-  Appends a short, structured note to the Claude Agent SDK's system prompt so that
-  Claude understands what context has been pre-fetched:
-
-    function buildSystemPromptSuffix(intent: IntentClassification, context: AggregatedContext): string
-
-  The suffix follows this template (adapt per intent):
-
-    "\n\n[CODEMIND ORCHESTRATION]\nDetected intent: {intent}\nPre-fetched context: {list of sections included}\nProject Brain: {available|stub}\nDo not ask for information already in the context above."
-
-  Keep it under 100 tokens. Do not repeat the context content — just label what was injected.
+  buildMinimalSuffix(intent):
+    A short system prompt note, under 50 tokens:
+      "\n\n[CodeMind] Detected intent: {intent}"
+    This is the ONLY thing the orchestration engine adds to the prompt.
+    Real context enrichment is done by claude-code's own tools.
 
 ---
 
-SECTION 10 — STEP 9: INTEGRATION INTO codeMindAgentEngineMain.ts
+SECTION 4 — DEV TRACE PANEL UPDATE
 
-10.1 Modify codeMindAgentEngineMain.ts to call the orchestration engine:
+The trace panel now shows REAL data from claude-code operations.
+Update trace.js to display what each layer ACTUALLY represents.
 
-  In the _runStream() method (or wherever queryStream() calls query()):
+4.1 Layer labels in the trace panel (update the header and description for each):
 
-    BEFORE:
-      const stream = query({ prompt: request.prompt, options: { ... } })
+  Layer 1 — Intent Classification
+    Label: "Intent · [intent] · [confidence]%"
+    Description: "Rule-based keyword classifier — 12 developer intent categories"
+    Shows: matched signals (the keywords that fired), confidence score
+    Source: intentDetector.ts (your code)
 
-    AFTER:
-      const orchestrationRequest: OrchestrationRequest = {
-        queryId: request.queryId,
-        userPrompt: request.prompt,
-        openFiles: request.attachedFiles ?? [],
-        workspaceFolder: this._workspaceFolder ?? process.cwd(),
-        sessionHistory: this._buildSessionHistory(),
-        isFollowUp: this._sessionTurnCount > 0,
-        model: this._model,
-        token: cancelToken,
-      }
+  Layer 2 — Tool Registry
+    Label: "Tool Registry · [n] tools available"
+    Description: "Claude Code's native tool preset — tools available to the model"
+    Shows: full list of tool names from the 'claude_code' preset
+    Source: SDK preset, observed by your code
 
-      const orchestrated = await orchestrate(
-        orchestrationRequest,
-        this._toolAdapterRegistry,
-        (event) => this._emitOrchestrationEvent(event)
-      )
+  Layer 3 — Tool Execution (REAL)
+    Label: "Tools · [n] calls · [total_ms]ms"
+    Description: "Actual claude-code tool calls observed during this turn"
+    Shows: each real tool call with name, input summary, duration, status
+    Format per tool:
+      ✓ Read              src/auth/LoginController.tsx      143ms   420 tok
+      ✓ Bash              npm test --watch=false            2840ms  180 tok
+      ✗ Write             /tmp/test.ts                       12ms   [error]
+    Source: SDK stream events (your observer)
 
-      const stream = query({
-        prompt: orchestrated.enrichedPrompt,
-        options: {
-          ...existingOptions,
-          systemPrompt: (existingOptions.systemPrompt ?? '') + orchestrated.systemPromptSuffix,
-        }
-      })
+  Layer 4 — Context Aggregation (REAL)
+    Label: "Context · [n] tokens sent to model · [n] tools"
+    Description: "Actual context the model received — from SDK result message"
+    Shows:
+      Tokens sent: [n] (from result.usage.input_tokens)
+      Files read: [list of unique files from Read tool calls]
+      Bash commands: [list of commands run]
+      Web searches: [n]
+      Session: [session_id truncated to 8 chars]
+      Cost: $[cost]
+    Source: SDK result message (your observer)
 
-10.2 Initialize the ToolAdapterRegistry in the engine constructor:
+  Layer 5 — Context Optimization
+    Label: "Context Usage · [n]% of [model] window"
+    Description: "Context window utilization — compaction by claude-code if triggered"
+    Shows:
+      Context window: 200k tokens (or actual for model)
+      Tokens used: [n] ([percent]%)
+      Compaction: [occurred | not triggered]
+    Source: SDK events (your observer)
 
-  Create and register all adapters on startup. The registry is a singleton
-  within the worker process. Each adapter is stateless between calls.
+  Layer 6 — Headroom Compression (THE NEW THING)
+    Label: "Headroom · [mode] · [before]→[after] tok ([saving]% saved)"
+    OR: "Headroom · skipped (<2k tokens)"
+    OR: "Headroom · unavailable (package not installed)"
+    Description: "Context compression using headroom-ai — CodeMind's unique contribution"
+    Shows:
+      Mode: none | light | aggressive
+      Messages before: [n]
+      Messages after: [n]
+      Tokens before: [n]
+      Tokens after: [n]
+      Compression ratio: [x]×
+      Duration: [n]ms
+      Library: headroom-ai (local npm, not a network API)
+    When mode is 'none': explain WHY (below threshold, show threshold)
+    Source: your headroomLayer.ts
 
-10.3 _buildSessionHistory():
+  Layer 7 — Claude Agent SDK
+    Label: "SDK · [model] · streaming"
+    Description: "Claude Agent SDK query — the model turn (timed separately)"
+    Shows:
+      Model: [actual model name from settings]
+      Final prompt: [n] chars
+      Messages after Headroom: [n]
+      Tokens saved by Headroom: [n] (if Headroom ran)
+      Round-trip time: measured from first token to result event
+    Note: "Round-trip time is NOT part of orchestration — it is the model's response time"
+    Source: your observer, SDK events
 
-  Return the last 3 TurnSummary objects from the session's message history.
-  If fewer than 3 turns exist, return what is available.
-  Each TurnSummary's firstLine is the first 80 characters of the turn's content.
+4.2 Add round-trip timing to Layer 7:
 
-10.4 _emitOrchestrationEvent():
+  In codeMindAgentEngineMain.ts, record the time of the first text delta:
+    In _handleSdkMessage, when the first 'text' content block delta arrives,
+    set this._traceCollector.firstTokenMs = Date.now() (if not already set).
+    In finalize(), include in Layer 7:
+      roundTripMs: resultMs - firstTokenMs (the actual model latency)
 
-  Emit a new ICodeMindEngineEvent type:
-    { type: 'orchestration_progress'; queryId: string; phase: OrchestrationPhase; status: 'running' | 'complete' | 'failed'; toolId?: string; intent?: DeveloperIntent; durationMs?: number }
+4.3 Update the trace panel header:
 
-  Add this type to the ICodeMindEngineEvent union in common/codeMindAgentEngineService.ts.
+  The summary line at the top of the collapsed card now reads:
+    "Orchestration · [n]ms · [intent] · [n] tools ran · Headroom: [mode]"
 
-10.5 Track workspace folder:
-
-  The engine already has access to the CWD via process.cwd() or the request options.
-  Read it when the first session starts and store it as this._workspaceFolder.
-  If the workspace folder changes (detected via a new queryStream call with a
-  different cwd), update the stored value.
-
----
-
-SECTION 11 — ORCHESTRATION VISIBILITY IN THE UI
-
-The orchestration pipeline runs invisibly to the user by default. Add minimal,
-non-intrusive visibility.
-
-11.1 Intent badge in the message header:
-
-  When a new assistant message starts (after a text or thinking event), show
-  a small badge in the message bubble's top-right corner indicating what the
-  orchestration detected:
-
-    "Code generation · 3 tools"  — for CODE_GENERATION with 3 adapters
-    "Memory retrieval"           — for MEMORY_RETRIEVAL
-    "Web + Code"                 — for MULTI_TOOL_WORKFLOW
-
-  The badge: 10px, var(--vscode-descriptionForeground) at 50% opacity.
-  It fades in when the orchestration_progress event with phase 'complete' arrives.
-  No badge for pure TERMINAL_EXECUTION (it's obvious what's happening).
-
-11.2 Tool execution indicator:
-
-  While the orchestration pipeline is running (between the user pressing Enter and
-  the first text event arriving), show a subtle animation in the spinner area:
-
-    Instead of "Thinking..." show "Preparing context..."
-    When tool execution starts: "Running [n] tools..."
-    When tool execution completes and Headroom runs: "Optimizing prompt..."
-    When the Claude Agent SDK stream starts: revert to "Thinking..."
-
-  Implement this by handling the orchestration_progress events in agent.js.
-  The existing spinner infrastructure handles the display — just update the label.
-
-11.3 /orchestration command (slash command):
-
-  Add a new /orchestration command to the CommandRegistry that shows the
-  orchestration metadata from the last request:
-
-    Intent: code_generation (87% confidence)
-    Tools executed: repository, fileContext, dependency (3 tools, 142ms)
-    Tools failed: none
-    Token estimate: 4,200 → 2,800 after optimization (Headroom: light compression)
-    Total overhead: 156ms
-
-  This command is for power users and FYP demonstration. It reads the stored
-  orchestrationMetadata from the last completed turn.
+  The 7 colored dots:
+    Layer 1: always green (intent classification never fails)
+    Layer 2: always green (static tool list)
+    Layer 3: green if all tools succeeded, yellow if any errored, red if all errored
+    Layer 4: green always (observation never fails)
+    Layer 5: green always
+    Layer 6: green if compression ran, grey if skipped, red if unavailable
+    Layer 7: always blue (streaming, timing shown separately)
 
 ---
 
-SECTION 12 — /cost COMMAND ENHANCEMENT
+SECTION 5 — CLEAN UP THE DEAD CODE
 
-The existing /cost command shows session cost and duration. Enhance it to also
-show orchestration savings over the session:
+5.1 Delete these files (they ran shadow operations that are now replaced by observation):
+    node/orchestration/toolExecutor.ts
+    node/orchestration/contextAggregator.ts
+    node/orchestration/toolAdapters/repositoryAdapter.ts
+    node/orchestration/toolAdapters/fileContextAdapter.ts
+    node/orchestration/toolAdapters/dependencyAdapter.ts
+    node/orchestration/toolAdapters/gitAdapter.ts
+    node/orchestration/toolAdapters/webSearchAdapter.ts
+    node/orchestration/toolAdapters/terminalAdapter.ts
 
-  Session cost: $0.0412
-  Duration: 28.4s (5 turns)
-  ─────────────────────────────
-  Orchestration:
-    Tokens sent to model: 18,400
-    Tokens saved by optimization: 3,200 (17%)
-    Tokens saved by Headroom: 4,100 (22%)
-    Combined reduction: 7,300 tokens (39%)
-    Headroom compression mode: light (avg)
+5.2 Keep:
+    node/orchestration/types.ts (update with new Layer2-7 data types)
+    node/orchestration/intentDetector.ts (unchanged)
+    node/orchestration/toolSelector.ts (delete the selection logic, keep as toolRegistry.ts)
+    node/orchestration/headroomLayer.ts (completely rewritten as Section 1 Layer 6)
+    node/orchestration/contextOptimizer.ts (rewritten as Section 1 Layer 5 observer)
+    node/orchestration/toolAdapters/projectBrainAdapter.ts (keep stub for Phase 1)
+    node/orchestration/traceCollector.ts (new file, Section 2)
 
-Track these cumulative values in the engine's session state and expose them via
-a new getOrchestrationStats() method on ICodeMindAgentEngineService.
-
----
-
-SECTION 13 — SETTINGS INTEGRATION
-
-13.1 Add to the /config settings panel:
-
-  Orchestration section:
-    Enable orchestration: toggle (default on)
-    Headroom compression: select (none / auto / always)
-    Tool timeout: number input, default 5000ms
-    Max context tokens before Headroom: number input, default 2000
-
-13.2 Wire settings to the engine:
-
-  Read these settings at the start of each queryStream() call.
-  If "Enable orchestration" is off, skip the entire orchestration pipeline and
-  call the Claude Agent SDK directly with the original prompt (the pre-Phase-2 behavior).
-
-  This is the escape hatch that lets users disable the feature if they want raw behavior.
+5.3 In codeMindOrchestrationEngine.ts:
+    Remove all imports of deleted adapters.
+    Remove toolExecutor import.
+    Remove contextAggregator import.
+    Keep intentDetector import.
+    Add traceCollector import.
+    Update orchestrate() per Section 3.
 
 ---
 
-SECTION 14 — IMPLEMENTATION ORDER
+SECTION 6 — IMPLEMENTATION ORDER
 
-Implement in this exact order. After each step, verify with tsgo --noEmit before proceeding.
+  Step 1: Install headroom-ai in claude-code/ and verify types.
+          npm info headroom-ai, then npm install, then read .d.ts files.
+          tsgo --noEmit after.
 
-  Step 1: Install headroom-ai in claude-code/ and verify the TypeScript types are readable.
-          If installation fails, document why and proceed with the stub (Section 7.1 pattern).
+  Step 2: Read the SDK (sdk.mjs) for message types and query() signature.
+          Document: does query() accept messages/history as a parameter?
+          Document: what does the 'result' SDKMessage contain (usage, cost, etc.)?
+          Document: is there a compaction event in the SDK stream?
 
-  Step 2: Define all types and interfaces (OrchestrationRequest, OrchestrationResult,
-          IntentClassification, AggregatedContext, etc.) in a new
-          node/orchestration/types.ts file. No logic yet — just types.
-          tsgo --noEmit must pass after this step.
+  Step 3: Create traceCollector.ts per Section 2. tsgo --noEmit.
 
-  Step 3: Implement intentDetector.ts. Write a quick self-test at the bottom
-          (commented out, behind a DEBUG flag) that verifies 5 example prompts
-          classify correctly. tsgo --noEmit.
-
-  Step 4: Implement toolSelector.ts. tsgo --noEmit.
-
-  Step 5: Implement all tool adapters (Section 8). Start with the stub (8.1),
-          then gitAdapter (8.5) since it is self-contained, then repositoryAdapter (8.2),
-          fileContextAdapter (8.3), dependencyAdapter (8.4), webSearchAdapter (8.6),
-          terminalAdapter (8.7). tsgo --noEmit after each.
-
-  Step 6: Implement toolExecutor.ts with Promise.allSettled and timeout logic.
+  Step 4: Rewrite headroomLayer.ts per Section 1 Layer 6.
+          Wire it into codeMindAgentEngineMain.ts.
           tsgo --noEmit.
 
-  Step 7: Implement contextAggregator.ts and contextOptimizer.ts. tsgo --noEmit.
+  Step 5: Add SDK event observation to codeMindAgentEngineMain.ts:
+          tool_use interception (Layer 3), result message reading (Layer 4).
+          Connect TraceCollector.
+          tsgo --noEmit.
 
-  Step 8: Implement headroomLayer.ts. Test the import path resolution logic
-          with a console.log probe (temporary, remove after). tsgo --noEmit.
+  Step 6: Rewrite codeMindOrchestrationEngine.ts per Section 3.
+          Delete the dead adapter files.
+          tsgo --noEmit.
 
-  Step 9: Implement codeMindOrchestrationEngine.ts (the coordinator). tsgo --noEmit.
+  Step 7: Update trace.js per Section 4 (new layer labels, real data rendering).
+          node --check trace.js.
 
-  Step 10: Integrate into codeMindAgentEngineMain.ts (Section 10). Add the new
-           event type to common/codeMindAgentEngineService.ts.
-           tsgo --noEmit. gulp compile-client. Launch and run a test prompt.
+  Step 8: gulp compile-client. Fix any errors.
 
-  Step 11: Add UI changes (Section 11) — intent badge, spinner labels, /orchestration command.
-           node --check on agent.js. tsgo --noEmit. Verify visually.
+  Step 9: Launch with ELECTRON_ENABLE_LOGGING=1. Enable dev mode.
+          Send 3 test prompts:
+            "Implement a login screen"          — expect Layer 3 to show Read/Write/Bash calls
+            "What files are in src/auth/"       — expect Layer 3 to show Glob/Read calls
+            "Search for latest Clerk pricing"   — expect Layer 3 to show WebSearch call
+          Verify each trace card shows real data in Layers 3, 4, 5.
+          Verify Layer 6 shows Headroom data (mode and compression if > 2k tokens).
 
-  Step 12: Add /cost enhancement (Section 12) and settings integration (Section 13).
-           tsgo --noEmit. gulp compile-client.
+  Step 10: Force Headroom to actually run by building up a long conversation
+           (10+ turns) until context exceeds 2000 tokens.
+           Verify Layer 6 switches from 'none' to 'light'.
+           Verify token counts before and after Headroom are different.
+           Verify the SDK still receives the prompt and produces a correct response.
 
-  Step 13: Full end-to-end test (Section 15).
-
----
-
-SECTION 15 — END-TO-END VERIFICATION
-
-After Step 12, run these manual tests and record PASS/FAIL for each:
-
-  O-001: Send "What database are we using?" — intent should classify as MEMORY_RETRIEVAL,
-         only projectBrainAdapter should run, /orchestration shows 1 tool.
-
-  O-002: Send "Implement a login screen" — intent CODE_GENERATION, at least 3 tools run,
-         context block appears in the enriched prompt, response is architecture-aware.
-
-  O-003: Send "Search for the latest Next.js pricing" — intent WEB_SEARCH, web search
-         directive injected, SDK's own web search tool fires.
-
-  O-004: Send "Run npm test" — intent TERMINAL_EXECUTION, minimal tools run, no repo
-         context injected.
-
-  O-005: Send "Why is my auth failing? Check the error" — intent DEBUGGING,
-         fileContextAdapter and repositoryAdapter run.
-
-  O-006: Send a prompt with "Build auth using Clerk and also check latest Clerk pricing" —
-         intent MULTI_TOOL_WORKFLOW, both CODE_GENERATION and WEB_SEARCH tools selected.
-
-  O-007: Disable orchestration in settings, send a prompt — verify raw SDK behavior,
-         no "Preparing context..." label, no intent badge.
-
-  O-008: Check /cost after 3 turns — verify orchestration savings are shown.
-
-  O-009: Run /orchestration — verify last turn's metadata is shown correctly.
-
-  O-010: Send a very short prompt (under 5 chars) — verify low-confidence fallback,
-         no crash, minimal tool selection.
+  Step 11: Write CODEMIND_PHASE2_FINAL_REPORT.md covering:
+           Files deleted (the shadow pipeline)
+           Files rewritten (the observers)
+           Files new (traceCollector.ts, headroomLayer.ts rewrite)
+           Headroom: verified working / not yet triggered / unavailable
+           Test suite status (do the 170 tests still pass? update any that test
+           deleted adapters)
+           The architectural truth: what Phase 2 actually is now
 
 ---
 
-CONSTRAINTS (absolute, no exceptions)
+CONSTRAINTS
 
-  Import paths: always relative with .js extensions.
-  No external npm packages in the vscode/ tree. headroom-ai installs in claude-code/ only.
-  The Headroom import is a dynamic import() at runtime, not a static import.
-  All tool adapter file I/O uses Node's fs/promises — no synchronous file reads.
-  All shell commands in gitAdapter use execFile with an explicit args array — never exec().
-  The orchestration pipeline must complete (possibly with empty context) within 6000ms.
-    If the pipeline takes longer than 6000ms, emit a timeout event and proceed with
-    the un-enriched original prompt. Never block the user's request.
-  The orchestration engine is disabled entirely when the orchestration toggle in
-    settings is off. This toggle is checked at the start of every queryStream() call.
-  tsgo --noEmit must pass after every step. Do not proceed with TypeScript errors.
-  node --check must pass on agent.js after UI changes.
-  gulp compile-client must succeed before declaring Phase 2 complete.
-  After compile, run the O-001 through O-010 tests and record results.
+  No shadow adapter files. If it reimplements something claude-code does, delete it.
+  Headroom runs on REAL content, not simulated content.
+  The trace panel shows only REAL data from real operations.
+  tsgo --noEmit must pass at every step.
+  node --check must pass on trace.js.
+  gulp compile-client must succeed.
+  The 170-test suite: update tests that tested deleted adapters to test the
+  TraceCollector or HeadroomLayer instead. Maintain at least 150 passing tests.
+  devMode: false means zero trace data collected, zero overhead. No exceptions.

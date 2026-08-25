@@ -42,14 +42,11 @@ import {
 
 // Phase 2 Orchestration Engine
 import { orchestrate } from './codeMindOrchestrationEngine.js';
-import { ToolAdapterRegistry } from './orchestration/types.js';
+import { classifyIntent } from './orchestration/intentDetector.js';
+import { HEADROOM_BASE_URL, ProxyStatsSnapshot, fetchProxyStats, pingHeadroomProxy } from './orchestration/headroomLayer.js';
+import { TraceCollector } from './orchestration/traceCollector.js';
+import { HeadroomProxyOutcome, ToolAdapterRegistry } from './orchestration/types.js';
 import { projectBrainAdapter } from './orchestration/toolAdapters/projectBrainAdapter.js';
-import { repositoryAdapter } from './orchestration/toolAdapters/repositoryAdapter.js';
-import { fileContextAdapter } from './orchestration/toolAdapters/fileContextAdapter.js';
-import { dependencyAdapter } from './orchestration/toolAdapters/dependencyAdapter.js';
-import { gitAdapter } from './orchestration/toolAdapters/gitAdapter.js';
-import { webSearchAdapter } from './orchestration/toolAdapters/webSearchAdapter.js';
-import { terminalAdapter } from './orchestration/toolAdapters/terminalAdapter.js';
 
 /**
  * Node-side worker that owns the Claude Agent SDK engine and exposes a
@@ -88,7 +85,7 @@ type SdkMessage =
 	| { type: 'system'; subtype: 'init' | 'status' | 'compact_boundary' | 'hook_response' | 'local_command_output'; model?: string; session_id?: string; tools?: string[]; status?: string; content?: string; mcp_servers?: Array<{ name: string; status?: string; tools?: string[] }>; compact_metadata?: { trigger?: string; pre_tokens?: number } }
 	| { type: 'assistant'; message: { role: 'assistant'; content: SdkBlock[] }; session_id?: string; uuid?: string; error?: unknown; parent_tool_use_id?: string | null }
 	| { type: 'user'; message?: { role: 'user'; content: SdkBlock[] }; tool_use_result?: unknown; isSynthetic?: boolean; uuid?: string; parent_tool_use_id?: string | null }
-	| { type: 'result'; subtype: 'success' | string; is_error: boolean; total_cost_usd?: number; cost_usd?: number; usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number }; duration_ms?: number; duration_api_ms?: number; session_id?: string; result?: string; num_turns?: number }
+	| { type: 'result'; subtype: 'success' | string; is_error: boolean; total_cost_usd?: number; cost_usd?: number; usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number }; duration_ms?: number; duration_api_ms?: number; session_id?: string; result?: string; num_turns?: number; errors?: unknown }
 	| { type: 'stream_event'; event: { type: string; [key: string]: unknown } }
 	| { type: 'tool_progress'; tool_use_id: string; tool_name: string; elapsed_time_seconds: number; parent_tool_use_id?: string | null }
 	| { type: 'auth_status'; [key: string]: unknown }
@@ -292,6 +289,20 @@ type SessionState = {
 
 /** Default model for new sessions until the user picks another. */
 const DEFAULT_MODEL = 'claude-opus-5';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEMPORARY DEV HARDCODE — remove before shipping.
+// Forces the gateway base URL, API key, and model regardless of what the
+// Settings UI holds, so Headroom proxy-in-path can be exercised end-to-end
+// without re-entering the provider on every launch. To restore normal,
+// settings-driven behavior, set HARDCODE_ENABLED = false (or delete this block
+// and its three call sites: _resolveBaseUrl, _model, _buildEnv/queryStream).
+const HARDCODE_ENABLED: boolean = false;
+const HARDCODE_BASE_URL = 'https://api.hcnsec.cn';
+// Redacted before push — the live key is stored securely in the secret store, never in source.
+const HARDCODE_API_KEY = '';
+const HARDCODE_MODEL = 'kat-coder-pro-v2.5';
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * What the engine puts in an assistant message that arrived carrying nothing — a gateway
@@ -597,6 +608,22 @@ function windowsFilePathRule(cwd: string | undefined): string | undefined {
 	].join(' ');
 }
 
+/**
+ * Per-turn Headroom proxy-in-path state. When the local Headroom proxy is running,
+ * the turn's LLM traffic is routed through it (`turnBaseUrl` = the proxy) so the proxy
+ * compresses the REAL request payload; otherwise the request goes straight to the
+ * gateway (`turnBaseUrl` = upstream) uncompressed. `before` is a snapshot of the
+ * proxy's cumulative `/stats` taken at turn start (dev mode only) so _finalize can
+ * report this turn's savings as the (after − before) delta.
+ */
+interface HeadroomTurn {
+	proxyActive: boolean;
+	turnBaseUrl?: string;
+	upstream?: string;
+	before: ProxyStatsSnapshot | null;
+	userPrompt: string;
+}
+
 class CodeMindAgentEngineMainService extends Disposable {
 
 	/**
@@ -676,15 +703,13 @@ class CodeMindAgentEngineMainService extends Disposable {
 		super();
 		this._engineRoot = this._detectEngineRoot();
 
-		// Phase 2: Initialize ToolAdapterRegistry (singleton per worker process)
+		// Phase 2: Initialize ToolAdapterRegistry (singleton per worker process).
+		// Only projectBrainAdapter remains — the six "shadow adapters" that reimplemented
+		// repository/file/dependency/git/web/terminal context were removed. Layer 3 of the
+		// trace now OBSERVES the real Claude Agent SDK tool stream (see TraceCollector),
+		// never a parallel reimplementation.
 		this._toolAdapterRegistry = new Map();
 		this._registerAdapter(projectBrainAdapter);
-		this._registerAdapter(repositoryAdapter);
-		this._registerAdapter(fileContextAdapter);
-		this._registerAdapter(dependencyAdapter);
-		this._registerAdapter(gitAdapter);
-		this._registerAdapter(webSearchAdapter);
-		this._registerAdapter(terminalAdapter);
 
 		// Phase 2 tracking fields (Section 10)
 		this._workspaceFolder = process.cwd();
@@ -698,6 +723,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 
 	// B.3 – Dev mode + trace history IPC methods
 	setDevMode(enabled: boolean): void {
+		this._devModeEnabled = enabled;
 		import('./codeMindOrchestrationEngine.js').then(m => m.setDevMode(enabled)).catch(() => {});
 	}
 
@@ -714,6 +740,18 @@ class CodeMindAgentEngineMainService extends Disposable {
 	private _toolAdapterRegistry: ToolAdapterRegistry;
 	private _workspaceFolder: string;
 	private _sessionTurnCount: number;
+	/** Local mirror of the dev-mode flag so the engine can decide, per query, whether to
+	 *  build a trace collector at all (zero overhead when dev mode is off). */
+	private _devModeEnabled = false;
+	/** One TraceCollector per in-flight query (dev mode only). Populated from the SDK
+	 *  message handlers, finalized + released in _finalize. Bounded on create. */
+	private readonly _traceCollectors = new Map<string, TraceCollector>();
+
+	/** Per-turn Headroom proxy-in-path decision, keyed by queryId. Set in
+	 *  _prepareOrchestratedRequest (every turn — it decides where the SDK actually
+	 *  sends the request), read in queryStream (_buildEnv base URL) and _finalize
+	 *  (the trace outcome). Bounded on insert; released in _finalize. */
+	private readonly _headroomTurns = new Map<string, HeadroomTurn>();
 
 	private _registerAdapter(adapter: any) {
 		this._toolAdapterRegistry.set(adapter.id, adapter);
@@ -756,6 +794,22 @@ class CodeMindAgentEngineMainService extends Disposable {
 			} as any,
 		});
 
+		// Phase-2: one TraceCollector per query OBSERVES the real Claude Agent SDK tool
+		// stream, so the dev-mode trace's Layer 3 lists the tools the model actually invoked
+		// (Read/Write/Bash/Glob/Grep/WebSearch…) — never a parallel reimplementation. Created
+		// only when dev mode is on (zero overhead otherwise) and bounded so aborted turns that
+		// never reach _finalize cannot leak collectors without limit.
+		let collector: TraceCollector | null = null;
+		if (this._devModeEnabled) {
+			if (this._traceCollectors.size > 32) {
+				const oldest = this._traceCollectors.keys().next().value;
+				if (oldest !== undefined) { this._traceCollectors.delete(oldest); }
+			}
+			collector = new TraceCollector();
+			this._traceCollectors.set(queryId, collector);
+			try { collector.recordIntent(classifyIntent(request.prompt)); } catch { /* trace-only, never fatal */ }
+		}
+
 		// Track workspace folder on first call
 		if (!this._workspaceFolder || this._workspaceFolder === process.cwd()) {
 			this._workspaceFolder = request.cwd ?? process.cwd();
@@ -776,7 +830,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 			// (Was `this._currentModel`, a constructor constant `setModel` never updated,
 			// so the trace's layer-7 model always read 'claude-opus-5' regardless of the
 			// composer selection — a cosmetic lie the user flagged in the trace panel.)
-			model: this._settings.model ?? DEFAULT_MODEL,
+			model: this._model,
 			token: cancelToken,
 		};
 
@@ -838,12 +892,40 @@ class CodeMindAgentEngineMainService extends Disposable {
 			this._sessionTurnCount++;
 
 			// Hand the enriched prompt back to queryStream, which owns the actual SDK streaming.
-			// The suffix is appended to whatever the caller already supplied; _buildSystemPrompt
-			// picks it up from the request (see the systemPromptSuffix branch further down).
+			// Phase-2 Headroom (Layer 6) — PROXY-IN-PATH. The old design compressed only the
+			// tiny intent-hint suffix in-process, which was always below the compression
+			// threshold and so never did anything. Instead: if the LOCAL Headroom proxy is
+			// running we route this turn's LLM traffic THROUGH it — ANTHROPIC_BASE_URL → proxy
+			// → the configured gateway — so the proxy compresses the REAL request payload
+			// (system prompt, history, tool results), not a 25-token hint. Local only: no
+			// cloud, no key, no conversation data off-box. If the proxy is down we send
+			// straight to the gateway, uncompressed (graceful — a missing proxy never blocks
+			// or slows a turn beyond the sub-second health probe).
+			const combinedSuffix = (request.systemPromptSuffix ?? '') + orchestrated.systemPromptSuffix;
+			const gatewayUrl = this._resolveBaseUrl();
+			const proxyActive = (await pingHeadroomProxy()).reachable;
+			// Snapshot cumulative proxy stats before the turn ONLY when the dev trace needs
+			// them — the per-turn savings shown in the panel is the (after − before) delta.
+			const before = (proxyActive && this._devModeEnabled) ? await fetchProxyStats() : null;
+			// Bound the map so aborted turns that never reach _finalize cannot leak.
+			if (this._headroomTurns.size > 32) {
+				const oldest = this._headroomTurns.keys().next().value;
+				if (oldest !== undefined) { this._headroomTurns.delete(oldest); }
+			}
+			this._headroomTurns.set(queryId, {
+				proxyActive,
+				turnBaseUrl: proxyActive ? HEADROOM_BASE_URL : gatewayUrl,
+				upstream: gatewayUrl,
+				before,
+				userPrompt: request.prompt,
+			});
+			collector?.recordSuffix(combinedSuffix);
 			return {
 				...request,
 				prompt: orchestrated.enrichedPrompt,
-				systemPromptSuffix: (request.systemPromptSuffix ?? '') + orchestrated.systemPromptSuffix,
+				// The suffix is no longer compressed in-process (the proxy does the real work);
+				// it still rides along as the intent hint appended to the SDK system prompt.
+				systemPromptSuffix: combinedSuffix,
 			};
 		} catch (err) {
 			// Context enrichment is strictly an optimisation — never let it fail the query.
@@ -877,6 +959,11 @@ class CodeMindAgentEngineMainService extends Disposable {
 	}
 
 	async queryStream(queryId: string, request: ICodeMindEngineRequest, apiKey: string): Promise<ICodeMindEngineResponse> {
+		// TEMPORARY DEV HARDCODE — remove before shipping (see HARDCODE_* block).
+		// Force the hardcoded key so an empty renderer-supplied key still streams.
+		if (HARDCODE_ENABLED) {
+			apiKey = HARDCODE_API_KEY;
+		}
 		const problem = await this.diagnose(apiKey);
 		if (problem) {
 			throw new Error(problem);
@@ -913,10 +1000,13 @@ class CodeMindAgentEngineMainService extends Disposable {
 				// Electron binary's folder — and relative paths would land inside the
 				// build output. The home directory is where a shell-launched agent starts.
 				cwd: request.cwd || homedir(),
-				model: this._settings.model ?? DEFAULT_MODEL,
+				model: this._model,
 				tools: { type: 'preset', preset: 'claude_code' },
 				permissionMode: planMode ? 'plan' : this._resolvePermissionMode(),
-				env: this._buildEnv(apiKey),
+				// Route this turn through the local Headroom proxy when it is running (Layer 6
+				// proxy-in-path). _prepareOrchestratedRequest decided this above and stored the
+				// base URL; a missing entry (or proxy down) falls back to the configured gateway.
+				env: this._buildEnv(apiKey, this._headroomTurns.get(queryId)?.turnBaseUrl),
 				// Matches the `codemind.maxTurns` default, so a turn that runs before the
 				// settings panel has pushed anything behaves the same as one after.
 				maxTurns: overrides?.maxTurns ?? this._settings.maxTurns ?? 40,
@@ -1070,16 +1160,63 @@ class CodeMindAgentEngineMainService extends Disposable {
 	 * Environment handed to the engine. The API key is injected here rather than
 	 * written anywhere on disk, so it lives only in this process and the engine's.
 	 */
-	private _buildEnv(apiKey: string): Record<string, string> {
-		const env: Record<string, string> = { ...process.env as Record<string, string>, ANTHROPIC_API_KEY: apiKey };
+	private _buildEnv(apiKey: string, baseUrlOverride?: string): Record<string, string> {
+		// HARDCODE (temp): force the configured key onto every SDK env, so control
+		// sessions and engine commands use it too — not just the reassigned main turn.
+		const key = HARDCODE_ENABLED ? HARDCODE_API_KEY : apiKey;
+		const env: Record<string, string> = { ...process.env as Record<string, string>, ANTHROPIC_API_KEY: key };
 		// A configured endpoint wins over whatever the app was launched with, so the
 		// settings panel is the single place that decides where turns go. The SDK reads
-		// this variable itself; there is no option for it.
-		const baseUrl = this._resolveBaseUrl();
+		// this variable itself; there is no option for it. `baseUrlOverride` lets a single
+		// turn be routed elsewhere — specifically through the local Headroom proxy (Layer 6
+		// proxy-in-path) — while control-session and engine-command calls (which pass no
+		// override) always go straight to the configured gateway.
+		const baseUrl = baseUrlOverride ?? this._resolveBaseUrl();
 		if (baseUrl) {
 			env.ANTHROPIC_BASE_URL = baseUrl;
+			// Layer-6 proxy-in-path live provider switching: when this turn is routed
+			// through the local Headroom proxy, the proxy must still forward to whatever
+			// gateway the GUI has selected RIGHT NOW. Rather than pin the upstream at proxy
+			// launch (which forced a restart on every provider change), we send the current
+			// gateway as a per-turn header. The proxy reads `X-Headroom-Upstream`, forwards
+			// there, and strips it before contacting the provider — so switching models or
+			// endpoints in the GUI takes effect on the next turn with no restart. The SDK
+			// emits ANTHROPIC_CUSTOM_HEADERS (newline-separated "Name: Value") on every
+			// request it makes for this turn, including its implicit small/fast calls.
+			if (baseUrl === HEADROOM_BASE_URL) {
+				const upstream = this._resolveBaseUrl();
+				if (upstream && upstream !== HEADROOM_BASE_URL) {
+					const line = `X-Headroom-Upstream: ${upstream}`;
+					const existing = (process.env.ANTHROPIC_CUSTOM_HEADERS ?? '').trim();
+					env.ANTHROPIC_CUSTOM_HEADERS = existing ? `${existing}\n${line}` : line;
+				}
+			}
+			// The main turn passes `model` explicitly, but the SDK still makes implicit
+			// "small/fast" calls (sub-agent exploration, title/topic detection, quota
+			// checks) whose model it resolves on its own — falling back to Anthropic's
+			// hardcoded default `claude-haiku-4-5-20251001`. A custom gateway rarely serves
+			// that id, so those calls 503 with `model_not_found` even though the turn works.
+			// Pin the small/fast (and Haiku-alias) model to the configured turn model so
+			// every implicit call lands on a model the gateway actually has. Only on custom
+			// endpoints — on the real Anthropic API, Haiku is the right (cheap, fast) choice —
+			// and never overriding an explicit env override the user set themselves.
+			if (!this._isAnthropicEndpoint(baseUrl) && this._model) {
+				if (!process.env.ANTHROPIC_SMALL_FAST_MODEL) { env.ANTHROPIC_SMALL_FAST_MODEL = this._model; }
+				if (!process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL) { env.ANTHROPIC_DEFAULT_HAIKU_MODEL = this._model; }
+			}
 		}
 		return env;
+	}
+
+	/** True when the endpoint is Anthropic's own API (where the built-in Haiku default is
+	 *  correct). Anything else is treated as a custom gateway. Defensive against a malformed
+	 *  URL — an unparseable value is treated as custom so the small/fast pin still applies. */
+	private _isAnthropicEndpoint(baseUrl: string): boolean {
+		try {
+			return /(^|\.)anthropic\.com$/i.test(new URL(baseUrl).hostname);
+		} catch {
+			return false;
+		}
 	}
 
 	/**
@@ -1088,12 +1225,25 @@ class CodeMindAgentEngineMainService extends Disposable {
 	 * official API. Trailing slashes are dropped so `${base}/v1/...` never doubles up.
 	 */
 	private _resolveBaseUrl(override?: string): string | undefined {
-		const candidates = [override, this._settings.baseUrl, process.env.ANTHROPIC_BASE_URL];
+		// HARDCODE (temp): forced gateway wins over settings/env, but an explicit
+		// `override` (doctor / key-check against a specific URL) still takes priority.
+		const candidates = [override, HARDCODE_ENABLED ? HARDCODE_BASE_URL : undefined, this._settings.baseUrl, process.env.ANTHROPIC_BASE_URL];
 		for (const candidate of candidates) {
 			const trimmed = (candidate ?? '').trim().replace(/\/+$/, '');
 			if (trimmed) { return trimmed; }
 		}
 		return undefined;
+	}
+
+	/**
+	 * The model every turn uses. HARDCODE (temp) forces a single model regardless
+	 * of the composer/settings selection; otherwise it is the configured model,
+	 * falling back to DEFAULT_MODEL.
+	 */
+	private get _model(): string {
+		if (HARDCODE_ENABLED) { return HARDCODE_MODEL; }
+		const m = this._settings.model;
+		return m ?? DEFAULT_MODEL;
 	}
 
 	/**
@@ -1577,7 +1727,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 		const prompt = (async function* (): AsyncIterable<SdkUserInput> { await inputClosed; })();
 		const options: SdkOptions = {
 			cwd: cwd ?? this._lastCwd,
-			model: this._settings.model ?? DEFAULT_MODEL,
+			model: this._model,
 			tools: { type: 'preset', preset: 'claude_code' },
 			env: this._buildEnv(apiKey),
 			abortController,
@@ -1780,7 +1930,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 		})();
 		const options: SdkOptions = {
 			cwd: cwd ?? this._lastCwd,
-			model: this._settings.model ?? DEFAULT_MODEL,
+			model: this._model,
 			tools: [],
 			env: this._buildEnv(apiKey),
 			abortController,
@@ -2002,7 +2152,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 		checks.push({
 			name: 'Model',
 			ok: true,
-			detail: this._settings.model ?? DEFAULT_MODEL,
+			detail: this._model,
 		});
 		const endpoint = this._resolveBaseUrl();
 		checks.push({
@@ -2041,7 +2191,30 @@ class CodeMindAgentEngineMainService extends Disposable {
 		}
 
 		checks.push(...this._settingsFileChecks(), ...this._envVarChecks(), ...this._agentDirChecks(), ...this._pluginChecks());
+		checks.push(await this._headroomCheck());
 		return checks;
+	}
+
+	/**
+	 * Headroom (Layer-6) compression health. Optional by design: the pipeline compresses
+	 * the pre-fetched context when the local proxy is up and passes it through unchanged
+	 * when it is not, so every outcome reports ok:true — the detail says which path is live.
+	 * Nothing leaves the machine either way (local proxy on :7878 only).
+	 */
+	private async _headroomCheck(): Promise<ICodeMindDoctorCheck> {
+		try {
+			const m = await import('./orchestration/headroomLayer.js');
+			const { installed, proxyReachable, baseUrl } = await m.probeHeadroom();
+			if (!installed) {
+				return { name: 'Headroom compression', ok: true, detail: 'headroom-ai not installed — context sent uncompressed (optional feature).' };
+			}
+			if (proxyReachable) {
+				return { name: 'Headroom compression', ok: true, detail: `Proxy running on ${baseUrl} — compressing context locally.` };
+			}
+			return { name: 'Headroom compression', ok: true, detail: `Library installed; proxy not running on ${baseUrl}. Start with "headroom proxy --port ${m.HEADROOM_PORT}" to enable compression (passthrough until then).` };
+		} catch (err) {
+			return { name: 'Headroom compression', ok: true, detail: `Probe failed: ${err instanceof Error ? err.message : String(err)} (feature optional).` };
+		}
 	}
 
 	/**
@@ -2089,7 +2262,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 	 * renderer cannot see them.
 	 */
 	private _envVarChecks(): ICodeMindDoctorCheck[] {
-		const bounds = maxOutputTokensFor(this._settings.model ?? DEFAULT_MODEL);
+		const bounds = maxOutputTokensFor(this._model);
 		const vars = [
 			{ name: 'BASH_MAX_OUTPUT_LENGTH', default: 30_000, upperLimit: 150_000 },
 			{ name: 'TASK_MAX_OUTPUT_LENGTH', default: 32_000, upperLimit: 160_000 },
@@ -2273,7 +2446,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 				method: 'POST',
 				headers: this._endpointHeaders(key),
 				body: JSON.stringify({
-					model: this._settings.model || DEFAULT_MODEL,
+					model: this._model,
 					max_tokens: 1,
 					messages: [{ role: 'user', content: 'hi' }],
 				}),
@@ -2728,6 +2901,9 @@ class CodeMindAgentEngineMainService extends Disposable {
 				// `input_json_delta` events, which sub-agent turns never produce.
 				if (!parentToolUseId) {
 					cur.tools.set(block.id, { name: block.name, inputJson: typeof block.input === 'string' ? block.input : JSON.stringify(block.input ?? {}, null, 2) });
+					// Phase-2 trace: observe the REAL tool call the model made this turn
+					// (dev-mode only — no-op when no collector is registered for this query).
+					this._traceCollectors.get(cur.queryId)?.recordToolCall({ toolName: block.name, toolId: block.id, input: block.input, startMs: Date.now() });
 				}
 				if (!skipEmit) {
 					this._emit(cur.queryId, { kind: 'tool_use_start', toolUseId: block.id, toolName: block.name, input: block.input, parentToolUseId });
@@ -2764,6 +2940,13 @@ class CodeMindAgentEngineMainService extends Disposable {
 				const br = block as { type: 'tool_result'; tool_use_id: string; content: unknown; is_error?: boolean };
 				this._emit(cur.queryId, { kind: 'tool_result', toolUseId: br.tool_use_id, content: this._stripReminders(this._stringify(br.content)), isError: br.is_error === true || httpFailed, parentToolUseId });
 				emittedResult = true;
+				// Phase-2 trace: pair the result with the call it answers. getToolStartMs +
+				// recordToolResult no-op for unknown ids, so sub-agent results (whose calls
+				// were never recorded) are auto-excluded — only main-stream calls are traced.
+				const _tc = this._traceCollectors.get(cur.queryId);
+				if (_tc) {
+					_tc.recordToolResult({ toolId: br.tool_use_id, content: br.content, isError: br.is_error === true || httpFailed, durationMs: Date.now() - _tc.getToolStartMs(br.tool_use_id) });
+				}
 			}
 		}
 		// `tool_use_result` is the engine's own copy of the same payload, and in this SDK
@@ -2872,8 +3055,33 @@ class CodeMindAgentEngineMainService extends Disposable {
 		// having relayed the API's complaint as a successful turn — so the verdict the
 		// text emits reached counts here too.
 		const isError = msg.is_error === true || cur.isApiError === true;
-		const resultText = this._dropPlaceholder(typeof msg.result === 'string' ? msg.result : cur.text)
+		let resultText = this._dropPlaceholder(typeof msg.result === 'string' ? msg.result : cur.text)
 			|| (isError ? 'Engine returned an error.' : 'No response.');
+		// A turn the ENGINE ended — max turns reached, budget exhausted, a mid-execution
+		// failure — arrives as `result` with `is_error:true`, no `result` text, and often
+		// no accumulated prose either. Surfacing that bare would read as "the assistant
+		// stopped for no reason", which is exactly the mystery these endings used to be:
+		// name the reason and what to do about it, from the subtype first (stable) and
+		// the SDK's own errors[] as the fallback wording.
+		if (isError && !cur.isApiError) {
+			const sdkReason = Array.isArray(msg.errors) && msg.errors.length
+				? String(msg.errors[0])
+				: '';
+			const named: Record<string, string> = {
+				error_max_turns: `The turn hit this session's maximum number of tool rounds (${msg.num_turns ?? '?'}). The work stopped mid-task, not because it was finished — raise codemind.maxTurns in Settings, break the task into smaller asks, or send "continue" to pick up where it left off.`,
+				error_max_budget_usd: `The turn stopped because its cost reached the session budget${sdkReason ? ` (${sdkReason})` : ''}.`,
+				error_during_execution: `The turn ended in an error part-way through${sdkReason ? `: ${sdkReason}` : '.'}`,
+			};
+			const bare = resultText === 'Engine returned an error.' || resultText === 'No response.';
+			const replacement = named[msg.subtype] ?? (sdkReason || '');
+			if (replacement && bare) {
+				resultText = replacement;
+			} else if (replacement && !bare) {
+				// Some prose arrived before the cutoff; keep it but make the stop explicit
+				// rather than letting the turn read as complete.
+				resultText = `${resultText}\n\n— ${replacement}`;
+			}
+		}
 		const u = msg.usage ?? {};
 		const usage: ICodeMindEngineUsage | undefined = (u.input_tokens != null || u.output_tokens != null)
 			? { inputTokens: u.input_tokens ?? 0, outputTokens: u.output_tokens ?? 0, cacheCreationInputTokens: u.cache_creation_input_tokens, cacheReadInputTokens: u.cache_read_input_tokens }
@@ -2888,10 +3096,87 @@ class CodeMindAgentEngineMainService extends Disposable {
 			durationMs: msg.duration_ms ?? msg.duration_api_ms, isError,
 		};
 		this._emit(queryId, { kind: 'result', text: resultText, isError, usage, totalCostUsd: response.totalCostUsd, durationMs: response.durationMs, sessionId, contextTokens: cur.contextTokens });
+		// Resolve the turn FIRST — the response text has already streamed, and the
+		// dev-mode trace below reads the proxy's /stats (a sub-second network call) which
+		// must never delay the turn's completion.
 		const pending = this._pending.get(queryId);
 		this._pending.delete(queryId);
 		this._states.delete(queryId);
 		if (pending) { pending.resolve(response); }
+
+		// Phase-2: finalize + emit the observed orchestration trace (dev mode only), then
+		// release the collector. finalize() returns null when dev mode is off. The trace's
+		// only surfaced content is the Headroom proxy-in-path outcome (input + whether the
+		// local proxy compressed the request), computed from the /stats delta across this
+		// turn. The event travels the same _onEvent channel the viewpane already forwards
+		// to the separate Orchestration Trace panel, so no viewpane change is needed.
+		const turn = this._headroomTurns.get(queryId);
+		this._headroomTurns.delete(queryId);
+		const _collector = this._traceCollectors.get(queryId);
+		if (_collector) {
+			this._traceCollectors.delete(queryId);
+			const _trace = _collector.finalize(
+				{ model, session_id: sessionId, duration_ms: msg.duration_ms ?? msg.duration_api_ms, total_cost_usd: msg.total_cost_usd ?? msg.cost_usd, usage: msg.usage },
+				queryId, this._devModeEnabled
+			);
+			if (_trace) {
+				// Fire-and-forget: attach the proxy outcome (needs one more /stats read),
+				// then emit. Never rejects — _buildHeadroomOutcome always resolves.
+				void this._buildHeadroomOutcome(turn).then((outcome) => {
+					_trace.headroomProxy = outcome;
+					this._onEvent.fire({ queryId, event: { type: 'orchestration_trace', queryId, trace: _trace } as any });
+				});
+			}
+		}
+	}
+
+	/**
+	 * Build the Headroom proxy-in-path outcome for the dev trace: what went in, and
+	 * whether the local proxy actually compressed the request this turn. When the proxy
+	 * was routed through, this turn's savings is the (after − before) delta of the
+	 * proxy's cumulative `/stats`. Always resolves — a missing proxy or unreadable stats
+	 * degrade to an honest "not running" / "stats unavailable" verdict, never a throw.
+	 */
+	private async _buildHeadroomOutcome(turn: HeadroomTurn | undefined): Promise<HeadroomProxyOutcome> {
+		if (!turn) {
+			return { proxyActive: false, optimized: false, reason: 'Headroom not evaluated this turn' };
+		}
+		if (!turn.proxyActive) {
+			return {
+				proxyActive: false,
+				optimized: false,
+				input: turn.userPrompt,
+				upstream: turn.upstream,
+				reason: `Headroom proxy not running on ${HEADROOM_BASE_URL} — request sent to the gateway uncompressed. Start it with: headroom proxy --port ${new URL(HEADROOM_BASE_URL).port}`,
+			};
+		}
+		const after = turn.before ? await fetchProxyStats() : null;
+		const base: HeadroomProxyOutcome = {
+			proxyActive: true,
+			optimized: false,
+			input: turn.userPrompt,
+			proxyUrl: HEADROOM_BASE_URL,
+			upstream: turn.upstream,
+			reason: '',
+		};
+		if (turn.before && after) {
+			const beforeTokens = Math.max(0, after.totalTokensBefore - turn.before.totalTokensBefore);
+			const afterTokens = Math.max(0, after.totalTokensAfter - turn.before.totalTokensAfter);
+			const savedTokens = Math.max(0, after.totalTokensSaved - turn.before.totalTokensSaved);
+			const ratio = beforeTokens > 0 ? afterTokens / beforeTokens : 1;
+			const optimized = savedTokens > 0;
+			const pct = beforeTokens > 0 ? Math.round((savedTokens / beforeTokens) * 100) : 0;
+			return {
+				...base,
+				beforeTokens, afterTokens, savedTokens, ratio, optimized,
+				reason: optimized
+					? `Headroom compressed the request: ${beforeTokens} → ${afterTokens} tokens (saved ${savedTokens}, ${pct}%)`
+					: 'Headroom proxy active — no compressible content this turn (0 tokens saved)',
+			};
+		}
+		// Proxy was reachable but /stats was not (dev mode off at turn start, or the
+		// route was unavailable): still honest — the turn WAS routed through the proxy.
+		return { ...base, reason: 'Headroom proxy active — routed this turn through the local proxy (per-turn savings unavailable)' };
 	}
 
 	/**

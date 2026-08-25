@@ -14,6 +14,13 @@ export const projectBrainAdapter: ToolAdapter = {
     id: 'projectBrainAdapter',
     name: 'Project Brain',
     TIMEOUT_MS: 50,
+    // Self-declared capabilities — the selector matches these; it never keys off
+    // the id. Mirrored by CANONICAL_ADAPTER_CAPABILITIES (drift-guarded by test).
+    capabilities: ['project_memory', 'architecture_history', 'decision_history'],
+    cost: 'low',
+    latency: 'fast',
+    external: false,
+    supportsParallel: true,
     async execute(_request: OrchestrationRequest): Promise<ToolOutput> {
         return {
             adapterId: 'projectBrainAdapter',

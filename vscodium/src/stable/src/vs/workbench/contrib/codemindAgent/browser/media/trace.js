@@ -1,8 +1,10 @@
 /*---------------------------------------------------------------------------------------------
- *  Orchestration Trace panel — webview renderer.
+ *  Orchestration Trace panel — webview renderer (SIMPLIFIED for Headroom).
  *  A passive display: the workbench posts `{type:'trace', payload}` for each pipeline turn
- *  (dev mode only) and `{type:'clear'}`. Cards are keyed by queryId so a buffer replay on
- *  open never duplicates a card already shown live. Ported from agent.js `traceCardHtml`.
+ *  (dev mode only) and `{type:'clear'}`. The panel shows ONLY the two things that matter for
+ *  Headroom: what went IN this turn, and whether the local Headroom proxy actually
+ *  OPTIMIZED (compressed) the request. Cards are keyed by queryId so a buffer replay on open
+ *  never duplicates a card already shown live.
  *--------------------------------------------------------------------------------------------*/
 (function () {
 	'use strict';
@@ -15,16 +17,6 @@
 
 	// queryId -> trace. Insertion order = arrival order; we render newest-first.
 	const traces = new Map();
-	// Query ids whose card the reader expanded — open state survives full re-renders.
-	const expandedTraces = new Set();
-
-	const BUG_ICON = `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-	  <circle cx="8" cy="9" r="4" stroke="currentColor" stroke-width="1.5"/>
-	  <circle cx="5.5" cy="4.5" r="1.5" stroke="currentColor" stroke-width="1.2"/>
-	  <circle cx="10.5" cy="4.5" r="1.5" stroke="currentColor" stroke-width="1.2"/>
-	  <line x1="4" y1="9" x2="2" y2="9" stroke="currentColor" stroke-width="1.2"/>
-	  <line x1="12" y1="9" x2="14" y2="9" stroke="currentColor" stroke-width="1.2"/>
-	</svg>`;
 
 	function escapeHtml(text) {
 		if (text == null) { return ''; }
@@ -37,62 +29,54 @@
 	}
 	const escapeAttr = escapeHtml;
 
-	// PORTED from agent.js traceCardHtml — identical markup so the card looks the same.
+	// Map the Headroom proxy-in-path outcome to a card state:
+	//   ok   (green)  = proxy routed the turn AND saved tokens
+	//   warn (yellow) = proxy routed the turn but saved nothing this turn
+	//   down (red)    = proxy not running → request went to the gateway uncompressed
+	//   unknown(grey) = no Headroom data on this trace
+	function outcomeState(hp) {
+		if (!hp) { return { cls: 'unknown', label: 'No Headroom data' }; }
+		if (!hp.proxyActive) { return { cls: 'down', label: 'Proxy not running' }; }
+		if (hp.optimized) { return { cls: 'ok', label: 'Optimized' }; }
+		return { cls: 'warn', label: 'Active · no savings' };
+	}
+
+	// The whole card: INPUT (what the developer asked) + OPTIMIZATION (whether the local
+	// Headroom proxy compressed the request, with the per-turn token delta when known).
 	function traceCardHtml(trace, queryId) {
 		if (!trace) { return ''; }
-		const layers = trace.layers || [];
-		const totalMs = trace.totalDurationMs || 0;
-		let borderColor = 'var(--vscode-testing-iconPassed)';
-		if (totalMs >= 1500 || trace.timedOut) { borderColor = 'var(--vscode-errorForeground)'; }
-		else if (totalMs >= 500) { borderColor = 'var(--vscode-editorWarning-foreground)'; }
-		const dots = layers.map((l) => {
-			let color = 'var(--vscode-testing-iconPassed)';
-			if (l.status === 'timeout' || l.status === 'error') { color = 'var(--vscode-errorForeground)'; }
-			else if (l.durationMs >= 200) { color = 'var(--vscode-editorWarning-foreground)'; }
-			else if (l.status === 'skipped') { color = 'var(--vscode-descriptionForeground)'; }
-			return `<span class="cm-layer-dot" style="background:${color}" title="${escapeAttr((l.layerName || '') + ': ' + l.status + ' ' + l.durationMs + 'ms')}"></span>`;
-		}).join('');
-		// Prefer the trace's own token totals; fall back to the headroom layer for older traces.
-		let before = typeof trace.originalTokens === 'number' ? trace.originalTokens : NaN;
-		let after = typeof trace.finalTokens === 'number' ? trace.finalTokens : NaN;
-		if (isNaN(before) || isNaN(after)) {
-			const headroom = layers.find(l => /headroom/i.test(l.layerName || ''));
-			before = headroom ? parseInt(headroom.input, 10) : NaN;
-			after = headroom ? parseInt(headroom.output, 10) : NaN;
+		const hp = trace.headroomProxy || null;
+		const st = outcomeState(hp);
+		const input = (hp && hp.input) ? hp.input : '(input unavailable)';
+
+		let tokensHtml = '';
+		if (hp && hp.proxyActive && typeof hp.beforeTokens === 'number' && typeof hp.afterTokens === 'number') {
+			const saved = hp.savedTokens || 0;
+			const pct = (hp.beforeTokens > 0) ? Math.round((saved / hp.beforeTokens) * 100) : 0;
+			tokensHtml = `<div class="cm-hr-tokens">${hp.beforeTokens} → ${hp.afterTokens} tok`
+				+ `<span class="cm-hr-saved"> · saved ${saved}${pct > 0 ? ' (' + pct + '%)' : ''}</span></div>`;
 		}
-		let tokenInfo;
-		if (!isNaN(before) && !isNaN(after) && before > 0) {
-			const pct = Math.round((1 - after / before) * 100);
-			tokenInfo = `${before}→${after} tok${pct > 0 ? ` (−${pct}%)` : ''}`;
-		} else if (!isNaN(after) && after > 0) {
-			tokenInfo = `${after} tok`;
-		} else { tokenInfo = `${layers.length} layers`; }
-		const rows = layers.map((layer, idx) => `
-			<div class="cm-trace-layer">
-				<div class="cm-trace-layer-header">
-					<span class="cm-trace-layer-index">${idx + 1}</span>
-					<span class="cm-trace-layer-name">${escapeHtml(layer.layerName || '')}</span>
-					<span class="cm-trace-layer-status">${layer.status === 'pass' ? '✓' : layer.status === 'timeout' ? '⏱' : layer.status === 'error' ? '✗' : '—'} ${layer.durationMs || 0}ms</span>
-				</div>
-				<div class="cm-trace-io">
-					<div class="cm-trace-io-label">INPUT <span style="opacity:0.5;">~${layer.inputTokenEstimate || 0} tok</span></div>
-					<pre class="cm-trace-io-content">${escapeHtml(String(layer.input ?? ''))}</pre>
-					<div class="cm-trace-io-label">OUTPUT <span style="opacity:0.5;">~${layer.outputTokenEstimate || 0} tok</span></div>
-					<pre class="cm-trace-io-content">${escapeHtml(String(layer.output ?? ''))}</pre>
-					${(layer.notes && layer.notes.length) ? `<div class="cm-trace-io-label">NOTES</div><pre class="cm-trace-io-content">${escapeHtml(layer.notes.join(', '))}</pre>` : ''}
-				</div>
-			</div>`).join('');
-		const open = expandedTraces.has(queryId) ? ' open' : '';
+		const reason = (hp && hp.reason) ? hp.reason : '';
+		const upstream = (hp && hp.upstream) ? `<div class="cm-hr-meta">upstream: ${escapeHtml(hp.upstream)}</div>` : '';
+
 		return `
-			<details class="cm-trace-card" data-trace="${escapeAttr(queryId || '')}"${open} style="border-left-color:${borderColor};">
-				<summary class="cm-trace-summary">
-					<span style="font-size:10px;">${BUG_ICON}</span>
-					<span>Orchestration · ${totalMs}ms · ${escapeHtml(trace.intent || '')}</span>
-					<span style="display:flex;gap:2px;margin:0 8px;">${dots}</span>
-					<span style="opacity:0.6;">${tokenInfo}</span>
-				</summary>
-				<div class="cm-trace-detail">${rows}</div>
-			</details>`;
+			<div class="cm-hr-card cm-hr-${st.cls}" data-trace="${escapeAttr(queryId || '')}">
+				<div class="cm-hr-head">
+					<span class="cm-hr-dot"></span>
+					<span class="cm-hr-title">Headroom · ${escapeHtml(st.label)}</span>
+					<span class="cm-hr-time">${trace.totalDurationMs || 0}ms</span>
+				</div>
+				<div class="cm-hr-section">
+					<div class="cm-hr-label">INPUT</div>
+					<pre class="cm-hr-pre">${escapeHtml(input)}</pre>
+				</div>
+				<div class="cm-hr-section">
+					<div class="cm-hr-label">OPTIMIZATION</div>
+					${tokensHtml}
+					<div class="cm-hr-reason">${escapeHtml(reason)}</div>
+					${upstream}
+				</div>
+			</div>`;
 	}
 
 	function render() {
@@ -108,15 +92,6 @@
 			.map((qid) => traceCardHtml(traces.get(qid), qid))
 			.join('');
 	}
-
-	// Open/close state must survive the next full re-render, so mirror each card's
-	// toggle into expandedTraces (event delegation — cards are replaced on every render).
-	listEl.addEventListener('toggle', (e) => {
-		const card = e.target;
-		if (!card || !card.classList || !card.classList.contains('cm-trace-card')) { return; }
-		const qid = card.getAttribute('data-trace') || '';
-		if (card.open) { expandedTraces.add(qid); } else { expandedTraces.delete(qid); }
-	}, true);
 
 	clearBtn.addEventListener('click', () => {
 		vscode.postMessage({ type: 'clear' });
@@ -135,7 +110,6 @@
 			render();
 		} else if (message.type === 'clear') {
 			traces.clear();
-			expandedTraces.clear();
 			render();
 		}
 	});

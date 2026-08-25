@@ -2698,6 +2698,11 @@ export class CodeMindAgentViewPane extends ViewPane {
 				continue;
 			}
 			const lines = text.split('\n').filter(line => line.trim());
+			// The same ghosts Chat History hides (sidechain sub-agent logs, checkpoint
+			// stubs) must not be resumable either.
+			if (this._isGhostTranscript(log.name, lines)) {
+				continue;
+			}
 			sessions.push({
 				id: log.name.replace(/\.jsonl$/, ''),
 				summary: this._firstPromptOf(lines),
@@ -2737,6 +2742,34 @@ export class CodeMindAgentViewPane extends ViewPane {
 			}
 		}
 		return '';
+	}
+
+	/**
+	 * Whether a transcript is machinery rather than a conversation, and so must never
+	 * appear in Chat History or /resume. Two kinds exist:
+	 *
+	 * - Sidechain sub-agent logs (`agent-*.jsonl`, every line `isSidechain:true`). The
+	 *   engine's background workers — including the CLI's cache-prewarm agents whose
+	 *   first prompt is literally "Warmup" — each write one. They are fragments of some
+	 *   real session, not sessions themselves.
+	 * - Checkpoint stubs: a UUID transcript holding only `file-history-snapshot` lines,
+	 *   written when file checkpointing armed but no turn was ever persisted.
+	 *
+	 * Cheap checks first: the filename decides most files without reading them, and the
+	 * line scan reuses what `_firstPromptOf` already reads.
+	 */
+	private _isGhostTranscript(fileName: string, lines: readonly string[]): boolean {
+		if (/^agent-.+\.jsonl$/i.test(fileName)) {
+			return true;
+		}
+		let sawConversationLine = false;
+		for (const line of lines.slice(0, 40)) {
+			if (!line.includes('"file-history-snapshot"')) {
+				sawConversationLine = true;
+				break;
+			}
+		}
+		return !sawConversationLine;
 	}
 
 	/**
@@ -2831,6 +2864,11 @@ export class CodeMindAgentViewPane extends ViewPane {
 				continue;
 			}
 			const lines = text.split('\n').filter(line => line.trim());
+			// Sidechain sub-agent logs ("Warmup" prewarm workers among them) and
+			// checkpoint-only stubs are machinery, not conversations — skip them.
+			if (this._isGhostTranscript(log.name, lines)) {
+				continue;
+			}
 			entries.push({
 				id: log.name.replace(/\.jsonl$/, ''),
 				topic: this._firstPromptOf(lines),
@@ -2973,7 +3011,22 @@ export class CodeMindAgentViewPane extends ViewPane {
 		if (this._pendingResumeSessionId === payload.id) {
 			this._pendingResumeSessionId = undefined;
 		}
-		await this._sendHistory(this._lastHistoryAllProjects);
+		// A multi-select delete arrives as several of these messages back to back;
+		// coalesce their list refreshes into one rescan at the end of the burst.
+		this._scheduleHistoryRefresh();
+	}
+
+	/** Trailing-edge coalescer for history refreshes during a bulk delete. */
+	private _historyRefreshTimer: Timeout | undefined;
+
+	private _scheduleHistoryRefresh(): void {
+		if (this._historyRefreshTimer !== undefined) {
+			clearTimeout(this._historyRefreshTimer);
+		}
+		this._historyRefreshTimer = setTimeout(() => {
+			this._historyRefreshTimer = undefined;
+			void this._sendHistory(this._lastHistoryAllProjects);
+		}, 150);
 	}
 
 	/**
@@ -3656,6 +3709,10 @@ export class CodeMindAgentViewPane extends ViewPane {
 							model,
 						},
 					});
+					// An engine-cutoff result (max turns, budget, mid-execution failure)
+					// arrives with isError set even though text streamed fine before it —
+					// the work stopped mid-task and must not read as a finished answer.
+					if (event.isError) { turnFailed = true; }
 					const assistantMessage: AgentMessage = {
 						id: streamId,
 						// A failed turn is filed as an error: it is what the panel is showing,

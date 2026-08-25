@@ -40,6 +40,26 @@ echo CodeMind: %BIN%
 echo folder:   %FOLDER%
 echo.
 
+rem --- Optional: local Headroom compression proxy (Layer 6) -------------------
+rem Entirely optional and non-fatal. CodeMind compresses the pre-fetched context
+rem through this LOCAL proxy when it is up and passes it through unchanged when
+rem it is not, so the launch never depends on it and nothing leaves the machine.
+rem headroom-ai ships no CLI bin, so this only fires if a `headroom` command is
+rem separately on PATH; otherwise we print one line and carry on.
+where headroom >nul 2>&1
+if %ERRORLEVEL%==0 (
+	netstat -ano | findstr ":7878" | findstr /i "LISTENING" >nul 2>&1
+	if errorlevel 1 (
+		echo Headroom: starting local proxy on :7878
+		start "" /b headroom proxy --port 7878
+	) else (
+		echo Headroom: proxy already running on :7878
+	)
+) else (
+	echo Headroom: no 'headroom' CLI on PATH -- running without compression ^(optional^).
+)
+echo.
+
 rem Dev mode (same flags the upstream scripts\code.bat sets): the compiled
 rem workbench in out\ is unbundled, and its CSS imports only load when the
 rem window is told this is a development build (VSCODE_DEV). Without this the

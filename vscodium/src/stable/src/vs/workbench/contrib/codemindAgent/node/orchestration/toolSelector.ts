@@ -3,119 +3,108 @@
  *  Licensed under the MIT License.
  *--------------------------------------------------------------------------------------------*/
 
-import { DeveloperIntent, IntentClassification, SelectionContext, ToolAdapter, ToolAdapterRegistry } from './types.js';
+import {
+    Capability, IntentClassification, SelectionContext, ToolAdapter,
+    ToolAdapterRegistry, ToolSelectionDecision, ToolSelectionResult,
+} from './types.js';
+import { resolveRequiredCapabilities } from './capabilities.js';
 
 /**
- * Tool Selection Engine (Section 3)
- * Dynamic selection based on intent + context. No intent has a hardcoded fixed set.
+ * Tool Selection Engine (Section 3) — capability-based.
+ *
+ * Selection has NO per-intent adapter list and NO switch over adapter ids. It:
+ *   1. asks capabilities.ts for the ORDERED capabilities the intent+context need;
+ *   2. resolves each capability to whatever registered adapter ADVERTISES it
+ *      (adapter.capabilities), in required-capability order;
+ *   3. lets each candidate adapter's own shouldRun() veto itself.
+ * A new adapter becomes eligible purely by advertising a capability — no edit here.
  */
 
+/** All adapters in the registry, in insertion order. */
+function adaptersOf(registry: ToolAdapterRegistry): ToolAdapter[] {
+    return Array.from(registry.values());
+}
+
+function advertises(adapter: ToolAdapter, cap: Capability): boolean {
+    return (adapter.capabilities ?? []).includes(cap);
+}
+
+/**
+ * Full capability-based selection with an auditable decision per registered
+ * adapter (selected or skipped, with the reason). This is the honest core used
+ * by the trace; `selectTools` is the thin ordered-list wrapper the pipeline uses.
+ */
+export function selectToolsWithReasons(
+    intent: IntentClassification,
+    context: SelectionContext,
+    registry: ToolAdapterRegistry,
+): ToolSelectionResult {
+    const required = resolveRequiredCapabilities(intent, context);
+    const all = adaptersOf(registry);
+
+    const selected: ToolAdapter[] = [];
+    const selectedIds = new Set<string>();
+    const satisfied: Capability[] = [];
+    const unmet: Capability[] = [];
+
+    // Resolve each required capability, in order, to the first advertising
+    // adapter that isn't vetoed. Order of `selected` therefore follows the
+    // order of `required` — deterministic and independent of adapter internals.
+    for (const cap of required) {
+        const providers = all.filter(a => advertises(a, cap));
+        if (providers.length === 0) {
+            unmet.push(cap); // nothing in this registry can provide it
+            continue;
+        }
+        if (providers.some(a => selectedIds.has(a.id))) {
+            satisfied.push(cap); // already covered by an earlier pick
+            continue;
+        }
+        const runnable = providers.find(a => a.shouldRun(intent, context));
+        if (runnable) {
+            selected.push(runnable);
+            selectedIds.add(runnable.id);
+            satisfied.push(cap);
+        } else {
+            unmet.push(cap); // a provider exists but its shouldRun() vetoed
+        }
+    }
+
+    const decisions: ToolSelectionDecision[] = all.map(a => {
+        const advertised = a.capabilities ?? [];
+        const matched = required.filter(c => advertised.includes(c));
+        const isSelected = selectedIds.has(a.id);
+        let reason: string;
+        if (isSelected) {
+            reason = `selected — provides ${matched.join(', ')}`;
+        } else if (matched.length === 0) {
+            reason = `skipped — advertises [${advertised.join(', ') || 'nothing'}]; intent requires none of them`;
+        } else if (!a.shouldRun(intent, context)) {
+            reason = `skipped — could provide ${matched.join(', ')} but shouldRun() vetoed for this context`;
+        } else {
+            reason = `skipped — ${matched.join(', ')} already satisfied by an earlier adapter`;
+        }
+        return { adapterId: a.id, selected: isSelected, advertisedCapabilities: advertised, matchedCapabilities: matched, reason };
+    });
+
+    return {
+        selected,
+        decisions,
+        requiredCapabilities: required,
+        satisfiedCapabilities: satisfied.filter((c, i) => satisfied.indexOf(c) === i),
+        unmetCapabilities: unmet.filter((c, i) => unmet.indexOf(c) === i),
+    };
+}
+
+/**
+ * Ordered list of adapters to run for this intent+context. Backward-compatible
+ * signature; internally delegates to the capability-based resolver above.
+ */
 export function selectTools(
     intent: IntentClassification,
     context: SelectionContext,
-    registry: ToolAdapterRegistry
+    registry: ToolAdapterRegistry,
 ): ToolAdapter[] {
-    const selected: ToolAdapter[] = [];
-    const add = (id: string) => {
-        const adapter = registry.get(id);
-        if (adapter && adapter.shouldRun(intent, context)) {
-            selected.push(adapter);
-        }
-    };
-
-    switch (intent.intent) {
-        case DeveloperIntent.MEMORY_RETRIEVAL:
-            add('projectBrainAdapter');
-            // Never webSearch or repository for pure memory questions
-            break;
-
-        case DeveloperIntent.CODE_GENERATION:
-            if (intent.confidence >= 0.7) {
-                add('projectBrainAdapter');
-                add('repositoryAdapter');
-                add('fileContextAdapter');
-                if (intent.signals.some(s => /depend|package|npm|yarn|library/i.test(s))) {
-                    add('dependencyAdapter');
-                }
-            } else {
-                // Low confidence — minimal context
-                add('projectBrainAdapter');
-            }
-            break;
-
-        case DeveloperIntent.ARCHITECTURE:
-            add('projectBrainAdapter');
-            add('repositoryAdapter');
-            if (context.isFollowUp) add('fileContextAdapter');
-            break;
-
-        case DeveloperIntent.WEB_SEARCH:
-            add('webSearchAdapter');
-            if (intent.signals.some(s => /project|our|we|codebase/i.test(s))) {
-                add('projectBrainAdapter');
-            }
-            break;
-
-        case DeveloperIntent.GIT_OPERATIONS:
-            add('gitAdapter');
-            if (intent.signals.some(s => /commit message|PR|pull request/i.test(s))) {
-                add('fileContextAdapter');
-            }
-            break;
-
-        case DeveloperIntent.TERMINAL_EXECUTION:
-            add('terminalAdapter');
-            // No other adapters — terminal commands need minimal context
-            break;
-
-        case DeveloperIntent.DEBUGGING:
-            add('fileContextAdapter');
-            add('repositoryAdapter');
-            if (intent.signals.some(s => /\btest\b/i.test(s))) add('terminalAdapter');
-            if (intent.signals.some(s => /depend|package|library/i.test(s))) add('dependencyAdapter');
-            break;
-
-        case DeveloperIntent.CODE_REVIEW:
-            add('fileContextAdapter');
-            add('repositoryAdapter');
-            if (intent.signals.some(s => /latest|best practice|modern/i.test(s))) add('webSearchAdapter');
-            break;
-
-        case DeveloperIntent.TESTING:
-            add('fileContextAdapter');
-            add('dependencyAdapter');
-            add('terminalAdapter');
-            break;
-
-        case DeveloperIntent.PROJECT_ANALYSIS:
-            add('repositoryAdapter');
-            add('gitAdapter');
-            add('dependencyAdapter');
-            add('projectBrainAdapter');
-            break;
-
-        case DeveloperIntent.MULTI_TOOL_WORKFLOW:
-            // Union of tools from top two intents (caller already detected this)
-            // For simplicity we re-run selection with the two strongest signals
-            // In practice the orchestrator can call selectTools twice and merge.
-            // Here we just add the most common useful set.
-            add('projectBrainAdapter');
-            add('repositoryAdapter');
-            add('fileContextAdapter');
-            add('webSearchAdapter');
-            break;
-
-        default:
-            // Fallback: safe minimal set
-            add('projectBrainAdapter');
-            add('fileContextAdapter');
-    }
-
-    // Deduplicate while preserving order
-    const seen = new Set<string>();
-    return selected.filter(a => {
-        if (seen.has(a.id)) return false;
-        seen.add(a.id);
-        return true;
-    });
+    return selectToolsWithReasons(intent, context, registry).selected;
 }
+

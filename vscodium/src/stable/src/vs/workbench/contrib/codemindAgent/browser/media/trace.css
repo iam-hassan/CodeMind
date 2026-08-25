@@ -188,3 +188,109 @@ body {
 	border-radius: 50%;
 	display: inline-block;
 }
+
+/* ---------- Headroom (Layer 6) rich key/value block ---------- */
+.cm-headroom-kv {
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: 2px var(--cm-space-2);
+	margin: var(--cm-space-1) 0 var(--cm-space-2);
+	padding: var(--cm-space-2);
+	border: 1px solid var(--vscode-input-border);
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 40%, transparent);
+}
+.cm-headroom-row { display: contents; }
+.cm-headroom-k {
+	font-size: 9px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--vscode-descriptionForeground);
+	white-space: nowrap;
+}
+.cm-headroom-v {
+	font-size: var(--cm-text-xs);
+	font-family: var(--vscode-editor-font-family);
+	color: var(--vscode-foreground);
+	word-break: break-word;
+}
+
+/* ---------- Simplified Headroom card (current panel: INPUT + OPTIMIZATION only) ---------- */
+.cm-hr-card {
+	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+	border-left-width: 3px;
+	border-radius: var(--cm-radius-md);
+	padding: var(--cm-space-3);
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 55%, transparent);
+	display: flex;
+	flex-direction: column;
+	gap: var(--cm-space-2);
+}
+/* State drives the left border + dot colour. */
+.cm-hr-ok      { border-left-color: var(--vscode-testing-iconPassed, #3fb950); }
+.cm-hr-warn    { border-left-color: var(--vscode-editorWarning-foreground, #d29922); }
+.cm-hr-down    { border-left-color: var(--vscode-errorForeground, #f85149); }
+.cm-hr-unknown { border-left-color: var(--vscode-descriptionForeground); }
+
+.cm-hr-head {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-2);
+}
+.cm-hr-dot {
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	flex-shrink: 0;
+	background: var(--vscode-descriptionForeground);
+}
+.cm-hr-ok   .cm-hr-dot { background: var(--vscode-testing-iconPassed, #3fb950); }
+.cm-hr-warn .cm-hr-dot { background: var(--vscode-editorWarning-foreground, #d29922); }
+.cm-hr-down .cm-hr-dot { background: var(--vscode-errorForeground, #f85149); }
+
+.cm-hr-title {
+	flex: 1;
+	font-size: var(--cm-text-sm);
+	font-weight: 600;
+	color: var(--vscode-foreground);
+}
+.cm-hr-time {
+	font-size: var(--cm-text-xs);
+	color: var(--vscode-descriptionForeground);
+}
+.cm-hr-section { display: flex; flex-direction: column; gap: 2px; }
+.cm-hr-label {
+	font-size: 9px;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--vscode-descriptionForeground);
+}
+.cm-hr-pre {
+	font-size: var(--cm-text-xs);
+	font-family: var(--vscode-editor-font-family);
+	color: var(--vscode-foreground);
+	margin: 0;
+	white-space: pre-wrap;
+	word-break: break-word;
+	max-height: 160px;
+	overflow: auto;
+	border-left: 1px solid var(--vscode-input-border);
+	padding-left: var(--cm-space-2);
+}
+.cm-hr-tokens {
+	font-size: var(--cm-text-sm);
+	font-family: var(--vscode-editor-font-family);
+	color: var(--vscode-foreground);
+}
+.cm-hr-saved { color: var(--vscode-testing-iconPassed, #3fb950); }
+.cm-hr-reason {
+	font-size: var(--cm-text-sm);
+	color: var(--vscode-foreground);
+}
+.cm-hr-meta {
+	font-size: var(--cm-text-xs);
+	color: var(--vscode-descriptionForeground);
+	word-break: break-all;
+}

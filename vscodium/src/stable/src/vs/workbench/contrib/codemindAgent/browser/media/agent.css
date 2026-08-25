@@ -2339,6 +2339,46 @@ body.plan-mode .composer {
 	visibility: hidden;
 }
 
+/* The filter box at the top of the composer model menu. A gateway can serve dozens of
+   models, so the menu narrows as you type; sticky so rows scroll under it. */
+.model-menu-search-wrap {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	padding: var(--cm-space-1) var(--cm-space-2);
+	background: var(--cm-dropdown-bg);
+	border-bottom: var(--cm-hairline) solid var(--cm-dropdown-line);
+}
+
+.model-menu-search {
+	width: 100%;
+	box-sizing: border-box;
+	padding: var(--cm-space-1) var(--cm-space-2);
+	font-size: var(--cm-text-sm);
+	font-family: inherit;
+	color: var(--vscode-inputForeground, var(--cm-fg));
+	background: var(--vscode-input-background, transparent);
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-4px);
+	outline: none;
+}
+
+.model-menu-search:focus {
+	border-color: var(--cm-accent-line);
+}
+
+.model-menu-search::placeholder {
+	color: var(--cm-desc);
+}
+
+/* Shown when a filter matches nothing — a named dead end beats a blank box. */
+.model-menu-empty {
+	padding: var(--cm-space-2) var(--cm-space-10px);
+	font-size: var(--cm-text-sm);
+	color: var(--cm-desc);
+	white-space: nowrap;
+}
+
 /* ---------- Mode pill (Section 2.3) ----------
    One menu rather than three segments. Everything visual is the model pill's own — the two
    sit side by side in the strip and should not read as two different kinds of control — so
@@ -3176,6 +3216,23 @@ body.plan-mode .composer {
 	max-width: min(var(--cm-size-480px), var(--cm-vw-sheet));
 	text-align: left;
 }
+/* The filter box shared by the "Models in the picker" sheet and the provider form's
+   imported-models list — same matcher, one look. */
+.picker-models-search {
+	width: 100%;
+	box-sizing: border-box;
+	margin-bottom: var(--cm-space-2);
+	padding: var(--cm-space-1) var(--cm-space-2);
+	font-size: var(--cm-text-sm);
+	font-family: inherit;
+	color: var(--vscode-inputForeground, var(--cm-fg));
+	background: var(--vscode-input-background, transparent);
+	border: var(--cm-hairline) solid var(--cm-border);
+	border-radius: var(--cm-radius-4px);
+	outline: none;
+}
+.picker-models-search:focus { border-color: var(--cm-accent-line); }
+.picker-models-search::placeholder { color: var(--cm-desc); }
 .picker-models-sheet-list {
 	display: flex;
 	flex-direction: column;
@@ -3212,7 +3269,25 @@ body.plan-mode .composer {
 /* Chat History panel. Search sits tight above the All-projects toggle; each row's
    path is monospace and truncates with an ellipsis, the full path on hover via `title`. */
 .panel-body .history-search-group { margin-bottom: var(--cm-space-2); }
-.panel-body .history-toolbar { margin-bottom: var(--cm-space-3); }
+.panel-body .history-toolbar {
+	justify-content: space-between;
+	align-items: center;
+}
+/* Select-all + Delete-selected sit as a pair on the toolbar's right; the button is
+   disabled (and count-less) until at least one row is ticked. */
+.panel-body .history-select-controls {
+	display: flex;
+	align-items: center;
+	gap: var(--cm-space-2);
+}
+.panel-body .history-select-controls .btn { padding: var(--cm-hairline) var(--cm-space-2); font-size: var(--cm-text-sm); }
+.panel-body .btn-danger:disabled { opacity: 0.5; cursor: default; }
+.panel-body .btn-danger:disabled:hover { background: color-mix(in srgb, var(--cm-error-fg) 12%, transparent); }
+.panel-body .history-row.is-selected {
+	border-color: var(--cm-accent-line);
+	background: var(--cm-accent-soft);
+}
+.panel-body .history-row .panel-row-toggle { margin-top: var(--cm-space-5px); }
 .panel-body .history-path {
 	font-family: var(--vscode-editor-font-family, monospace);
 }

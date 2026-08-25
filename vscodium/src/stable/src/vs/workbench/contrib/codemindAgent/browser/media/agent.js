@@ -515,6 +515,10 @@ function openModelMenu() {
 	renderModelMenu();
 	if (modelPill) { modelPill.setAttribute('aria-expanded', 'true'); }
 	modelMenuOpen = true;
+	// Focus follows the menu: with the filter box carrying focus, typing narrows the
+	// list at once and the arrow keys walk it — no second click needed.
+	const search = modelMenu.querySelector('.model-menu-search');
+	if (search) { search.focus(); }
 }
 
 function closeModelMenu() {
@@ -531,24 +535,131 @@ function closeModelMenu() {
  * Build the menu from the list every other picker offers, so the models a custom
  * endpoint reported are here too and the configured one can always be found again.
  */
+/** The unfiltered option list behind the open composer model menu, cached so
+ *  each keystroke filters the full set rather than the previous keystroke's subset. */
+let modelMenuFullOptions = [];
+
 function renderModelMenu() {
 	const panels = window.CodeMindPanels;
-	const options = (panels && panels.modelOptions) ? panels.modelOptions() : [];
-	modelMenu.innerHTML = options.map(o => `
+	modelMenuFullOptions = (panels && panels.modelOptions) ? panels.modelOptions() : [];
+	// A gateway can serve dozens of models; typing narrows them without leaving the
+	// keyboard. The box is part of the menu markup so it survives row redraws; its
+	// value is reset here, since reopening the menu should start fresh.
+	let searchWrap = modelMenu.querySelector('.model-menu-search-wrap');
+	if (!searchWrap) {
+		searchWrap = document.createElement('div');
+		searchWrap.className = 'model-menu-search-wrap';
+		searchWrap.innerHTML = `<input type="text" class="model-menu-search" placeholder="Filter models…" autocomplete="off" spellcheck="false" aria-label="Filter models">`;
+		modelMenu.appendChild(searchWrap);
+		const searchInput = searchWrap.querySelector('input');
+		searchInput.addEventListener('input', (e) => {
+			renderModelMenuRows(e.currentTarget.value || '');
+		});
+		// Arrow/Enter navigation while typing: the rows are real DOM siblings, so the
+		// selection is just the row carrying `aria-selected` — the same attribute the
+		// check mark already reads.
+		searchInput.addEventListener('keydown', (e) => {
+			const rows = Array.from(modelMenu.querySelectorAll('.model-menu-item'));
+			if (!rows.length) { return; }
+			let idx = rows.findIndex(r => r.getAttribute('aria-selected') === 'true');
+			if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+				e.preventDefault();
+				e.stopPropagation();
+				rows.forEach(r => r.setAttribute('aria-selected', 'false'));
+				// No selection yet: Down enters at the top, Up at the bottom.
+				idx = e.key === 'ArrowDown'
+					? (idx < 0 ? 0 : Math.min(rows.length - 1, idx + 1))
+					: (idx < 0 ? rows.length - 1 : Math.max(0, idx - 1));
+				rows[idx].setAttribute('aria-selected', 'true');
+				// scrollTop only — scrollIntoView would be free to move the transcript
+				// behind the menu as well (Section 2.2's own note).
+				modelMenu.scrollTop = Math.max(0, rows[idx].offsetTop - modelMenu.clientHeight / 2);
+				return;
+			}
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				e.stopPropagation();
+				const picked = rows[Math.max(0, idx)];
+				if (picked) { chooseModel(picked.dataset.value, picked.dataset.provider); }
+			}
+		});
+	}
+	searchWrap.querySelector('input').value = '';
+	renderModelMenuRows('');
+}
+
+/**
+ * Paint the menu's rows, filtered through `query` when one is typed. Kept separate
+ * from the menu chrome so typing redraws rows without touching — or losing focus
+ * from — the search box above them.
+ */
+function renderModelMenuRows(query) {
+	const q = (query || '').trim();
+	const options = q
+		? fuzzySort(modelMenuFullOptions, q, o => `${o.label} ${o.value} ${o.providerName || ''}`)
+		: modelMenuFullOptions;
+	// Rows are appended after the search wrap and stale ones removed first, so an
+	// empty match leaves a "no models" line rather than a blank box.
+	Array.from(modelMenu.querySelectorAll('.model-menu-item, .model-menu-empty')).forEach(el => el.remove());
+	if (!options.length) {
+		modelMenu.insertAdjacentHTML('beforeend', '<div class="model-menu-empty">No models match.</div>');
+		return;
+	}
+	const rowsHtml = options.map(o => `
 		<div class="model-menu-item" role="option" data-value="${escapeAttr(o.value)}" data-provider="${escapeAttr(o.providerId || '')}" aria-selected="${o.value === currentModel ? 'true' : 'false'}" title="${escapeAttr((o.providerName ? o.providerName + ' — ' : '') + (o.label || o.value))}">
 			<span class="model-menu-name">${escapeHtml(modelDisplayName(o.value))}</span>
 			${o.providerName ? `<span class="model-menu-provider">${escapeHtml(o.providerName)}</span>` : ''}
 			<span class="model-menu-check" aria-hidden="true">${o.value === currentModel ? CHECK_SVG : ''}</span>
 		</div>
 	`).join('');
+	modelMenu.insertAdjacentHTML('beforeend', rowsHtml);
 	modelMenu.querySelectorAll('.model-menu-item').forEach(row => {
 		row.addEventListener('click', () => chooseModel(row.dataset.value, row.dataset.provider));
 	});
-	// Open on the current choice rather than at the top of a list it may be far down.
-	// Only the menu's own scroll is touched: scrollIntoView would be free to move the
-	// transcript behind it as well.
-	const selected = modelMenu.querySelector('.model-menu-item[aria-selected="true"]');
-	if (selected) { modelMenu.scrollTop = Math.max(0, selected.offsetTop - modelMenu.clientHeight / 2); }
+	if (!q) {
+		// Open on the current choice rather than at the top of a list it may be far down.
+		// Only when no filter is active — a filtered list reads best from its top.
+		const selected = modelMenu.querySelector('.model-menu-item[aria-selected="true"]');
+		const searchWrap = modelMenu.querySelector('.model-menu-search-wrap');
+		if (selected && searchWrap) { modelMenu.scrollTop = Math.max(0, selected.offsetTop - searchWrap.offsetHeight); }
+	} else {
+		modelMenu.scrollTop = 0;
+	}
+}
+
+/**
+ * Subsequence match with a contiguity-and-boundary score, tuned for model ids:
+ * "son5" finds Sonnet 5, "op48" finds Opus 4.8, "haiku" finds Haiku 4.5. Returns
+ * the items whose characters appear in order, best first. An empty query passes
+ * everything through in the given order.
+ */
+function fuzzyScore(query, text) {
+	const q = query.toLowerCase();
+	const t = text.toLowerCase();
+	if (!q) { return 0; }
+	let qi = 0;
+	let score = 0;
+	let lastHit = -2;
+	for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+		if (t[ti] !== q[qi]) { continue; }
+		// Consecutive hits read as one typed word; a hit at a separator (or the very
+		// start) reads as a new word — both beat a hit mid-word.
+		score += (ti === lastHit + 1) ? 3 : ((ti === 0 || /[-_ .\/]/.test(t[ti - 1])) ? 2 : 1);
+		lastHit = ti;
+		qi++;
+	}
+	// Every query character must have matched — otherwise it is not a match at all.
+	return qi === q.length ? score : -1;
+}
+
+/** Filter+rank `items` by `key(item)` against `query`; empty query → items as-is. */
+function fuzzySort(items, query, key) {
+	if (!query || !query.trim()) { return items; }
+	return items
+		.map(item => ({ item, s: fuzzyScore(query.trim(), key(item)) }))
+		.filter(x => x.s >= 0)
+		.sort((a, b) => b.s - a.s)
+		.map(x => x.item);
 }
 
 function chooseModel(value, providerId) {

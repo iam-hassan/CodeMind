@@ -152,6 +152,7 @@
 						<label>Models available from this provider</label>
 						<button class="btn btn-secondary" id="providerFetch">Fetch models</button>
 						<div class="setting-hint" id="providerFetchHint">Ask the endpoint what it serves — every model it lists is imported. You can also add a model id or alias by hand. Choose which of them appear in the composer under "Models in the picker" below.</div>
+						<input type="text" id="providerModelsSearch" class="picker-models-search" placeholder="Filter imported models…" autocomplete="off" spellcheck="false">
 						<div class="provider-models" id="providerModelChecks"></div>
 						<div class="provider-manual-row">
 							<input type="text" id="providerManualModel" placeholder="add a model id or alias, e.g. sonnet" autocomplete="off" spellcheck="false">
@@ -355,11 +356,15 @@
 			</div>
 			<div class="mcp-toolbar history-toolbar">
 				<label class="toggle-row"><input type="checkbox" id="historyAllProjects"> <span>All projects</span></label>
+				<span class="history-select-controls">
+					<label class="toggle-row"><input type="checkbox" id="historySelectAll"> <span>Select all</span></label>
+					<button class="btn btn-danger" id="historyDeleteSelected" disabled>Delete selected</button>
+				</span>
 			</div>
 			<div class="panel-rows" id="historyList">
 				<div class="panel-empty">Loading…</div>
 			</div>
-			<div class="setting-hint" style="margin-top:14px;">Past conversations from this project's transcripts. Click one to bring it back into the chat; the trash button deletes it for good.</div>
+			<div class="setting-hint" style="margin-top:14px;">Past conversations from this project's transcripts. Click one to bring it back into the chat; tick rows and use "Delete selected", or the trash button, to remove them.</div>
 		`,
 	};
 
@@ -555,27 +560,72 @@
 	let historyEntries = [];
 	/** Whether the last request asked for every project, echoed back to keep the toggle honest. */
 	let historyAllProjects = false;
+	/** Keys (`projectDir/id`) of rows ticked for deletion, surviving re-renders and searches. */
+	const historySelected = new Set();
 
 	/**
 	 * The history panel is populated by the workbench. Wire the search box (local
-	 * filter, no round trip) and the All-projects toggle (a fresh request, since it
-	 * changes which directories are read), then ask for the initial list.
+	 * filter, no round trip), the All-projects toggle (a fresh request, since it
+	 * changes which directories are read), and the select-all / delete-selected pair,
+	 * then ask for the initial list.
 	 */
 	function wireHistory(panelId, body) {
 		if (panelId !== 'history') { return; }
 		const search = body.querySelector('#historySearch');
 		const allBox = body.querySelector('#historyAllProjects');
+		const selectAll = body.querySelector('#historySelectAll');
+		const deleteBtn = body.querySelector('#historyDeleteSelected');
+		historySelected.clear();
 		if (search) { search.addEventListener('input', () => renderHistoryRows()); }
 		if (allBox) {
 			allBox.checked = historyAllProjects;
 			allBox.addEventListener('change', () => {
 				historyAllProjects = allBox.checked;
+				historySelected.clear();
 				const list = document.getElementById('historyList');
 				if (list) { list.innerHTML = '<div class="panel-empty">Loading…</div>'; }
 				vscode.postMessage({ type: 'requestHistory', payload: { allProjects: historyAllProjects } });
 			});
 		}
+		if (selectAll) {
+			selectAll.addEventListener('change', () => {
+				if (selectAll.checked) {
+					for (const e of visibleHistoryEntries()) { historySelected.add(`${e.projectDir}/${e.id}`); }
+				} else {
+					historySelected.clear();
+				}
+				renderHistoryRows();
+			});
+		}
+		if (deleteBtn) {
+			deleteBtn.addEventListener('click', () => {
+				const picked = historyEntries.filter(e => historySelected.has(`${e.projectDir}/${e.id}`));
+				if (!picked.length) { return; }
+				showSheet({
+					title: `Delete ${picked.length} conversation${picked.length === 1 ? '' : 's'}?`,
+					className: 'confirm-sheet',
+					body: `<p>${escapeHtml(picked.slice(0, 5).map(e => e.topic || '(no prompt recorded)').join('\n'))}${picked.length > 5 ? `\n…and ${picked.length - 5} more` : ''}</p><p class="setting-hint">The transcripts are moved to the trash. This cannot be undone from here.</p>`,
+					confirmLabel: 'Delete',
+					onConfirm: () => {
+						for (const entry of picked) {
+							vscode.postMessage({ type: 'deleteSession', payload: { id: entry.id, projectDir: entry.projectDir } });
+						}
+						// Optimistic: drop them locally so the rows go at once; the
+						// workbench re-sends the list after each delete lands anyway.
+						historyEntries = historyEntries.filter(e => !historySelected.has(`${e.projectDir}/${e.id}`));
+						historySelected.clear();
+						renderHistoryRows();
+						return true;
+					},
+				});
+			});
+		}
 		vscode.postMessage({ type: 'requestHistory', payload: { allProjects: historyAllProjects } });
+	}
+
+	/** The rows a filter-less view would show — what "Select all" covers. */
+	function visibleHistoryEntries() {
+		return historyEntries;
 	}
 
 	/** Store the workbench's history rows and paint them. Called from agent.js on `historyData`. */
@@ -585,6 +635,12 @@
 			historyAllProjects = allProjects;
 			const allBox = document.getElementById('historyAllProjects');
 			if (allBox) { allBox.checked = allProjects; }
+		}
+		// Selection keys that no longer have a row are stale (deleted elsewhere); drop
+		// them so the count stays truthful.
+		const live = new Set(historyEntries.map(e => `${e.projectDir}/${e.id}`));
+		for (const key of Array.from(historySelected)) {
+			if (!live.has(key)) { historySelected.delete(key); }
 		}
 		renderHistoryRows();
 	}
@@ -599,12 +655,14 @@
 			const haystack = `${e.topic || ''} ${e.cwd || e.projectDir || ''}`.toLowerCase();
 			return haystack.includes(query);
 		});
+		syncHistoryToolbar(rows);
 		if (!rows.length) {
 			list.innerHTML = `<div class="panel-empty">${historyEntries.length ? 'No conversations match your search.' : 'No past conversations yet.'}</div>`;
 			return;
 		}
 		list.innerHTML = rows.map((e, i) => `
-			<div class="panel-row panel-row-openable history-row" data-idx="${i}">
+			<div class="panel-row panel-row-openable history-row ${historySelected.has(`${e.projectDir}/${e.id}`) ? 'is-selected' : ''}" data-idx="${i}">
+				<input type="checkbox" class="panel-row-toggle history-select" data-idx="${i}" ${historySelected.has(`${e.projectDir}/${e.id}`) ? 'checked' : ''} title="Select for deletion" aria-label="Select ${escapeHtml(e.topic || 'conversation')}">
 				<div class="panel-row-main">
 					<div class="panel-row-label">
 						${escapeHtml(e.topic || '(no prompt recorded)')}
@@ -618,11 +676,25 @@
 		`).join('');
 
 		list.querySelectorAll('.history-row').forEach(row => row.addEventListener('click', (e) => {
-			if (e.target.closest('button')) { return; }
+			// A click on the checkbox or the trash button is not an open.
+			if (e.target.closest('button, input')) { return; }
 			const entry = rows[Number(row.dataset.idx)];
 			if (!entry) { return; }
 			vscode.postMessage({ type: 'openSession', payload: { id: entry.id, projectDir: entry.projectDir, current: entry.current === true } });
 			closePanel();
+		}));
+		list.querySelectorAll('.history-select').forEach(box => box.addEventListener('change', (e) => {
+			e.stopPropagation();
+			const entry = rows[Number(e.currentTarget.dataset.idx)];
+			if (!entry) { return; }
+			const key = `${entry.projectDir}/${entry.id}`;
+			if (e.currentTarget.checked) { historySelected.add(key); } else { historySelected.delete(key); }
+			row.classList.toggle('is-selected', e.currentTarget.checked);
+			syncHistoryToolbar();
+			// Select-all reads as "everything is ticked" only while it truly is.
+			const selectAll = document.getElementById('historySelectAll');
+			const vis = visibleHistoryEntries();
+			if (selectAll) { selectAll.checked = vis.length > 0 && vis.every(x => historySelected.has(`${x.projectDir}/${x.id}`)); }
 		}));
 		list.querySelectorAll('[data-del]').forEach(btn => btn.addEventListener('click', () => {
 			const entry = rows[Number(btn.dataset.del)];
@@ -642,6 +714,22 @@
 				},
 			});
 		}));
+	}
+
+	/** Keep Select-all's check state and Delete-selected's enabled/count label honest. */
+	function syncHistoryToolbar(rows) {
+		const selectAll = document.getElementById('historySelectAll');
+		const deleteBtn = document.getElementById('historyDeleteSelected');
+		const vis = rows || visibleHistoryEntries();
+		if (deleteBtn) {
+			deleteBtn.disabled = historySelected.size === 0;
+			deleteBtn.textContent = historySelected.size
+				? `Delete selected (${historySelected.size})`
+				: 'Delete selected';
+		}
+		if (selectAll) {
+			selectAll.checked = vis.length > 0 && vis.every(x => historySelected.has(`${x.projectDir}/${x.id}`));
+		}
 	}
 
 	/** "12/03/2026 · 34 messages" for a history row. */
@@ -736,13 +824,11 @@
 					return;
 				}
 
-				// A fetch replaces the list rather than adding to it: models left over
-				// from a previous endpoint (or a previous URL typo) are not offered by
-				// the one being probed now, and saving them would put dead ids in the
-				// composer. Cleared up front so the stale list never lingers on screen
-				// while the probe runs, and stays cleared if the probe fails.
-				providerDraft.models = [];
-				renderModelChecks();
+				// Hand-added model ids are NOT cleared here: an endpoint that publishes no
+				// /v1/models list (or refuses the probe) must not destroy what was typed by
+				// hand — those ids are the only thing such a provider can offer. Only a
+				// successful listing replaces the draft (in applyProviderModels), which is
+				// what keeps models left over from a previous endpoint out of the composer.
 
 				// Only the newest probe may write to the draft. Without this, fixing a
 				// URL and re-fetching lets a slow first reply land last and overwrite
@@ -802,10 +888,9 @@
 		const models = Array.isArray(data.models) ? data.models.filter(m => typeof m === 'string' && m.trim()) : [];
 
 		if (!data.success || !data.wire) {
-			// The draft was already cleared at click time, so there is nothing stale to
-			// undo here — just report what to fix. The backend's message names the
-			// specific cause (bad address, refused key, unreachable host).
-			setProviderFetchHint(data.error || 'Could not reach that endpoint or identify its protocol. Check the API base URL and the key.', 'error');
+			// The probe failed, not the user's typing: whatever was hand-added stays in
+			// the draft so Save still stores it.
+			setProviderFetchHint(`${data.error || 'Could not reach that endpoint or identify its protocol. Check the API base URL and the key.'} Any model ids you added by hand are kept.`, 'error');
 			renderModelChecks();
 			return;
 		}
@@ -814,9 +899,12 @@
 
 		providerDraft.baseUrl = data.baseUrl;
 		providerDraft.wire = data.wire;
-		// De-duplicate: some gateways list the same id under several aliases, and a
-		// duplicate would render twice and be stored twice.
-		providerDraft.models = Array.from(new Set(models));
+		if (models.length) {
+			// A real listing replaces the draft (de-duplicated: some gateways list the
+			// same id under several aliases, and a duplicate would render and store twice).
+			providerDraft.models = Array.from(new Set(models));
+		}
+		// An empty listing keeps whatever was hand-added — same rule as applyProviderModels.
 
 		const baseUrlInput = document.querySelector('#providerBaseUrl');
 		// The backend normalises the address (adds a scheme, drops a trailing /v1), so
@@ -957,6 +1045,10 @@
 	 * plain removable list, not a tick-to-keep one. Which of them reach the composer
 	 * is a separate choice, made under "Models in the picker".
 	 */
+	/** What the provider form's model filter currently holds, kept across re-renders so
+	 *  a fetch or a remove does not clear what the user is mid-way through narrowing. */
+	let providerModelsFilter = '';
+
 	function renderModelChecks(fetched) {
 		const host = document.getElementById('providerModelChecks');
 		if (!host) { return; }
@@ -966,17 +1058,38 @@
 			const v = m && m.value;
 			if (v && !providerDraft.models.includes(v)) { providerDraft.models.push(v); }
 		}
-		const ids = providerDraft.models.slice();
-		if (!ids.length) {
+		// The filter box rides above the list. Its value outlives re-renders via
+		// `providerModelsFilter`, so typing → removing a row keeps the view narrowed.
+		const search = document.getElementById('providerModelsSearch');
+		if (search && !search.dataset.wired) {
+			search.dataset.wired = '1';
+			search.addEventListener('input', () => {
+				providerModelsFilter = search.value;
+				renderModelChecks();
+			});
+		}
+		if (search) { search.value = providerModelsFilter; }
+		const q = providerModelsFilter.trim().toLowerCase();
+		const allIds = providerDraft.models.slice();
+		const ids = q
+			? allIds.filter(v => fuzzySearchText(q, v))
+			: allIds;
+		if (!allIds.length) {
 			host.innerHTML = '<div class="provider-models-empty">No models yet — use “Fetch models” to import them from the endpoint, or add a model id by hand below.</div>';
 			return;
 		}
-		host.innerHTML = ids.map((v, i) => `
+		if (!ids.length) {
+			host.innerHTML = '<div class="provider-models-empty">No imported models match that filter.</div>';
+			return;
+		}
+		host.innerHTML = ids.map(v => {
+			const i = allIds.indexOf(v);
+			return `
 			<div class="provider-model-item">
 				<span>${escapeHtml(v)}</span>
 				<button class="icon-btn provider-model-remove" data-del="${i}" title="Remove" aria-label="Remove ${escapeHtml(v)}"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
 			</div>
-		`).join('');
+		`;}).join('');
 		host.querySelectorAll('[data-del]').forEach(btn => btn.addEventListener('click', e => {
 			const idx = Number(e.currentTarget.dataset.del);
 			providerDraft.models = providerDraft.models.filter((_, i) => i !== idx);
@@ -989,18 +1102,27 @@
 		const data = payload || {};
 		setProviderFetchBusy(false);
 		if (data.error) {
-			setProviderFetchHint(`Could not list models: ${data.error}`, 'error');
+			// The probe failed, not the user's typing: whatever was hand-added stays in
+			// the draft so Save still stores it.
+			setProviderFetchHint(`Could not list models: ${data.error}. Any model ids you added by hand are kept.`, 'error');
 			return;
 		}
 		const models = Array.isArray(data.models) ? data.models : [];
+		if (!models.length) {
+			// The endpoint answered but listed nothing usable. Hand-added ids are the
+			// only models this provider can offer — keep them and say so.
+			setProviderFetchHint(
+				`${data.endpoint || 'The endpoint'} published no model list. Any model ids you added by hand below are kept and will be saved.`,
+				'warn');
+			return;
+		}
 
-		// A fetch replaces the list rather than adding to it — see handleProviderDetection.
+		// A successful listing replaces the draft rather than adding to it: models left
+		// over from a previous endpoint (or a URL typo) would otherwise linger as dead
+		// ids in the composer.
 		providerDraft.models = [];
 
-		setProviderFetchHint(models.length
-			? `Imported ${models.length} model${models.length === 1 ? '' : 's'} from ${data.endpoint || 'the endpoint'}. Curate the composer's list under "Models in the picker".`
-			: `${data.endpoint || 'The endpoint'} listed no Anthropic-compatible models.`,
-			models.length ? 'ok' : 'warn');
+		setProviderFetchHint(`Imported ${models.length} model${models.length === 1 ? '' : 's'} from ${data.endpoint || 'the endpoint'}. Curate the composer's list under "Models in the picker".`, 'ok');
 
 		// Replace the model list completely (not append)
 		renderModelChecks(models);
@@ -1049,18 +1171,20 @@
 		}
 		const selected = new Set((Array.isArray(settings.pickerModels) ? settings.pickerModels : []).map(e => `${e.providerId} ${e.model}`));
 		const body = `
+			<input type="text" id="pickerModelsSearch" class="picker-models-search" placeholder="Filter models…" autocomplete="off" spellcheck="false">
 			<div class="picker-models-sheet-list">
 				${groups.map(p => `
 					<div class="picker-model-group">
 						<div class="picker-model-provider">${escapeHtml(p.name || 'Provider')}</div>
 						${p.models.map(m => `
-							<label class="picker-model-check">
+							<label class="picker-model-check" data-search="${escapeHtml(`${labelForModel(m)} ${m} ${p.name || ''}`)}">
 								<input type="checkbox" data-provider="${escapeHtml(p.id)}" data-model="${escapeHtml(m)}" ${selected.has(`${p.id} ${m}`) ? 'checked' : ''}>
 								<span class="picker-model-check-name">${escapeHtml(labelForModel(m))}</span>
 							</label>
 						`).join('')}
 					</div>
 				`).join('')}
+				<div class="panel-empty" id="pickerModelsEmpty" style="display:none;">No models match that filter.</div>
 			</div>`;
 		showSheet({
 			title: 'Models in the picker',
@@ -1068,10 +1192,35 @@
 			body,
 			confirmLabel: 'Done',
 			onConfirm(overlay) {
-				const picked = Array.from(overlay.querySelectorAll('input[type="checkbox"]:checked'))
+				const picked = Array.from(overlay.querySelectorAll('.picker-models-sheet-list input[type="checkbox"]:checked'))
 					.map(box => ({ providerId: box.dataset.provider, model: box.dataset.model }));
 				pushSettingChange({ pickerModels: picked });
 				return true;
+			},
+			onOpen(overlay) {
+				// Fuzzy filter over the checkbox rows. The query rides on each row's
+				// data-search (label + raw id + provider), so "son5" finds Sonnet 5 and a
+				// provider name narrows to that provider's group. Groups whose every row
+				// is hidden are hidden whole; an all-empty result says so.
+				const search = overlay.querySelector('#pickerModelsSearch');
+				if (!search) { return; }
+				search.focus();
+				search.addEventListener('input', () => {
+					const q = search.value.trim().toLowerCase();
+					let anyVisible = false;
+					overlay.querySelectorAll('.picker-model-group').forEach(group => {
+						let groupVisible = false;
+						group.querySelectorAll('.picker-model-check').forEach(row => {
+							const hit = !q || fuzzySearchText(q, row.dataset.search || '');
+							row.style.display = hit ? '' : 'none';
+							if (hit) { groupVisible = true; }
+						});
+						group.style.display = groupVisible ? '' : 'none';
+						if (groupVisible) { anyVisible = true; }
+					});
+					const empty = overlay.querySelector('#pickerModelsEmpty');
+					if (empty) { empty.style.display = anyVisible ? 'none' : ''; }
+				});
 			},
 		});
 	}
@@ -1513,6 +1662,22 @@
 	function escapeHtml(t) {
 		if (t == null) return '';
 		return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+	}
+
+	/**
+	 * Subsequence fuzzy match for filter boxes: every character of `query` must appear
+	 * in `text` in order (case-insensitive), so "son5" matches "Sonnet 5" and "op48"
+	 * matches "claude-opus-4-8". Mirrors the composer menu's matcher in agent.js.
+	 */
+	function fuzzySearchText(query, text) {
+		const q = String(query || '').toLowerCase();
+		const t = String(text || '').toLowerCase();
+		if (!q) { return true; }
+		let qi = 0;
+		for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+			if (t[ti] === q[qi]) { qi++; }
+		}
+		return qi === q.length;
 	}
 
 	// ---------- One-setting pickers (Alt+P / Alt+T / Alt+O) ----------
