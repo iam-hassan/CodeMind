@@ -1982,228 +1982,53 @@ body.plan-mode .composer {
 	opacity: 0.85;
 }
 
-/* Companion (CLI: buddy/CompanionSprite.tsx). The sprite sits at the right edge of
- * the composer with its bubble to the left, which is the CLI's arrangement rotated
- * into the space a panel actually has. */
-.buddy {
-	display: flex;
-	align-items: flex-end;
-	justify-content: flex-end;
-	gap: var(--cm-space-2);
-	margin-bottom: var(--cm-space-1);
-}
+/* ---------- Aristotle, the composer pet (Section 2.6) ----------
+   A box carrying one sprite strip as its background; media/aristotle.js steps the frame.
+   Every frame of every strip is the same size and holds the same stage, so a state change
+   cannot move him — only `background-position-x` changes.
 
-.buddy-bubble {
-	/* The CLI wraps the bubble at 30 columns inside a 34-wide box; a character-based
-	   max-width is the same limit expressed the way CSS can hold it. */
-	max-width: var(--cm-size-30ch);
-	padding: var(--cm-space-1) var(--cm-space-9px);
-	border: var(--cm-hairline) solid var(--cm-accent-line);
-	border-radius: var(--cm-radius-md) var(--cm-radius-md) var(--cm-radius-2px) var(--cm-radius-md);
-	background: var(--cm-accent-soft);
-	color: var(--cm-fg);
-	font-size: var(--cm-text-sm-lg);
-	line-height: var(--cm-lh-snug);
-	cursor: pointer;
-	transition: opacity var(--cm-duration-fade) linear;
-}
+   The frame is deliberately larger than the pet: it has to contain the butterfly's flight and
+   the sleep bubbles, which travel far outside the standing pose. So the box is anchored by the
+   pet's own edges rather than the frame's — `--cm-aristotle-body-right` and `-bottom` are
+   written by the script from the generated manifest — and the surplus hangs upward over the
+   transcript, where there is room for it.
 
-.buddy-sprite {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: var(--cm-hairline);
-	flex-shrink: 0;
-	padding: var(--cm-space-2px) var(--cm-space-5px);
-	border: var(--cm-hairline) solid transparent;
-	border-radius: var(--cm-radius-sm);
-	background: transparent;
-	color: var(--cm-desc);
-	cursor: pointer;
-}
+   `bottom: 100%`, less his own bottom margin, puts his feet on the composer's top edge: he is
+   sitting on the input bar rather than floating over it. The z-index stays below the composer's
+   own overlays (20) so a slash or @-mention list is never covered by a pet.
 
-.buddy-sprite:hover {
-	background: var(--cm-toolbar-hover);
-	color: var(--cm-fg);
-}
-
-.buddy-sprite.excited {
-	color: var(--cm-accent);
-}
-
-.buddy-art {
-	margin: 0;
-	white-space: pre;
-	font-family: var(--vscode-editor-font-family, monospace);
-	font-size: var(--cm-text-xs);
-	line-height: var(--cm-lh-art);
-}
-
-.buddy-name {
-	font-size: var(--cm-text-2xs);
-	letter-spacing: var(--cm-track-label);
-}
-
-/* The card `/buddy` opens: a widget over the chat, positioned like the slash menu so
- * the two can never fight for the same strip of screen. */
-.buddy-card {
+   Reduced motion is handled in the script, which holds the idle pose and never starts the
+   frame loop — a background-position animation would slip past the sheet-wide rule. */
+.aristotle {
 	position: absolute;
-	right: var(--cm-space-3);
-	bottom: 100%;
-	margin-bottom: var(--cm-space-6px);
-	z-index: 20;
-	width: var(--cm-size-268px);
-	max-width: calc(100% - var(--cm-space-24px));
-	padding: var(--cm-space-10px);
-	background: var(--vscode-editorWidget-background, var(--cm-sidebar-bg));
-	border: var(--cm-hairline) solid var(--cm-border);
-	border-left: var(--cm-space-2px) solid var(--cm-desc);
-	border-radius: var(--cm-radius-md);
-	box-shadow: 0 var(--cm-space-6px) var(--cm-space-20px) var(--vscode-widget-shadow, var(--vscode-scrollbar-shadow, color-mix(in srgb, var(--cm-border) 70%, transparent)));
+	bottom: calc(100% - var(--cm-aristotle-body-bottom, 0px));
+	right: calc(var(--cm-space-4) - var(--cm-aristotle-body-right, 0px));
+	z-index: 5;
+	/* Only his body takes the pointer (.aristotle-hit below); the transparent margin must
+	   not shadow the transcript underneath it. */
+	pointer-events: none;
 }
 
-/* Rarity is the one thing the card says with colour rather than words. */
-.buddy-card[data-rarity="uncommon"] { border-left-color: var(--cm-success); }
-.buddy-card[data-rarity="rare"] { border-left-color: var(--cm-link); }
-.buddy-card[data-rarity="epic"] { border-left-color: var(--cm-accent); }
-.buddy-card[data-rarity="legendary"] { border-left-color: var(--cm-warning); }
-
-.buddy-card-head {
-	display: flex;
-	align-items: flex-start;
-	gap: var(--cm-space-9px);
+.aristotle-layer {
+	position: absolute;
+	inset: 0;
+	background-repeat: no-repeat;
+	/* The strips are authored at 2x and shown at half size. Let the browser filter that
+	   reduction — `pixelated` would fight it and alias every outline. */
+	image-rendering: auto;
 }
 
-.buddy-card-art {
-	margin: 0;
-	flex-shrink: 0;
-	white-space: pre;
-	font-family: var(--vscode-editor-font-family, monospace);
-	font-size: var(--cm-text-3xs);
-	line-height: var(--cm-lh-art);
-	color: var(--cm-fg);
-}
-
-.buddy-card-id {
-	flex: 1;
-	min-width: 0;
-}
-
-.buddy-card-name {
-	font-size: var(--cm-text-base);
-	color: var(--cm-fg);
-}
-
-.buddy-card-kind,
-.buddy-card-hat,
-.buddy-card-hatched {
-	font-size: var(--cm-text-xs-lg);
-	color: var(--cm-desc);
-}
-
-.buddy-stars {
-	color: var(--cm-warning);
-}
-
-.buddy-shiny {
-	color: var(--cm-accent);
-}
-
-.buddy-card-close {
-	flex-shrink: 0;
-	padding: 0 var(--cm-space-1);
+/* The clickable part is his body, not the frame. Poking him wakes him, and when nothing else
+   is happening it gets the butterfly out. */
+.aristotle-hit {
+	position: absolute;
+	pointer-events: auto;
+	cursor: pointer;
+	background: none;
 	border: none;
-	border-radius: var(--cm-radius-3px);
-	background: transparent;
-	color: var(--cm-desc);
-	font-size: var(--cm-text-base);
-	line-height: var(--cm-lh-none);
-	cursor: pointer;
+	padding: 0;
 }
 
-.buddy-card-close:hover {
-	background: var(--cm-toolbar-hover);
-	color: var(--cm-fg);
-}
-
-.buddy-card-personality {
-	margin: var(--cm-space-7px) 0;
-	font-size: var(--cm-text-sm-lg);
-	font-style: italic;
-	line-height: var(--cm-lh-snug);
-	color: var(--cm-fg);
-}
-
-.buddy-stats {
-	display: flex;
-	flex-direction: column;
-	gap: var(--cm-space-3px);
-}
-
-.buddy-stat {
-	display: flex;
-	align-items: center;
-	gap: var(--cm-space-6px);
-	font-size: var(--cm-text-xs);
-	color: var(--cm-desc);
-}
-
-.buddy-stat-name {
-	width: var(--cm-space-68px);
-	flex-shrink: 0;
-	letter-spacing: var(--cm-track-label);
-}
-
-.buddy-stat-bar {
-	flex: 1;
-	height: var(--cm-space-1);
-	border-radius: var(--cm-radius-pill);
-	background: var(--cm-code-bg);
-	overflow: hidden;
-}
-
-.buddy-stat-fill {
-	display: block;
-	height: 100%;
-	background: var(--cm-accent);
-}
-
-.buddy-stat-value {
-	width: var(--cm-space-22px);
-	flex-shrink: 0;
-	text-align: right;
-	font-variant-numeric: tabular-nums;
-}
-
-.buddy-card-foot {
-	display: flex;
-	align-items: center;
-	justify-content: flex-end;
-	gap: var(--cm-space-6px);
-	margin-top: var(--cm-space-9px);
-}
-
-.buddy-card-action {
-	padding: var(--cm-space-2px) var(--cm-space-2);
-	border: var(--cm-hairline) solid var(--cm-border);
-	border-radius: var(--cm-radius-4px);
-	background: transparent;
-	color: var(--cm-desc);
-	font-family: inherit;
-	font-size: var(--cm-text-xs-lg);
-	cursor: pointer;
-}
-
-.buddy-card-action:hover {
-	background: var(--cm-toolbar-hover);
-	color: var(--cm-fg);
-}
-
-.buddy-card-danger:hover {
-	background: var(--cm-error-bg);
-	color: var(--cm-error-fg);
-	border-color: var(--cm-error-fg);
-}
 
 /* ---------- Model pill (Section 2.2) ----------
    The model is named in exactly one place now, and that place is also how it is changed. The

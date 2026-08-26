@@ -2,12 +2,13 @@ diff --git a/.eslint-allowed-javascript-files b/.eslint-allowed-javascript-files
 index 7d315722..41981b2c 100644
 --- a/.eslint-allowed-javascript-files
 +++ b/.eslint-allowed-javascript-files
-@@ -120,6 +120,10 @@ src/vs/sessions/test/e2e/common.cjs
+@@ -120,6 +120,11 @@ src/vs/sessions/test/e2e/common.cjs
  src/vs/sessions/test/e2e/extensions/sessions-e2e-mock/extension.js
  src/vs/sessions/test/e2e/generate.cjs
  src/vs/sessions/test/e2e/test.cjs
 +src/vs/workbench/contrib/codemindAgent/browser/media/agent.js
-+src/vs/workbench/contrib/codemindAgent/browser/media/buddy.js
++src/vs/workbench/contrib/codemindAgent/browser/media/aristotle.js
++src/vs/workbench/contrib/codemindAgent/browser/media/aristotle/manifest.js
 +src/vs/workbench/contrib/codemindAgent/browser/media/input.js
 +src/vs/workbench/contrib/codemindAgent/browser/media/panels.js
  src/vs/workbench/contrib/webview/browser/pre/service-worker.js

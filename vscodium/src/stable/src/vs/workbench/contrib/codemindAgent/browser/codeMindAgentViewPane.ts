@@ -8,7 +8,6 @@ import { Event } from '../../../../base/common/event.js';
 import { getWindow, findParentWithClass, addDisposableListener } from '../../../../base/browser/dom.js';
 import { DisposableStore, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { FileAccess } from '../../../../base/common/network.js';
-import { escapeRegExpCharacters } from '../../../../base/common/strings.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { isEqual } from '../../../../base/common/resources.js';
 import { Codicon } from '../../../../base/common/codicons.js';
@@ -64,17 +63,6 @@ import {
 import { commandRegistry, ICodeMindColorTheme, ICodeMindCommandContext, ICodeMindOutputStyle, ICodeMindProjectInsights, ICodeMindSessionSummary, OUTPUT_STYLES, PERMISSION_MODES, runCompaction } from './codeMindCommands.js';
 import { CodeMindConsensusPanel } from './codeMindConsensusPanel.js';
 import { CodeMindOrchestrationTracePanel } from './codeMindOrchestrationTracePanel.js';
-import {
-	companionHatchPrompt,
-	companionIntroText,
-	companionReactionPrompt,
-	ICodeMindCompanion,
-	ICodeMindCompanionSoul,
-	ICodeMindCompanionView,
-	parseCompanionSoul,
-	RARITY_STARS,
-	rollCompanionBones,
-} from './codeMindBuddy.js';
 
 /** A single chat message held in memory. */
 interface AgentMessage {
@@ -400,15 +388,17 @@ type WebviewOutbound =
 	 */
 	| { type: 'composerText'; payload: { text: string } }
 	/**
-	 * The companion beside the composer. `undefined` when there is none, or when the
-	 * user has muted it — the webview draws nothing either way, and muting keeps the
-	 * soul so unmuting brings the same creature back.
+	 * Aristotle's settings, pushed on the webview's `ready` handshake and again whenever they
+	 * change. He is drawn entirely inside the webview — the workbench only owns whether he
+	 * exists and how patient he is before falling asleep.
 	 */
-	| { type: 'companion'; payload: ICodeMindCompanionView | undefined }
-	/** `/buddy pet` — start the heart burst. Purely visual, so the webview owns the timing. */
-	| { type: 'companionPet' }
-	/** Something for the speech bubble to say, or '' to take it down early. */
-	| { type: 'companionReaction'; payload: { text: string } }
+	| { type: 'aristotle'; payload: { enabled: boolean; sleepAfterSeconds: number } }
+	/**
+	 * Whether the panel is on screen. The webview document is kept alive when the view is
+	 * hidden (`retainContextWhenHidden`), and `document.hidden` does not fire for it, so this
+	 * is the only reliable way for an animation loop inside to know to stop.
+	 */
+	| { type: 'panelVisible'; payload: boolean }
 	| { type: 'focusInput' };
 
 export const CodeMindAgentViewIcon = registerIcon('codemind-agent-view-icon', Codicon.copilot, localize('codeMindAgentViewIcon', 'Icon for the CodeMind Agent view.'));
@@ -424,8 +414,6 @@ export const CodeMindAgentViewIcon = registerIcon('codemind-agent-view-icon', Co
  */
 export const CodeMindComposerFocusedContext = new RawContextKey<boolean>('codemindAgentComposerFocused', false, localize('codemindAgentComposerFocused', 'Whether the CodeMind Agent composer has keyboard focus.'));
 
-/** Shortest gap between two unprompted companion remarks. */
-const COMPANION_REACTION_INTERVAL_MS = 30_000;
 
 /**
  * A side-panel view that hosts the CodeMind Agent chat webview and bridges it
@@ -573,13 +561,6 @@ export class CodeMindAgentViewPane extends ViewPane {
 	private readonly _mentionCancellation = new Map<string, CancellationTokenSource>();
 	private readonly _memento: Memento<ICodeMindPanelMemento>;
 	private readonly _mementoState: Partial<ICodeMindPanelMemento>;
-	/**
-	 * Profile-wide storage, used for the one thing the panel keeps per user rather
-	 * than per workspace: the seed a companion's bones are rolled from.
-	 */
-	private readonly _storageService: IStorageService;
-	/** When the companion last said something, so a burst of short turns is not a burst of quips. */
-	private _lastCompanionReactionAt = 0;
 	/** True while the webview's composer holds focus; see {@link CodeMindComposerFocusedContext}. */
 	private readonly _composerFocusedKey: IContextKey<boolean>;
 	/**
@@ -618,7 +599,6 @@ export class CodeMindAgentViewPane extends ViewPane {
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 
-		this._storageService = storageService;
 		this._memento = new Memento<ICodeMindPanelMemento>(CodeMindAgentViewPane.MEMENTO_ID, storageService);
 		this._mementoState = this._memento.getMemento(StorageScope.WORKSPACE, StorageTarget.MACHINE);
 		this._composerFocusedKey = CodeMindComposerFocusedContext.bindTo(contextKeyService);
@@ -674,6 +654,10 @@ export class CodeMindAgentViewPane extends ViewPane {
 			} else {
 				this._webview.value?.release(this);
 			}
+			// Releasing the overlay does not stop the document: it is retained when hidden, and
+			// `document.hidden` never fires for it. Anything inside that runs on a clock — the
+			// pet's frame loop — has to be told, so this is where it is told.
+			this._postMessage({ type: 'panelVisible', payload: this.isBodyVisible() });
 		}));
 		if (this.isBodyVisible()) {
 			webview.claim(this, getWindow(this.element), undefined);
@@ -724,10 +708,9 @@ export class CodeMindAgentViewPane extends ViewPane {
 			if (e.affectsConfiguration('codemind.voiceMode')) {
 				this._pushFeatureFlags();
 			}
-			if (e.affectsConfiguration('codemind.companion')
-				|| e.affectsConfiguration('codemind.companionSoul')
-				|| e.affectsConfiguration('codemind.companionMuted')) {
-				this._pushCompanion();
+			if (e.affectsConfiguration('codemind.aristotle.enabled')
+				|| e.affectsConfiguration('codemind.aristotle.sleepAfterSeconds')) {
+				this._pushAristotle();
 			}
 			if (e.affectsConfiguration('codemind.mcpServers')) {
 				this._syncMcpServers();
@@ -834,7 +817,12 @@ export class CodeMindAgentViewPane extends ViewPane {
 		const jsUri = asWebviewUri(FileAccess.asFileUri(`${CodeMindAgentViewPane.MEDIA_ROOT}agent.js`));
 		const panelsUri = asWebviewUri(FileAccess.asFileUri(`${CodeMindAgentViewPane.MEDIA_ROOT}panels.js`));
 		const inputUri = asWebviewUri(FileAccess.asFileUri(`${CodeMindAgentViewPane.MEDIA_ROOT}input.js`));
-		const buddyUri = asWebviewUri(FileAccess.asFileUri(`${CodeMindAgentViewPane.MEDIA_ROOT}buddy.js`));
+		const aristotleUri = asWebviewUri(FileAccess.asFileUri(`${CodeMindAgentViewPane.MEDIA_ROOT}aristotle.js`));
+		const aristotleFramesUri = asWebviewUri(FileAccess.asFileUri(`${CodeMindAgentViewPane.MEDIA_ROOT}aristotle/manifest.js`));
+		// The sprite strips are fetched by the script, which cannot build a webview URI itself,
+		// so it is handed the directory. Derived by trimming the manifest's own file name rather
+		// than asking for a directory URI, which is the form that is guaranteed to round-trip.
+		const aristotleBase = aristotleFramesUri.toString(true).replace(/manifest\.js$/, '');
 
 		return `<!DOCTYPE html>
 <html lang="en">
@@ -891,19 +879,18 @@ export class CodeMindAgentViewPane extends ViewPane {
 		<div class="input-mode hidden" id="inputMode"></div>
 		<div class="bg-tasks hidden" id="bgTasks"></div>
 		<div class="prompt-queue hidden" id="promptQueue"></div>
-		<div class="buddy-card hidden" id="buddyCard"></div>
-		<div class="buddy hidden" id="buddy">
-			<div class="buddy-bubble hidden" id="buddyBubble"></div>
-			<button class="buddy-sprite" id="buddySprite" type="button" title="Your companion — click to pet, double-click for its card">
-				<pre class="buddy-art" id="buddyArt" aria-hidden="true"></pre>
-				<span class="buddy-name" id="buddyName"></span>
-			</button>
-		</div>
 		<!-- Section 2.1: one strip, two rows, one top border, no internal rules. Row A carries
 		     the controls that used to be scattered through the header and the footer; row B is
 		     the entry line. Everything above this element (attachments, the two autocompletes,
-		     the mode banner, the queue, the companion) still floats over the transcript. -->
+		     the mode banner, the queue) still floats over the transcript. -->
 		<div class="composer" id="composer">
+			<!-- Section 2.6: Aristotle sits on the top edge of the strip at its right end, and is
+			     free to overflow upward while he stretches, plays or sleeps. Pointer-transparent
+			     apart from his body, so the transcript behind him stays clickable. -->
+			<div class="aristotle" id="aristotle" data-base="${aristotleBase}" aria-hidden="true">
+				<div class="aristotle-layer"></div>
+				<div class="aristotle-hit" role="presentation" title="Aristotle"></div>
+			</div>
 			<div class="composer-controls">
 				<div class="composer-controls-left">
 					<div class="model-pill-wrap">
@@ -1011,7 +998,8 @@ export class CodeMindAgentViewPane extends ViewPane {
 
 	<script src="${panelsUri.toString(true)}"></script>
 	<script src="${inputUri.toString(true)}"></script>
-	<script src="${buddyUri.toString(true)}"></script>
+	<script src="${aristotleFramesUri.toString(true)}"></script>
+	<script src="${aristotleUri.toString(true)}"></script>
 	<script src="${jsUri.toString(true)}"></script>
 </body>
 </html>`;
@@ -1037,7 +1025,7 @@ export class CodeMindAgentViewPane extends ViewPane {
 				}
 				this._sendMcpServers();
 				this._pushFeatureFlags();
-				this._pushCompanion();
+				this._pushAristotle();
 				// The engine's own commands arrive later; the list is re-sent then.
 				void this._loadEngineCommands();
 				// Primes `apiKeyState` so the composer's first send can tell a missing
@@ -2519,12 +2507,6 @@ export class CodeMindAgentViewPane extends ViewPane {
 			writeHomeFile: (relativePath, contents) => this._writeHomeFile(relativePath, contents),
 			listHomeEntries: (relativePath) => this._listHomeEntries(relativePath),
 
-			// --- companion
-			getCompanion: () => this._companion(),
-			hatchCompanion: () => this._hatchCompanion(),
-			forgetCompanion: () => this._forgetCompanion(),
-			petCompanion: () => this._postMessage({ type: 'companionPet' }),
-			sayCompanion: (text) => this._postMessage({ type: 'companionReaction', payload: { text } }),
 		};
 	}
 
@@ -3829,162 +3811,28 @@ export class CodeMindAgentViewPane extends ViewPane {
 			// Compacting mid-turn is not possible — the engine is busy — so the check
 			// happens here, between turns, which is also where the CLI does it.
 			void this._maybeAutoCompact();
-			// The companion watches the turn that just finished, exactly where the CLI
-			// fires its observer.
-			void this._maybeCompanionReaction(text);
 		});
 	}
 
-	// --- companion (CLI: buddy/)
+	// --- Aristotle (the composer pet)
 
 	/**
-	 * The soul on disk, whether or not the companion is currently switched on. Kept
-	 * separate from {@link _companionSoul} so turning the companion off is sleep
-	 * rather than death: the same creature, with the same name, comes back.
-	 */
-	private _storedCompanionSoul(): ICodeMindCompanionSoul | undefined {
-		const raw = this.configurationService.getValue<Partial<ICodeMindCompanionSoul>>('codemind.companionSoul');
-		if (!raw || typeof raw.name !== 'string' || !raw.name.trim() || typeof raw.personality !== 'string') {
-			return undefined;
-		}
-		return {
-			name: raw.name.trim().slice(0, 16),
-			personality: raw.personality,
-			hatchedAt: typeof raw.hatchedAt === 'number' ? raw.hatchedAt : Date.now(),
-			// A soul hand-written into settings.json has no seed; 'anon' is what the CLI
-			// falls back to when it has no account either, so both roll the same creature.
-			seed: typeof raw.seed === 'string' && raw.seed ? raw.seed : 'anon',
-		};
-	}
-
-	private _companionSoul(): ICodeMindCompanionSoul | undefined {
-		return this.configurationService.getValue<boolean>('codemind.companion') === true
-			? this._storedCompanionSoul()
-			: undefined;
-	}
-
-	/** Soul plus freshly rolled bones — the CLI's `getCompanion()`. */
-	private _companion(): ICodeMindCompanion | undefined {
-		const soul = this._companionSoul();
-		return soul ? { ...soul, ...rollCompanionBones(soul.seed) } : undefined;
-	}
-
-	private _isCompanionMuted(): boolean {
-		return this.configurationService.getValue<boolean>('codemind.companionMuted') === true;
-	}
-
-	/**
-	 * Tell the webview what to draw beside the composer, or that there is nothing.
-	 * A muted companion is still sent: the sprite goes away, but `/buddy` can still
-	 * show its card, which is the difference between muted and forgotten.
-	 */
-	private _pushCompanion(): void {
-		const companion = this._companion();
-		this._postMessage({
-			type: 'companion',
-			payload: companion
-				? { ...companion, muted: this._isCompanionMuted(), stars: RARITY_STARS[companion.rarity] }
-				: undefined,
-		});
-	}
-
-	/**
-	 * What the bones are rolled from. The engine's account is preferred so the same
-	 * account hatches the same creature on another machine, which is what the CLI's
-	 * account uuid gives it; when the engine has no account to report, a per-profile
-	 * id stands in. Either way the value is stored in the soul, so signing in later
-	 * cannot turn someone's duck into a dragon.
-	 */
-	private async _companionSeed(): Promise<string> {
-		try {
-			const account = await this._engineService.getAccountInfo();
-			if (account?.email) {
-				return account.email;
-			}
-		} catch {
-			// Engine unreachable; fall through to the local id.
-		}
-		const key = 'codemind.agent.companionSeed';
-		const existing = this._storageService.get(key, StorageScope.APPLICATION);
-		if (existing) {
-			return existing;
-		}
-		const seed = generateUuid();
-		this._storageService.store(key, seed, StorageScope.APPLICATION, StorageTarget.MACHINE);
-		return seed;
-	}
-
-	/**
-	 * Hatch, or wake a companion that was switched off. The bones are rolled from the
-	 * seed; the name and personality are one isolated one-shot turn, which is how the
-	 * CLI writes them too. A model that cannot be reached does not block the hatch —
-	 * the sprite is the point, and a soul is one line of text.
-	 */
-	private async _hatchCompanion(): Promise<ICodeMindCompanion | undefined> {
-		const stored = this._storedCompanionSoul();
-		if (stored) {
-			await this._updateConfig('codemind.companion', true);
-			this._pushCompanion();
-			return { ...stored, ...rollCompanionBones(stored.seed) };
-		}
-
-		const seed = await this._companionSeed();
-		const bones = rollCompanionBones(seed);
-		const answer = await this._silentQuery(companionHatchPrompt(bones), { maxTurns: 1, blockAllTools: true, isolated: true })
-			.catch(() => '');
-		const soul = parseCompanionSoul(answer) ?? {
-			name: bones.species.charAt(0).toUpperCase() + bones.species.slice(1),
-			personality: `A ${bones.rarity} ${bones.species} that keeps its opinions to itself.`,
-		};
-		const record: ICodeMindCompanionSoul = { ...soul, hatchedAt: Date.now(), seed };
-		await this._updateConfig('codemind.companionSoul', record);
-		await this._updateConfig('codemind.companion', true);
-		this._pushCompanion();
-		return { ...record, ...bones };
-	}
-
-	/** `/buddy forget`: the creature goes, the switch goes with it. */
-	private async _forgetCompanion(): Promise<void> {
-		await this._updateConfig('codemind.companionSoul', undefined);
-		await this._updateConfig('codemind.companion', false);
-		this._pushCompanion();
-	}
-
-	/**
-	 * The bubble. The CLI runs an observer over its whole message list after every
-	 * turn; the panel sends the last exchange into an isolated one-shot instead, so a
-	 * remark costs a few hundred tokens rather than a second copy of the conversation.
+	 * Tell the webview whether the pet exists, and how long he waits before dozing off.
 	 *
-	 * Rate-limited to one remark per {@link COMPANION_REACTION_INTERVAL_MS}: a run of
-	 * one-line turns should not become a run of quips, and the bubble only stays up
-	 * for ten seconds anyway. Being addressed by name skips the limit — an answer that
-	 * arrives a minute later is worse than none.
+	 * He lives entirely inside the webview: the frames, the state machine, the pointer
+	 * tracking and the timers are all in `media/aristotle.js`, because every one of them is a
+	 * question about what is on screen. This is the whole of the workbench's involvement.
 	 */
-	private async _maybeCompanionReaction(userText: string): Promise<void> {
-		const companion = this._companion();
-		if (!companion || this._isCompanionMuted() || this._compacting) {
-			return;
-		}
-		const lastAgent = [...this._history].reverse().find(m => m.type === 'assistant')?.content ?? '';
-		if (!lastAgent.trim()) {
-			return;
-		}
-		const addressed = new RegExp(`\\b${escapeRegExpCharacters(companion.name)}\\b`, 'i').test(userText);
-		const now = Date.now();
-		if (!addressed && now - this._lastCompanionReactionAt < COMPANION_REACTION_INTERVAL_MS) {
-			return;
-		}
-		this._lastCompanionReactionAt = now;
-		const answer = await this._silentQuery(
-			companionReactionPrompt(companion, userText, lastAgent, addressed),
-			{ maxTurns: 1, blockAllTools: true, isolated: true },
-		).catch(() => '');
-		const text = answer.trim().split('\n')[0].replace(/^["'`*]+|["'`*]+$/g, '').trim();
-		if (!text || text === '(nothing)') {
-			return;
-		}
-		this._postMessage({ type: 'companionReaction', payload: { text: text.slice(0, 200) } });
+	private _pushAristotle(): void {
+		this._postMessage({
+			type: 'aristotle',
+			payload: {
+				enabled: this.configurationService.getValue<boolean>('codemind.aristotle.enabled') !== false,
+				sleepAfterSeconds: this.configurationService.getValue<number>('codemind.aristotle.sleepAfterSeconds') ?? 90,
+			},
+		});
 	}
+
 
 	// --- context window pressure
 	/**
@@ -4178,15 +4026,6 @@ export class CodeMindAgentViewPane extends ViewPane {
 
 		if (this.configurationService.getValue<boolean>('codemind.coordinatorMode') === true) {
 			parts.push(COORDINATOR_SYSTEM_PROMPT, this._coordinatorWorkerContext());
-		}
-
-		const companion = this._companion();
-		if (companion && !this._isCompanionMuted()) {
-			// The CLI sends this once per companion, as an attachment it can look for in
-			// the message list. The panel rebuilds the suffix every turn, so it rides
-			// along every turn instead — the same words, and they cannot fall out of a
-			// truncated history.
-			parts.push(companionIntroText(companion.name, companion.species));
 		}
 
 		const disabledSkills = this.configurationService.getValue<string[]>('codemind.disabledSkills') ?? [];

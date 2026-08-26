@@ -184,29 +184,18 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 			description: localize('codemind.disabledSkills', "Names of skills the agent must not use."),
 			scope: ConfigurationScope.APPLICATION,
 		},
-		'codemind.companion': {
+		'codemind.aristotle.enabled': {
 			type: 'boolean',
-			default: false,
-			description: localize('codemind.companion', "Keep a small companion beside the composer. Run /buddy to hatch one; turning this off puts it to sleep without forgetting it."),
+			default: true,
+			description: localize('codemind.aristotle.enabled', "Show Aristotle, the axolotl who sits on the right end of the composer. He watches the pointer, stretches and plays while a turn runs, and dozes off when the panel is left alone."),
 			scope: ConfigurationScope.APPLICATION,
 		},
-		'codemind.companionMuted': {
-			type: 'boolean',
-			default: false,
-			description: localize('codemind.companionMuted', "Hide the companion and stop its remarks, keeping the creature itself. Also togglable with /buddy mute."),
+		'codemind.aristotle.sleepAfterSeconds': {
+			type: 'number',
+			default: 90,
+			minimum: 0,
+			description: localize('codemind.aristotle.sleepAfterSeconds', "How long the composer goes untouched before Aristotle falls asleep, in seconds. Typing, clicking him, moving the pointer or starting a turn wakes him. 0 means never sleep."),
 			scope: ConfigurationScope.APPLICATION,
-		},
-		'codemind.companionSoul': {
-			type: 'object',
-			default: {},
-			description: localize('codemind.companionSoul', "The companion's name and personality, written once when it hatched. /buddy manages this — editing it by hand only renames the creature, because its species, rarity and stats are derived from the seed."),
-			scope: ConfigurationScope.APPLICATION,
-			properties: {
-				name: { type: 'string', description: localize('codemind.companionSoul.name', "What it is called.") },
-				personality: { type: 'string', description: localize('codemind.companionSoul.personality', "One sentence describing how it behaves.") },
-				hatchedAt: { type: 'number', description: localize('codemind.companionSoul.hatchedAt', "When it hatched, in milliseconds since the epoch.") },
-				seed: { type: 'string', description: localize('codemind.companionSoul.seed', "What its species, rarity, eyes, hat and stats are derived from. Changing this replaces the creature.") },
-			},
 		},
 		'codemind.mcpServers': {
 			type: 'array',
