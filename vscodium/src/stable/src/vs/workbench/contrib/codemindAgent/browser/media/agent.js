@@ -161,12 +161,6 @@ const contextTextEl = document.getElementById('contextText');
 const bgTasksEl = document.getElementById('bgTasks');
 const bgPillEl = document.getElementById('bgPill');
 const bgPillTextEl = document.getElementById('bgPillText');
-const buddyEl = document.getElementById('buddy');
-const buddyBubbleEl = document.getElementById('buddyBubble');
-const buddySpriteEl = document.getElementById('buddySprite');
-const buddyArtEl = document.getElementById('buddyArt');
-const buddyNameEl = document.getElementById('buddyName');
-const buddyCardEl = document.getElementById('buddyCard');
 
 // ---------- Icons ----------
 const LOGO_MARK_SVG = `<svg viewBox="0 0 24 24" width="52" height="52" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>`;
@@ -1010,10 +1004,6 @@ function handleExtensionMessage(event) {
 				showModal(true);
 			} else if (msg.payload.panelId === 'backgroundTasks') {
 				openBackgroundTaskList();
-			} else if (msg.payload.panelId === 'companion') {
-				// The buddy card is drawn over the composer by the code that owns the
-				// sprite, not by the panel module.
-				openCompanionCard();
 			} else if (window.CodeMindPanels && window.CodeMindPanels.openPanel) {
 				window.CodeMindPanels.openPanel(msg.payload.panelId);
 			}
@@ -1109,17 +1099,24 @@ function handleExtensionMessage(event) {
 			// whatever is in the composer rather than deferring to it.
 			setComposerText((msg.payload && msg.payload.text) || '');
 			break;
-		case 'companion':
-			applyCompanion(msg.payload || null);
-			break;
-		case 'companionPet':
-			petCompanion();
-			break;
-		case 'companionReaction':
-			showCompanionBubble((msg.payload && msg.payload.text) || '');
-			break;
 		case 'focusInput':
 			inputEl.focus();
+			break;
+		case 'aristotle': {
+			// The pet draws itself (media/aristotle.js); the workbench only owns whether he
+			// exists and how long he waits before dozing off.
+			const pet = window.CodeMindAristotle;
+			const cfg = msg.payload || {};
+			if (pet) {
+				pet.setSleepAfterSeconds(cfg.sleepAfterSeconds);
+				pet.setEnabled(cfg.enabled !== false);
+			}
+			break;
+		}
+		case 'panelVisible':
+			// The document is retained while the view is hidden, so nothing inside it would
+			// otherwise know to stop its frame loop.
+			if (window.CodeMindAristotle) { window.CodeMindAristotle.setVisible(msg.payload !== false); }
 			break;
 			case 'orchestrationProgress': {
 				// Live spinner label for the pre-query pipeline (Section 11.2). Shown to all
@@ -1650,217 +1647,6 @@ function openBackgroundTaskList() {
 	}
 	bgTasksOpen = true;
 	renderBackgroundTasks();
-}
-
-// ---------- Companion (CLI: buddy/) ----------
-// The bones — species, eye, hat, rarity, stats — are rolled in the workbench and
-// pushed here, and `buddy.js` owns the drawing. What is left for this file is the
-// timing the CLI's `CompanionSprite` owns: the 500ms tick, the idle fidget, the pet
-// burst and how long a speech bubble stays up before it dims out.
-
-let companion = null;
-let companionTick = 0;
-let companionTimer = null;
-let companionPetUntil = 0;
-let companionBubbleText = '';
-let companionBubbleTicks = 0;
-let companionCardOpen = false;
-
-/** `buddy.js` is a separate script tag, so it is read through `window` at use time. */
-function buddyLib() {
-	return window.CodeMindBuddy;
-}
-
-function applyCompanion(view) {
-	// The card is rebuilt only when the creature itself changes, so a mute, a rename or
-	// a re-roll redraws it while the 500ms tick never touches it.
-	const signature = c => c ? `${c.name}|${c.species}|${c.rarity}|${c.hat}|${c.eye}|${c.muted}` : '';
-	const changed = signature(companion) !== signature(view);
-	companion = view;
-	if (!companion) {
-		companionCardOpen = false;
-		companionBubbleTicks = 0;
-		companionBubbleText = '';
-		companionPetUntil = 0;
-	}
-	renderCompanion();
-	if (changed) { renderCompanionCard(); }
-}
-
-/** The sprite and its bubble. Called on every tick, so it touches text only. */
-function renderCompanion() {
-	const buddy = buddyLib();
-	const visible = !!companion && !companion.muted && !!buddy && !!buddyEl;
-	if (buddyEl) { buddyEl.classList.toggle('hidden', !visible); }
-	if (!visible) {
-		stopCompanionTicker();
-		if (buddyBubbleEl) { buddyBubbleEl.classList.add('hidden'); }
-		return;
-	}
-	const excited = Date.now() < companionPetUntil || companionBubbleTicks > 0;
-	const step = buddy.frameForTick(companion.species, companionTick, excited);
-	const lines = buddy.renderSprite(companion, step.frame, step.blink);
-	// Hearts float up out of the sprite over the burst, so they are prepended above it
-	// rather than drawn into it — the same trick the CLI uses.
-	const hearts = companionHeartRow();
-	buddyArtEl.textContent = (hearts ? [hearts, ...lines] : lines).join('\n');
-	buddyNameEl.textContent = companion.name;
-	buddySpriteEl.classList.toggle('excited', excited);
-	renderCompanionBubble();
-	startCompanionTicker();
-}
-
-/** Which heart frame the pet burst is on, or '' once it is over. */
-function companionHeartRow() {
-	const buddy = buddyLib();
-	const remaining = companionPetUntil - Date.now();
-	if (remaining <= 0 || !buddy) { return ''; }
-	const frames = buddy.PET_HEARTS;
-	const per = buddy.PET_BURST_MS / frames.length;
-	const idx = Math.min(frames.length - 1, Math.floor((buddy.PET_BURST_MS - remaining) / per));
-	return frames[idx];
-}
-
-/**
- * The tick only runs while a companion is on screen: an idle fidget is not worth a
- * timer in a panel that may sit unopened for hours.
- */
-function startCompanionTicker() {
-	const buddy = buddyLib();
-	if (companionTimer || !buddy) { return; }
-	companionTimer = setInterval(() => {
-		companionTick++;
-		if (companionBubbleTicks > 0) { companionBubbleTicks--; }
-		renderCompanion();
-	}, buddy.TICK_MS);
-}
-
-function stopCompanionTicker() {
-	if (companionTimer) {
-		clearInterval(companionTimer);
-		companionTimer = null;
-	}
-}
-
-function renderCompanionBubble() {
-	if (!buddyBubbleEl) { return; }
-	const showing = companionBubbleTicks > 0 && !!companionBubbleText;
-	buddyBubbleEl.classList.toggle('hidden', !showing);
-	if (!showing) {
-		buddyBubbleEl.textContent = '';
-		buddyBubbleEl.style.opacity = '';
-		return;
-	}
-	buddyBubbleEl.textContent = companionBubbleText;
-	// The CLI dims the bubble over its last few ticks instead of cutting it; an opacity
-	// ramp over the same window is how a DOM node says the same thing.
-	const fade = (buddyLib() && buddyLib().FADE_WINDOW) || 6;
-	buddyBubbleEl.style.opacity = companionBubbleTicks >= fade
-		? ''
-		: String(Math.max(0.15, companionBubbleTicks / fade));
-}
-
-function showCompanionBubble(text) {
-	const trimmed = (text || '').trim();
-	if (!companion || companion.muted || !trimmed) { return; }
-	companionBubbleText = trimmed;
-	companionBubbleTicks = (buddyLib() && buddyLib().BUBBLE_SHOW) || 20;
-	renderCompanion();
-}
-
-function petCompanion() {
-	if (!companion || companion.muted) { return; }
-	companionPetUntil = Date.now() + ((buddyLib() && buddyLib().PET_BURST_MS) || 2500);
-	renderCompanion();
-}
-
-buddySpriteEl?.addEventListener('click', () => petCompanion());
-buddySpriteEl?.addEventListener('dblclick', () => openCompanionCard());
-buddyBubbleEl?.addEventListener('click', () => {
-	companionBubbleTicks = 0;
-	renderCompanion();
-});
-
-/** `/buddy`, `/buddy show`, or a double-click on the sprite. */
-function openCompanionCard() {
-	if (!companion) {
-		appendLocalSystemMessage('There is no companion yet. `/buddy` hatches one.');
-		return;
-	}
-	companionCardOpen = true;
-	renderCompanionCard();
-}
-
-function closeCompanionCard() {
-	companionCardOpen = false;
-	renderCompanionCard();
-}
-
-/**
- * The card: the same facts `/buddy` writes into the transcript, drawn with the stat
- * bars and the buttons the CLI's card cannot have. Rebuilt only when it opens or the
- * creature changes — never on the sprite's tick, which would fight the buttons.
- */
-function renderCompanionCard() {
-	if (!buddyCardEl) { return; }
-	const open = companionCardOpen && !!companion;
-	buddyCardEl.classList.toggle('hidden', !open);
-	if (!open) {
-		buddyCardEl.innerHTML = '';
-		return;
-	}
-	const buddy = buddyLib();
-	const order = (buddy && buddy.STAT_NAMES) || Object.keys(companion.stats || {});
-	const stats = order.map(name => {
-		const value = Math.max(0, Math.min(100, Number((companion.stats || {})[name]) || 0));
-		return `<div class="buddy-stat">
-				<span class="buddy-stat-name">${escapeHtml(name)}</span>
-				<span class="buddy-stat-bar"><span class="buddy-stat-fill" style="width:${value}%"></span></span>
-				<span class="buddy-stat-value">${value}</span>
-			</div>`;
-	}).join('');
-	const art = buddy ? buddy.renderSprite(companion, 0, false).join('\n') : '';
-	const hatched = companion.hatchedAt ? new Date(companion.hatchedAt).toLocaleDateString() : '';
-	buddyCardEl.dataset.rarity = companion.rarity || 'common';
-	buddyCardEl.innerHTML = `
-		<div class="buddy-card-head">
-			<pre class="buddy-card-art" aria-hidden="true">${escapeHtml(art)}</pre>
-			<div class="buddy-card-id">
-				<div class="buddy-card-name">${escapeHtml(companion.name)}</div>
-				<div class="buddy-card-kind">${escapeHtml(companion.rarity)} ${escapeHtml(companion.species)}
-					<span class="buddy-stars">${escapeHtml(companion.stars || '')}</span>${companion.shiny ? ' <span class="buddy-shiny">✨ shiny</span>' : ''}</div>
-				${companion.hat && companion.hat !== 'none' ? `<div class="buddy-card-hat">wearing a ${escapeHtml(companion.hat)}</div>` : ''}
-				${hatched ? `<div class="buddy-card-hatched">hatched ${escapeHtml(hatched)}</div>` : ''}
-			</div>
-			<button class="buddy-card-close" data-buddy-close="1" title="Close" aria-label="Close">×</button>
-		</div>
-		<div class="buddy-card-personality">${escapeHtml(companion.personality || '')}</div>
-		<div class="buddy-stats">${stats}</div>
-		<div class="buddy-card-foot">
-			<button class="buddy-card-action" data-buddy-action="pet">Pet</button>
-			<button class="buddy-card-action" data-buddy-action="${companion.muted ? 'unmute' : 'mute'}">${companion.muted ? 'Unmute' : 'Mute'}</button>
-			<button class="buddy-card-action buddy-card-danger" data-buddy-action="forget">Forget</button>
-		</div>`;
-	buddyCardEl.querySelector('[data-buddy-close]')?.addEventListener('click', closeCompanionCard);
-	buddyCardEl.querySelectorAll('[data-buddy-action]').forEach(btn => {
-		btn.addEventListener('click', () => runCompanionAction(btn.dataset.buddyAction));
-	});
-}
-
-/**
- * Petting is local — it is animation, not a decision. Mute, unmute and forget go
- * through `/buddy` so the transcript records them and the settings write happens in
- * exactly one place.
- */
-function runCompanionAction(action) {
-	if (action === 'pet') {
-		petCompanion();
-		return;
-	}
-	if (action === 'forget') {
-		closeCompanionCard();
-	}
-	vscode.postMessage({ type: 'runCommand', payload: { name: 'buddy', args: action } });
 }
 
 // ---------- Input history (Step 8) ----------
@@ -2764,6 +2550,10 @@ function setStatus(newStatus) {
 	sendBtn.title = isBusy ? 'Queue message with Enter (sent when this turn ends)' : 'Send message';
 	// The turn that was holding the queue back has finished.
 	if (!isBusy) { drainPromptQueue(); }
+	// This is the only place that knows a turn started or ended, so it is the only place
+	// that can tell Aristotle to stretch or to settle back down. He debounces it himself:
+	// auto-compaction posts busy → ready → busy → ready around some turns.
+	if (window.CodeMindAristotle) { window.CodeMindAristotle.setBusy(isBusy); }
 }
 
 /**

@@ -4,7 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { localize } from '../../../../nls.js';
-import { CodeMindStatName, describeCompanion, ICodeMindCompanion, RARITY_STARS, STAT_NAMES } from './codeMindBuddy.js';
 import { calculateContextStatus, ICodeMindAgentEngineService, ICodeMindExecResult, ICodeMindMcpServer, ICodeMindModelInfo, ICodeMindSandboxSettings } from '../common/codeMindAgentEngineService.js';
 
 /** One past session, as summarized from the engine's transcript log. */
@@ -203,19 +202,6 @@ export interface ICodeMindCommandContext {
 	/** Names of the entries of a directory under the user's home directory. */
 	readonly listHomeEntries: (relativePath: string) => Promise<string[]>;
 
-	/** The companion beside the composer, or undefined when there is none. */
-	readonly getCompanion: () => ICodeMindCompanion | undefined;
-	/**
-	 * Hatch one — or wake the one that was switched off. Rolls the bones, asks the
-	 * model for a name and a personality, and stores the result.
-	 */
-	readonly hatchCompanion: () => Promise<ICodeMindCompanion | undefined>;
-	/** Forget the companion entirely; the next hatch rolls the same bones, new soul. */
-	readonly forgetCompanion: () => Promise<void>;
-	/** Start the heart burst beside the composer. */
-	readonly petCompanion: () => void;
-	/** Put a line in the companion's speech bubble, or '' to take it down. */
-	readonly sayCompanion: (text: string) => void;
 }
 
 export interface ICodeMindCommand {
@@ -2782,69 +2768,6 @@ function registerPanelCommands(registry: CodeMindCommandRegistry): void {
 	});
 
 	registry.register({
-		name: 'buddy',
-		aliases: ['companion'],
-		args: '[show|pet|mute|unmute|forget]',
-		description: localize('cmcmd.buddy', 'Your companion: hatch one, look at it, pet it, or send it away.'),
-		// `commands/buddy/` is not in the vendored CLI drop, so the subcommands are the
-		// panel's own reading of what the companion can be asked to do. Everything they
-		// act on — the bones, the soul, the mute flag — is the CLI's.
-		execute: async (args, ctx) => {
-			const action = args.trim().toLowerCase().split(/\s+/)[0];
-			const existing = ctx.getCompanion();
-
-			if (action === 'forget') {
-				if (!existing) {
-					ctx.appendSystemMessage('There is no companion to forget.');
-					return;
-				}
-				await ctx.forgetCompanion();
-				ctx.appendSystemMessage(`${existing.name} has gone. \`/buddy\` hatches another — same bones, new soul.`);
-				return;
-			}
-
-			if (action === 'mute' || action === 'unmute') {
-				const muted = action === 'mute';
-				await ctx.setConfig('codemind.companionMuted', muted);
-				ctx.appendSystemMessage(muted
-					? 'Companion muted: it stays hidden and says nothing until `/buddy unmute`.'
-					: 'Companion unmuted.');
-				return;
-			}
-
-			if (!existing) {
-				ctx.appendSystemMessage('Hatching…');
-				const hatched = await ctx.hatchCompanion();
-				if (!hatched) {
-					ctx.appendSystemMessage('The companion could not be hatched.');
-					return;
-				}
-				// The card too, exactly as a later bare `/buddy` would show it — a hatch that
-				// only writes text leaves the new creature's stats nowhere to be looked at.
-				ctx.openPanel('companion');
-				ctx.appendSystemMessage(`${describeCompanion(hatched)}\n\nIt is sitting beside the composer now. \`/buddy pet\`, \`/buddy mute\`, \`/buddy forget\`.`);
-				return;
-			}
-
-			if (action === 'pet') {
-				if (ctx.getConfig<boolean>('codemind.companionMuted') === true) {
-					ctx.appendSystemMessage(`${existing.name} is muted and not on screen. \`/buddy unmute\` first.`);
-					return;
-				}
-				ctx.petCompanion();
-				ctx.appendSystemMessage(`You pet ${existing.name}. ${petReaction(existing)}`);
-				return;
-			}
-
-			// Bare `/buddy`, or `/buddy show`: the card, which the sprite's own panel draws
-			// with the stat bars. The transcript gets the same facts in text so the session
-			// log still says what the creature was.
-			ctx.openPanel('companion');
-			ctx.appendSystemMessage(describeCompanion(existing));
-		},
-	});
-
-	registry.register({
 		name: 'theme',
 		description: localize('cmcmd.theme', 'Change the colour theme.'),
 		args: '[dark|light|high contrast|<name>]',
@@ -2902,23 +2825,6 @@ function registerPanelCommands(registry: CodeMindCommandRegistry): void {
 		},
 	});
 
-}
-
-/**
- * What petting says back. `commands/buddy/` is not in the vendored CLI drop, so the
- * line is the panel's own — keyed off the peak stat so a high-CHAOS creature and a
- * high-PATIENCE one do not answer the same way.
- */
-function petReaction(companion: ICodeMindCompanion): string {
-	const peak = STAT_NAMES.reduce((best, name) => companion.stats[name] > companion.stats[best] ? name : best, STAT_NAMES[0]);
-	const lines: Record<CodeMindStatName, string> = {
-		DEBUGGING: 'It squints past your hand at the cursor, and keeps squinting.',
-		PATIENCE: 'It settles in. Waiting is the thing it is good at.',
-		CHAOS: 'It vibrates. Something nearby is about to get knocked over.',
-		WISDOM: 'It accepts the attention as its due.',
-		SNARK: 'It permits this, briefly.',
-	};
-	return `${lines[peak]} ${RARITY_STARS[companion.rarity]}`;
 }
 
 // --- model behaviour: effort, fast mode, advisor, sandbox
