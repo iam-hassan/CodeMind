@@ -499,6 +499,22 @@ export type ICodeMindEngineEvent =
 
 	// Phase 2 Orchestration events
 	| {
+		kind: 'ppb_injection';
+		queryId: string;
+		budgetTokens: number;
+		usedTokens: number;
+		factsIncluded: number;
+		factsDropped: number;
+		queueStats: unknown;
+	}
+	| {
+		kind: 'ppb_conflict';
+		queryId: string;
+		path: string;
+		conflictCount: number;
+		resolution: 'kept_local' | 'kept_remote' | 'merged';
+	}
+	| {
 		kind: 'orchestration_progress';
 		queryId: string;
 		phase: string;
@@ -722,4 +738,10 @@ export interface ICodeMindAgentEngineService {
 
 	/** Feature flags the engine build exposes (voice mode, etc.). */
 	getFeatureFlags(): Promise<Readonly<Record<string, boolean>>>;
+
+	// Phase 2 Orchestration
+	getEditorState(): Promise<unknown>;
+	getSegmentQueueStats(): Promise<unknown>;
+	getGlobalDeveloperPrefs(): Promise<unknown>;
+	setGlobalDeveloperPrefs(prefs: unknown): Promise<void>;
 }

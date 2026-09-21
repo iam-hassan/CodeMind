@@ -47,6 +47,12 @@ import { HEADROOM_BASE_URL, ProxyStatsSnapshot, fetchProxyStats, pingHeadroomPro
 import { TraceCollector } from './orchestration/traceCollector.js';
 import { HeadroomProxyOutcome, ToolAdapterRegistry } from './orchestration/types.js';
 import { projectBrainAdapter } from './orchestration/toolAdapters/projectBrainAdapter.js';
+import { getOrCreateProject, resolvePreferences, getGlobalDeveloperPrefs, setGlobalDeveloperPrefs, GlobalDeveloperPrefs } from './orchestration/projectRegistry.js';
+import { buildEditorState } from './orchestration/editorState.js';
+import { enqueue, type SegmentQueueStats, getSegmentQueueStats, NoopSegmentSink, type ISegmentSink, getSink } from './orchestration/segmentQueue.js';
+import { triggerLearningLoop } from './orchestration/learningLoop.js';
+import { IProjectBrainRetriever, NullRetriever, buildRetrievalRequest, RetrievedFact } from './orchestration/retrievalRequest.js';
+import { formatInjectionBlock, InjectionAudit } from './orchestration/injectionBlock.js';
 
 /**
  * Node-side worker that owns the Claude Agent SDK engine and exposes a
@@ -737,9 +743,30 @@ class CodeMindAgentEngineMainService extends Disposable {
 		return mod.getTraceBuffer();
 	}
 
+	async getEditorState(): Promise<unknown> {
+		return buildEditorState({ cwd: this._currentProjectId } as any, this._currentIntent ?? 'unknown');
+	}
+
+	async getSegmentQueueStats(): Promise<unknown> {
+		return getSegmentQueueStats();
+	}
+
+	async getGlobalDeveloperPrefs(): Promise<unknown> {
+		return getGlobalDeveloperPrefs();
+	}
+
+	async setGlobalDeveloperPrefs(prefs: unknown): Promise<void> {
+		if (prefs && typeof prefs === 'object') {
+			await setGlobalDeveloperPrefs(prefs as GlobalDeveloperPrefs);
+		}
+	}
+
 	private _toolAdapterRegistry: ToolAdapterRegistry;
 	private _workspaceFolder: string;
 	private _sessionTurnCount: number;
+	private _currentProjectId: string | undefined;
+	private _currentIntent: string | undefined;
+	private _retriever: IProjectBrainRetriever = new NullRetriever();
 	/** Local mirror of the dev-mode flag so the engine can decide, per query, whether to
 	 *  build a trace collector at all (zero overhead when dev mode is off). */
 	private _devModeEnabled = false;
@@ -888,8 +915,56 @@ class CodeMindAgentEngineMainService extends Disposable {
 				} as any,
 			});
 
+			this._currentIntent = orchestrated.orchestrationMetadata.intent;
+
 			// Increment turn count after orchestration succeeds
 			this._sessionTurnCount++;
+
+			// Project Resolve
+			try {
+				const idInfo = await getOrCreateProject(request.cwd ?? process.cwd());
+				this._currentProjectId = idInfo.projectId;
+			} catch (err) {
+				this._currentProjectId = undefined;
+			}
+
+			// Retrieve and Format Injection Block
+			let ppbSuffix = '';
+			if (this._currentProjectId) {
+				try {
+					const prefs = resolvePreferences(this._currentProjectId);
+					if (prefs.ppbEnabled) {
+						const retrievalReq = buildRetrievalRequest(
+							this._currentProjectId,
+							request,
+							this._currentIntent ?? 'unknown',
+							this._buildSessionHistory(),
+							prefs.maxInjectionTokens
+						);
+
+						const retrievedFacts = await Promise.race([
+							this._retriever.retrieve(retrievalReq),
+							new Promise<RetrievedFact[]>((_, reject) => setTimeout(() => reject(new Error('Retrieval timeout')), 800))
+						]);
+
+						const { block, audit } = formatInjectionBlock(retrievedFacts, this._currentProjectId, prefs.maxInjectionTokens);
+						ppbSuffix = block ? '\n\n' + block : '';
+						
+						this._onEvent.fire({
+							queryId,
+							event: {
+								type: 'ppb_injection',
+								projectId: this._currentProjectId,
+								turnId: queryId,
+								audit,
+								queueStats: getSegmentQueueStats()
+							} as any
+						});
+					}
+				} catch (err) {
+					// Retrieval failure or timeout must never fail or delay the turn
+				}
+			}
 
 			// Hand the enriched prompt back to queryStream, which owns the actual SDK streaming.
 			// Phase-2 Headroom (Layer 6) — PROXY-IN-PATH. The old design compressed only the
@@ -901,7 +976,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 			// cloud, no key, no conversation data off-box. If the proxy is down we send
 			// straight to the gateway, uncompressed (graceful — a missing proxy never blocks
 			// or slows a turn beyond the sub-second health probe).
-			const combinedSuffix = (request.systemPromptSuffix ?? '') + orchestrated.systemPromptSuffix;
+			const combinedSuffix = (request.systemPromptSuffix ?? '') + orchestrated.systemPromptSuffix + ppbSuffix;
 			const gatewayUrl = this._resolveBaseUrl();
 			const proxyActive = (await pingHeadroomProxy()).reachable;
 			// Snapshot cumulative proxy stats before the turn ONLY when the dev trace needs
@@ -928,6 +1003,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 				systemPromptSuffix: combinedSuffix,
 			};
 		} catch (err) {
+			this._currentIntent = 'unknown';
 			// Context enrichment is strictly an optimisation — never let it fail the query.
 			this._onEvent.fire({
 				queryId,
@@ -973,6 +1049,29 @@ class CodeMindAgentEngineMainService extends Disposable {
 		// Phase 2 — enrich the prompt with pre-fetched context before streaming.
 		// Degrades to the original request if orchestration fails or times out.
 		request = await this._prepareOrchestratedRequest(queryId, request);
+
+		try {
+			if (this._currentProjectId) {
+				const openFiles = (request.attachments ?? [])
+					.map((f: any) => (typeof f === 'string' ? f : f.path ?? ''))
+					.filter(Boolean);
+				enqueue({
+					projectId: this._currentProjectId,
+					turnId: queryId,
+					role: 'user',
+					text: request.prompt,
+					intent: this._currentIntent ?? 'unknown',
+					timestamp: Date.now(),
+					editorState: {
+						cwd: request.cwd ?? process.cwd(),
+						openFiles,
+						workspaceName: basenameOf(request.cwd ?? process.cwd())
+					}
+				});
+			}
+		} catch (err) {
+			// fire-and-forget, never fail the turn
+		}
 
 		const projectKey = request.cwd ?? this._engineRoot ?? '';
 		this._lastCwd = request.cwd ?? this._lastCwd;
@@ -1165,6 +1264,11 @@ class CodeMindAgentEngineMainService extends Disposable {
 		// sessions and engine commands use it too — not just the reassigned main turn.
 		const key = HARDCODE_ENABLED ? HARDCODE_API_KEY : apiKey;
 		const env: Record<string, string> = { ...process.env as Record<string, string>, ANTHROPIC_API_KEY: key };
+		
+		if (this._currentProjectId) {
+			env.CODEMIND_CURRENT_PROJECT_ID = this._currentProjectId;
+		}
+
 		// A configured endpoint wins over whatever the app was launched with, so the
 		// settings panel is the single place that decides where turns go. The SDK reads
 		// this variable itself; there is no option for it. `baseUrlOverride` lets a single
@@ -3096,6 +3200,39 @@ class CodeMindAgentEngineMainService extends Disposable {
 			durationMs: msg.duration_ms ?? msg.duration_api_ms, isError,
 		};
 		this._emit(queryId, { kind: 'result', text: resultText, isError, usage, totalCostUsd: response.totalCostUsd, durationMs: response.durationMs, sessionId, contextTokens: cur.contextTokens });
+		
+		try {
+			if (this._currentProjectId && !isError) {
+				enqueue({
+					projectId: this._currentProjectId,
+					turnId: queryId,
+					role: 'assistant',
+					text: resultText,
+					intent: this._currentIntent ?? 'unknown',
+					timestamp: Date.now(),
+					editorState: {
+						cwd: cur.projectKey,
+						openFiles: [],
+						workspaceName: basenameOf(cur.projectKey)
+					}
+				});
+			}
+		} catch (err) {
+			// fire-and-forget, never fail the turn
+		}
+
+		try {
+			if (this._currentProjectId && cur.sessionId && !cur.isolated) {
+				const toolsArray = [];
+				for (const [id, t] of cur.tools.entries()) {
+					toolsArray.push({ name: t.name, inputJson: t.inputJson });
+				}
+				triggerLearningLoop(msg, this._currentProjectId, toolsArray, this._sessionTurnCount, getSink());
+			}
+		} catch (err) {
+			// never throw
+		}
+
 		// Resolve the turn FIRST — the response text has already streamed, and the
 		// dev-mode trace below reads the proxy's /stats (a sub-second network call) which
 		// must never delay the turn's completion.

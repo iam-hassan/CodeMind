@@ -429,6 +429,26 @@ class CodeMindAgentEngineService extends Disposable implements ICodeMindAgentEng
 		const { service: worker } = await this._getWorkerService();
 		return worker.getTraceHistory();
 	}
+
+	async getEditorState(): Promise<unknown> {
+		const { service: worker } = await this._getWorkerService();
+		return worker.getEditorState();
+	}
+
+	async getSegmentQueueStats(): Promise<unknown> {
+		const { service: worker } = await this._getWorkerService();
+		return worker.getSegmentQueueStats();
+	}
+
+	async getGlobalDeveloperPrefs(): Promise<unknown> {
+		const { service: worker } = await this._getWorkerService();
+		return worker.getGlobalDeveloperPrefs();
+	}
+
+	async setGlobalDeveloperPrefs(prefs: unknown): Promise<void> {
+		const { service: worker } = await this._getWorkerService();
+		return worker.setGlobalDeveloperPrefs(prefs);
+	}
 }
 
 registerSingleton(ICodeMindAgentEngineService, CodeMindAgentEngineService, InstantiationType.Delayed);
