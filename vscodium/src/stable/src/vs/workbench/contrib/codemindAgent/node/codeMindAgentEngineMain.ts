@@ -6,6 +6,7 @@
 import { appendFileSync, existsSync, readFileSync } from 'fs';
 import { homedir, tmpdir } from 'os';
 import { spawn } from 'child_process';
+import { createRequire } from 'module';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from '../../../../base/common/path.js';
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
@@ -49,10 +50,21 @@ import { HeadroomProxyOutcome, ToolAdapterRegistry } from './orchestration/types
 import { projectBrainAdapter } from './orchestration/toolAdapters/projectBrainAdapter.js';
 import { getOrCreateProject, resolvePreferences, getGlobalDeveloperPrefs, setGlobalDeveloperPrefs, GlobalDeveloperPrefs } from './orchestration/projectRegistry.js';
 import { buildEditorState } from './orchestration/editorState.js';
-import { enqueue, type SegmentQueueStats, getSegmentQueueStats, NoopSegmentSink, type ISegmentSink, getSink } from './orchestration/segmentQueue.js';
+import { enqueue, getSegmentQueueStats, getSink, setSink } from './orchestration/segmentQueue.js';
 import { triggerLearningLoop } from './orchestration/learningLoop.js';
 import { IProjectBrainRetriever, NullRetriever, buildRetrievalRequest, RetrievedFact } from './orchestration/retrievalRequest.js';
-import { formatInjectionBlock, InjectionAudit } from './orchestration/injectionBlock.js';
+import { formatInjectionBlock } from './orchestration/injectionBlock.js';
+import { isPpbEnabled, loadPpbConfig, type PpbConfig } from './ppb/config.js';
+import { PpbSegmentSink, type PpbSinkEvent } from './ppb/sink.js';
+import { PpbExtractor } from './ppb/extraction/validate.js';
+import { createExtractionClient } from './ppb/llm/client.js';
+import { resolveExtractionTarget, type ExtractionTarget } from './ppb/extraction/target.js';
+import { PpbRetriever } from './ppb/retrieval/retriever.js';
+import { createEmbeddingClient } from './ppb/embeddings/embedder.js';
+import { GraphRepository } from './ppb/graph/graphRepo.js';
+import { createNeo4jDriver } from './ppb/storage/neo4j.js';
+import { createPgClient } from './ppb/storage/pg.js';
+import { registerProjectBrainTool, setProjectBrainRetrieverAdapter, type McpToolFactory, type ZodLike } from './ppb/tool.js';
 
 /**
  * Node-side worker that owns the Claude Agent SDK engine and exposes a
@@ -352,6 +364,14 @@ function validateBoundedIntEnvVar(
 /** Fallbacks from the CLI's `getModelMaxOutputTokens` for a model it has no row for. */
 const MAX_OUTPUT_TOKENS_DEFAULT = 32_000;
 const MAX_OUTPUT_TOKENS_UPPER_LIMIT = 64_000;
+
+// The Claude Agent SDK resolves CLAUDE_CODE_MAX_OUTPUT_TOKENS (capped at 64000) when it loads,
+// which is before any per-turn code runs — so set it here, at module load, or long responses get
+// truncated at the 32k default ("response exceeded the 32000 output token maximum"). This only
+// raises the SDK's ceiling; it does not cap input or cache tokens.
+if (!process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS) {
+	process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(MAX_OUTPUT_TOKENS_UPPER_LIMIT);
+}
 
 /**
  * The `CLAUDE_CODE_MAX_OUTPUT_TOKENS` bounds for a model, ported from the CLI's
@@ -721,6 +741,12 @@ class CodeMindAgentEngineMainService extends Disposable {
 		this._workspaceFolder = process.cwd();
 		this._sessionTurnCount = 0;
 
+		// Phase 1 Part 1 (M3): register the PPB ingestion sink when enabled (inert otherwise).
+		// The extraction target follows the panel's active model selection (OD-6, §7.6) and is
+		// refreshed by `_capturePpbTarget()`; until one is known the M2 stub stays in place, so
+		// enabling PPB alone still changes no behaviour (§21 M2).
+		this._syncPpbSink();
+
 		// A.8 – Lazy Headroom pre-warm at worker startup
 		import('./orchestration/headroomLayer.js')
 			.then(m => m.prewarmHeadroom())
@@ -765,8 +791,28 @@ class CodeMindAgentEngineMainService extends Disposable {
 	private _workspaceFolder: string;
 	private _sessionTurnCount: number;
 	private _currentProjectId: string | undefined;
+	private _currentProjectName: string | undefined;
+	/** When set, the turn is halted and this question is returned instead of calling the model. */
+	private _pendingConfirmation: string | undefined;
 	private _currentIntent: string | undefined;
 	private _retriever: IProjectBrainRetriever = new NullRetriever();
+	private _ppbConfig: PpbConfig | undefined;
+	/** Active LLM target for PPB extraction (OD-6, §7.6): the model, endpoint and key the agent
+	 * itself is running against, captured from the panel's selection rather than a static value. */
+	private _ppbModelTarget: ExtractionTarget | undefined;
+	private _ppbMcpServer: unknown | undefined;
+	private _sdkCreateMcpServer: unknown | undefined;
+	private _sdkTool: McpToolFactory | undefined;
+	private _sdkZod: ZodLike | undefined;
+	/** The live PPB stack (pg client + graph repo + retriever), lazily created by `_ensurePpbStack()`. */
+	private _ppbStack: {
+		readonly client: ReturnType<typeof createPgClient>;
+		readonly driver: ReturnType<typeof createNeo4jDriver>;
+		readonly graph: GraphRepository;
+		readonly retriever: PpbRetriever;
+		/** Query wrapper that waits for the lazy connection before touching the client. */
+		readonly read: { query(text: string, params?: readonly unknown[]): Promise<{ rows: Array<Record<string, unknown>> }> };
+	} | undefined;
 	/** Local mirror of the dev-mode flag so the engine can decide, per query, whether to
 	 *  build a trace collector at all (zero overhead when dev mode is off). */
 	private _devModeEnabled = false;
@@ -924,8 +970,21 @@ class CodeMindAgentEngineMainService extends Disposable {
 			try {
 				const idInfo = await getOrCreateProject(request.cwd ?? process.cwd());
 				this._currentProjectId = idInfo.projectId;
+				this._currentProjectName = idInfo.workspaceName ?? idInfo.projectId;
 			} catch (err) {
 				this._currentProjectId = undefined;
+			}
+			// The in-process `project_brain` MCP tool reads the active project from
+			// `process.env`, not from this turn's SDK env object (which is a copy and never
+			// mutates the worker). Set it here so the tool can resolve the project.
+			if (this._currentProjectId) {
+				process.env.CODEMIND_CURRENT_PROJECT_ID = this._currentProjectId;
+				// memories.project_id has an FK to projects(id), but the project registry only
+				// writes ~/.codemind/projects.json. Without this upsert every fact write fails the
+				// FK and is silently dropped, so the brain never persists anything for a project.
+				await this._ensurePpbProjectRow(this._currentProjectId, this._currentProjectName ?? this._currentProjectId);
+			} else {
+				delete process.env.CODEMIND_CURRENT_PROJECT_ID;
 			}
 
 			// Retrieve and Format Injection Block
@@ -938,27 +997,57 @@ class CodeMindAgentEngineMainService extends Disposable {
 							this._currentProjectId,
 							request,
 							this._currentIntent ?? 'unknown',
-							this._buildSessionHistory(),
+							// TODO(M2): supply real {role, content} turns (types.ts vs retrievalRequest.ts TurnSummary shapes differ)
+							this._buildSessionHistory() as unknown as Parameters<typeof buildRetrievalRequest>[3],
 							prefs.maxInjectionTokens
 						);
 
+						const recallId = this._emitPpbToolStart(queryId, 'recall', { query: typeof request.prompt === 'string' ? request.prompt.slice(0, 80) : undefined });
+						const tRecall = Date.now();
 						const retrievedFacts = await Promise.race([
 							this._retriever.retrieve(retrievalReq),
 							new Promise<RetrievedFact[]>((_, reject) => setTimeout(() => reject(new Error('Retrieval timeout')), 800))
 						]);
+						this._emitPpbToolResult(queryId, recallId, `${retrievedFacts.length} memory(ies) recalled`);
+						this._recordPpbTelemetry(this._currentProjectId, 'ppb.retrieve', Date.now() - tRecall, { count: retrievedFacts.length });
 
+						const injectId = this._emitPpbToolStart(queryId, 'inject', { budget: prefs.maxInjectionTokens });
 						const { block, audit } = formatInjectionBlock(retrievedFacts, this._currentProjectId, prefs.maxInjectionTokens);
 						ppbSuffix = block ? '\n\n' + block : '';
-						
-						this._onEvent.fire({
+						this._emitPpbToolResult(queryId, injectId, block
+							? `injected ${audit.injectedFacts} memory(ies) (~${audit.estimatedTokens} tokens, ${audit.droppedFacts} dropped)`
+							: 'no relevant memories');
+						this._recordPpbTelemetry(this._currentProjectId, 'ppb.inject', undefined, { injected: audit.injectedFacts, tokens: audit.estimatedTokens, dropped: audit.droppedFacts });
+						// Force a confirmation when the request reverses a recorded plan change, rather
+						// than trusting the model to notice the contradiction in the context block.
+						try {
+							const stack = this._ppbStack ?? this._ensurePpbStack();
+							if (stack && typeof request.prompt === 'string' && request.prompt.trim()) {
+								const STOP = new Set(['this', 'that', 'with', 'from', 'they', 'them', 'have', 'will', 'must', 'should', 'uses', 'using', 'build', 'built', 'game', 'games', 'project', 'code', 'when', 'then', 'into', 'also', 'more', 'some', 'only', 'very', 'been', 'were', 'does', 'the', 'and', 'for', 'are', 'was', 'our', 'you', 'your', 'want', 'realistic', 'graphics', 'mechanics']);
+								const words = (text: string): string[] => (text.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter(word => !STOP.has(word));
+								const rq = words(request.prompt);
+								if (rq.length > 0) {
+									const arch = (await stack.read.query("SELECT content FROM memories WHERE project_id=$1 AND status IN ('archived','superseded') ORDER BY updated_at DESC LIMIT 40", [this._currentProjectId])).rows;
+									const act = (await stack.read.query("SELECT content FROM memories WHERE project_id=$1 AND status='active' LIMIT 40", [this._currentProjectId])).rows;
+									const hit = arch.find(a => words(String(a.content)).some(word => rq.includes(word)));
+									if (hit) {
+										const cur = act.find(a => words(String(a.content)).some(word => rq.includes(word)));
+										const currentText = cur ? String(cur.content) : '(the current direction)';
+										this._pendingConfirmation = `Before I start: your project memory shows the direction was changed — ${JSON.stringify(String(hit.content))} was replaced by ${JSON.stringify(currentText)}. You are now asking for something that reverses that change. Nothing has been built yet. Do you want me to (1) add it alongside the current work, (2) switch the project back to the earlier direction, or (3) keep the current direction? Reply with 1, 2, or 3 and I'll proceed.`;
+										this._recordPpbTelemetry(this._currentProjectId, 'ppb.confirm_required', undefined, { reversed: String(hit.content).slice(0, 80) });
+									}
+								}
+							}
+						} catch { /* confirmation check is best-effort */ }
+
+						this._emit(queryId, {
+							kind: 'ppb_injection',
 							queryId,
-							event: {
-								type: 'ppb_injection',
-								projectId: this._currentProjectId,
-								turnId: queryId,
-								audit,
-								queueStats: getSegmentQueueStats()
-							} as any
+							budgetTokens: prefs.maxInjectionTokens,
+							usedTokens: audit.estimatedTokens,
+							factsIncluded: audit.injectedFacts,
+							factsDropped: audit.droppedFacts,
+							queueStats: getSegmentQueueStats()
 						});
 					}
 				} catch (err) {
@@ -1044,11 +1133,23 @@ class CodeMindAgentEngineMainService extends Disposable {
 		if (problem) {
 			throw new Error(problem);
 		}
+		// A query is where the active model selection and its key are both known (OD-6).
+		this._capturePpbTarget(apiKey);
 		await this._ensureSdkLoaded();
 
 		// Phase 2 — enrich the prompt with pre-fetched context before streaming.
 		// Degrades to the original request if orchestration fails or times out.
 		request = await this._prepareOrchestratedRequest(queryId, request);
+
+		// A request that reverses a recorded plan change is halted here: return the confirmation
+		// question directly instead of calling the model, so the agent cannot bypass it.
+		if (this._pendingConfirmation) {
+			const confirmation = this._pendingConfirmation;
+			this._pendingConfirmation = undefined;
+			this._emit(queryId, { kind: 'text', text: confirmation });
+			this._emit(queryId, { kind: 'result', text: confirmation, isError: false, sessionId: undefined, contextTokens: undefined });
+			return { text: confirmation, model: this._model, sessionId: undefined, isError: false };
+		}
 
 		try {
 			if (this._currentProjectId) {
@@ -1067,6 +1168,9 @@ class CodeMindAgentEngineMainService extends Disposable {
 						openFiles,
 						workspaceName: basenameOf(request.cwd ?? process.cwd())
 					}
+				});
+				this._recordPpbTelemetry(this._currentProjectId, 'ppb.capture', undefined, {
+					chars: typeof request.prompt === 'string' ? request.prompt.length : 0
 				});
 			}
 		} catch (err) {
@@ -1154,7 +1258,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 			if (inlineSettings) {
 				options.settings = inlineSettings;
 			}
-			const mcpServers = this._buildMcpServerMap();
+			const mcpServers = this._mergePpbMcpServers(this._buildMcpServerMap());
 			if (mcpServers) {
 				options.mcpServers = mcpServers;
 			}
@@ -1269,6 +1373,15 @@ class CodeMindAgentEngineMainService extends Disposable {
 			env.CODEMIND_CURRENT_PROJECT_ID = this._currentProjectId;
 		}
 
+		// The SDK caps one assistant response at 32k tokens by default, which truncates long file writes
+		// and forces a manual "continue". There is no engine-side cap on input or cache tokens (the
+		// model's context window is the only limit). For output, set the ceiling to the model's real
+		// maximum and set it on `process.env` too, because the SDK reads this variable from the
+		// process, not the per-query env copy. Override with CODEMIND_MAX_OUTPUT_TOKENS if needed.
+		const maxOut = env.CODEMIND_MAX_OUTPUT_TOKENS || env.CLAUDE_CODE_MAX_OUTPUT_TOKENS || String(maxOutputTokensFor(this._model).upperLimit);
+		env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = maxOut;
+		process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = maxOut;
+
 		// A configured endpoint wins over whatever the app was launched with, so the
 		// settings panel is the single place that decides where turns go. The SDK reads
 		// this variable itself; there is no option for it. `baseUrlOverride` lets a single
@@ -1340,6 +1453,121 @@ class CodeMindAgentEngineMainService extends Disposable {
 	}
 
 	/**
+	 * Record the active LLM target for PPB extraction and refresh the ingestion sink
+	 * (OD-6, §7.6).
+	 *
+	 * The extraction model follows the panel's model selection — the same model, endpoint and
+	 * credentials the agent itself runs against — so PPB carries no model configuration of its
+	 * own. A key is only known once a query has supplied one, so it is inherited from the
+	 * previous capture when omitted here.
+	 */
+	private _capturePpbTarget(apiKey?: string): void {
+		this._ppbModelTarget = {
+			model: this._model,
+			baseUrl: this._resolveBaseUrl() ?? '',
+			apiKey: apiKey ?? this._ppbModelTarget?.apiKey
+		};
+		this._syncPpbSink();
+	}
+
+	/**
+	 * Build the extractor for the current target and register the ingestion sink.
+	 *
+	 * Never throws: PPB wiring must not be able to break engine startup or a turn (§24). With no
+	 * usable target the sink keeps its M2 stub, so enabling PPB alone changes no behaviour.
+	 */
+	private _syncPpbSink(): void {
+		if (!isPpbEnabled()) {
+			return;
+		}
+		try {
+			const config = loadPpbConfig();
+			const target = resolveExtractionTarget(this._ppbModelTarget, {
+				model: config.extractModel,
+				baseUrl: config.extractBaseUrl,
+				apiKey: config.extractApiKey
+			});
+			const extractor = target
+				? new PpbExtractor({ client: createExtractionClient(target.baseUrl, target.model, target.apiKey ?? '', config.extractTimeoutMs) })
+				: undefined;
+			const stack = this._ensurePpbStack();
+			setSink(new PpbSegmentSink({
+				extractor,
+				write: stack?.read,
+				projector: stack?.graph,
+				embedder: stack ? createEmbeddingClient(config) : undefined,
+				onEvent: (event) => this._onPpbSinkEvent(event)
+			}));
+			if (stack) {
+				// The real retriever replaces the NullRetriever used before the stack is live (M4/T09).
+				this._retriever = stack.retriever;
+				setProjectBrainRetrieverAdapter(stack.retriever);
+			}
+		} catch {
+			// Never block startup or a turn on PPB wiring.
+		}
+	}
+
+	/**
+	 * Ensure the active project has a row in PostgreSQL `projects`. The registry only writes the
+	 * developer-side `~/.codemind/projects.json`; the relational schema's
+	 * `memories.project_id -> projects(id)` foreign key means a missing row silently drops every
+	 * fact write. Best-effort: never blocks a turn.
+	 */
+	private async _ensurePpbProjectRow(projectId: string, name: string): Promise<void> {
+		if (!isPpbEnabled()) { return; }
+		try {
+			const stack = this._ensurePpbStack();
+			if (!stack) { return; }
+			await stack.read.query(
+				'INSERT INTO projects (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING',
+				[projectId, name]
+			);
+		} catch {
+			// Never block a turn on the bookkeeping upsert.
+		}
+	}
+
+	/**
+	 * Lazily construct the live PPB storage stack (PostgreSQL source of truth + Neo4j graph
+	 * projection) and the retriever that reads it. Best-effort: any failure leaves the
+	 * NullRetriever in place so a chat turn is never broken (§24).
+	 */
+	private _ensurePpbStack(): {
+		client: ReturnType<typeof createPgClient>;
+		driver: ReturnType<typeof createNeo4jDriver>;
+		graph: GraphRepository;
+		retriever: PpbRetriever;
+		read: { query(text: string, params?: readonly unknown[]): Promise<{ rows: Array<Record<string, unknown>> }> };
+	} | undefined {
+		if (this._ppbStack) {
+			return this._ppbStack;
+		}
+		try {
+			const config = this._ppbConfig ?? loadPpbConfig();
+			this._ppbConfig = config;
+			const client = createPgClient(config.pgUrl);
+			// node-postgres needs an explicit connect; queries issued before it resolves would
+			// fail. Resolve the connection once and let every query await it (§24 — degrade, don't
+			// crash: a failed connect makes queries reject, which retrieval/sink handle gracefully).
+			const ready = client.connect().catch(() => { });
+			const read = {
+				query: async (text: string, params?: readonly unknown[]) => {
+					await ready;
+					return client.query(text, params as unknown[] | undefined);
+				}
+			};
+			const driver = createNeo4jDriver(config);
+			const graph = new GraphRepository(driver);
+			const retriever = new PpbRetriever({ read, graph, embedding: createEmbeddingClient(config) });
+			this._ppbStack = { client, driver, graph, retriever, read };
+			return this._ppbStack;
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
 	 * The model every turn uses. HARDCODE (temp) forces a single model regardless
 	 * of the composer/settings selection; otherwise it is the configured model,
 	 * falling back to DEFAULT_MODEL.
@@ -1358,6 +1586,13 @@ class CodeMindAgentEngineMainService extends Disposable {
 	 * `effort` is passed separately and guides depth without pinning a budget.
 	 */
 	private _resolveThinking(): SdkOptions['thinking'] | undefined {
+		// `CODEMIND_THINKING=off|adaptive` overrides the Settings budget. Reasoning-model
+		// gateways can otherwise spend the whole output budget on `thinking` and never emit a
+		// tool call, which stalls the agent; `off` forces a normal answer. `auto` (default)
+		// keeps the previous behaviour: the explicit budget when set, else adaptive.
+		const mode = (process.env.CODEMIND_THINKING ?? '').trim().toLowerCase();
+		if (mode === 'off' || mode === 'disabled') { return { type: 'disabled' }; }
+		if (mode === 'adaptive') { return { type: 'adaptive' }; }
 		const budget = this._settings.maxThinkingTokens;
 		if (typeof budget === 'number' && budget > 0) {
 			return { type: 'enabled', budgetTokens: budget };
@@ -1438,6 +1673,56 @@ class CodeMindAgentEngineMainService extends Disposable {
 	}
 
 	/** Translate the MCP panel's server list into the SDK's mcpServers map. */
+	private _buildPpbMcpServer(): unknown | undefined {
+		if (!isPpbEnabled()) {
+			return undefined;
+		}
+		if (!this._ppbConfig) {
+			this._ppbConfig = loadPpbConfig();
+		}
+		const createMcpServer = this._sdkCreateMcpServer;
+		if (typeof createMcpServer !== 'function') {
+			return undefined;
+		}
+		if (this._ppbMcpServer) {
+			return this._ppbMcpServer;
+		}
+		// Build a valid but empty MCP server WITHOUT caching it: if the storage stack or the SDK
+		// factories are not ready yet, a later turn must still be able to register the real
+		// `project_brain` tool (the previous code cached the empty scaffold forever).
+		const emptyScaffold = (): unknown => (createMcpServer as (options: { name: string; version?: string; tools?: readonly unknown[] }) => unknown)({ name: 'ppb', version: '1.0.0', tools: [] });
+		// In-process SDK MCP server, active only when CODEMIND_PPB_ENABLED=1. The
+		// `project_brain` tool (recall|store|list|reason) is bound to the live Part 1
+		// services when the storage stack is available.
+		const stack = this._ensurePpbStack();
+		const sdkTool = this._sdkTool;
+		const sdkZod = this._sdkZod;
+		if (stack && typeof sdkTool === 'function' && sdkZod) {
+			try {
+				const config = this._ppbConfig ?? loadPpbConfig();
+				const sink = new PpbSegmentSink({ write: stack.read, projector: stack.graph, embedder: createEmbeddingClient(config), log: () => { } });
+				this._ppbMcpServer = registerProjectBrainTool({
+					createMcpServer: createMcpServer as (options: { name: string; version?: string; tools?: readonly unknown[] }) => unknown,
+					tool: sdkTool,
+					z: sdkZod,
+					services: { read: stack.read, graph: stack.graph, retriever: stack.retriever, sink }
+				});
+				return this._ppbMcpServer;
+			} catch {
+				return emptyScaffold();
+			}
+		}
+		return emptyScaffold();
+	}
+
+	private _mergePpbMcpServers(map: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+		const ppb = this._buildPpbMcpServer();
+		if (!ppb) {
+			return map;
+		}
+		return { ...(map ?? {}), ppb };
+	}
+
 	private _buildMcpServerMap(): Record<string, unknown> | undefined {
 		const enabled = this._mcpServers.filter(s => s.enabled !== false && s.name);
 		if (enabled.length === 0) {
@@ -1673,6 +1958,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 		// next turn (and any resumed session) uses it.
 		this._settings = { ...this._settings, model };
 		await this._pushLiveSettings({ model });
+		this._capturePpbTarget();
 	}
 
 	async updateSettings(settings: ICodeMindEngineSettings): Promise<void> {
@@ -1698,6 +1984,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 			this._sessionPermissionMode = undefined;
 		}
 		await this._pushLiveSettings(settings);
+		this._capturePpbTarget();
 	}
 
 	/**
@@ -2658,6 +2945,9 @@ class CodeMindAgentEngineMainService extends Disposable {
 	}
 
 	async clearSession(): Promise<void> {
+		// Only in-memory state is cleared. The session transcript is the Chat History entry and must
+		// survive; the panel also forgets its session id and task list on clear, so nothing gets
+		// resumed and no stale plan comes back.
 		this._sessions.clear();
 		this._sessionAllowedTools.clear();
 		// Grants scoped to "this session" end with the session that earned them.
@@ -2673,6 +2963,22 @@ class CodeMindAgentEngineMainService extends Disposable {
 
 	// --- SDK loading
 
+	/**
+	 * Resolve a zod-compatible `z` from the SDK's own resolution scope. The SDK's bundler brands
+	 * every schema with `_zod`; a zod instance from a different copy of the package would fail that
+	 * check, so the tool schema must be built with the same version the runtime uses.
+	 */
+	private async _loadSdkZod(): Promise<ZodLike | undefined> {
+		try {
+			const sdkPackage = resolve(this._engineRoot!, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'package.json');
+			const require = createRequire(sdkPackage);
+			const zod = require('zod') as { z?: ZodLike } | ZodLike;
+			return (zod as { z?: ZodLike }).z ?? (zod as ZodLike);
+		} catch {
+			return undefined;
+		}
+	}
+
 	private async _ensureSdkLoaded(): Promise<void> {
 		if (this._sdkQuery) { return; }
 		if (this._sdkLoadError) { throw new Error(this._sdkLoadError); }
@@ -2685,6 +2991,12 @@ class CodeMindAgentEngineMainService extends Disposable {
 				throw new Error('The SDK module did not export a `query` function.');
 			}
 			this._sdkQuery = mod.query;
+			const sdk = mod as { createSdkMcpServer?: unknown; tool?: unknown };
+			this._sdkCreateMcpServer = sdk.createSdkMcpServer;
+			this._sdkTool = sdk.tool as typeof this._sdkTool;
+			// Resolve a zod-compatible `z` from the SDK we just loaded, scoped to that module so
+			// the schema objects satisfy the runtime's `_zod` brand check (SDK-local zod version).
+			this._sdkZod = await this._loadSdkZod();
 		} catch (err) {
 			this._sdkLoadError = err instanceof Error ? err.message : String(err);
 			throw new Error(`Failed to load the Claude Agent SDK from ${sdkPath}: ${this._sdkLoadError}`);
@@ -2698,6 +3010,8 @@ class CodeMindAgentEngineMainService extends Disposable {
 		parts.push('You are CodeMind, an expert software engineering AI assistant integrated directly into the CodeMind editor.');
 		parts.push('You help users write, understand, debug, refactor, and maintain code.');
 		parts.push('Prefer concise, accurate answers. When editing, make minimal, focused changes.');
+		parts.push('Keep working until the task is fully complete: do not stop after planning or after a single step. If you wrote a plan (todos), execute every step before ending the turn. Only end your turn when the work is done or you are genuinely blocked.');
+		parts.push("Before starting a substantial task (building a feature, app, or file), first consult the Project Brain: the injected [PPB CONTEXT] block, or the project_brain tool (operation 'reason' or 'recall'). If that knowledge shows the user already built this, or changed direction (e.g. 'instead of X', 'no longer', 'we switched to Y'), say so and ask whether to proceed before doing the work.");
 		// Extra instructions the user typed into the settings panel apply to every turn.
 		const configured = this._settings.systemPrompt?.trim();
 		if (configured) {
@@ -3200,31 +3514,16 @@ class CodeMindAgentEngineMainService extends Disposable {
 			durationMs: msg.duration_ms ?? msg.duration_api_ms, isError,
 		};
 		this._emit(queryId, { kind: 'result', text: resultText, isError, usage, totalCostUsd: response.totalCostUsd, durationMs: response.durationMs, sessionId, contextTokens: cur.contextTokens });
-		
-		try {
-			if (this._currentProjectId && !isError) {
-				enqueue({
-					projectId: this._currentProjectId,
-					turnId: queryId,
-					role: 'assistant',
-					text: resultText,
-					intent: this._currentIntent ?? 'unknown',
-					timestamp: Date.now(),
-					editorState: {
-						cwd: cur.projectKey,
-						openFiles: [],
-						workspaceName: basenameOf(cur.projectKey)
-					}
-				});
-			}
-		} catch (err) {
-			// fire-and-forget, never fail the turn
-		}
+
+		// The assistant's final text is deliberately NOT ingested. It is the model's own (often
+		// very long) summary of the turn, and extracting it produced a flood of low-value,
+		// self-referential facts that bloated the store and the graph. Knowledge is captured from
+		// the developer's turns only; the `project_brain` tool can still `store` explicitly.
 
 		try {
 			if (this._currentProjectId && cur.sessionId && !cur.isolated) {
 				const toolsArray = [];
-				for (const [id, t] of cur.tools.entries()) {
+				for (const [, t] of cur.tools.entries()) {
 					toolsArray.push({ name: t.name, inputJson: t.inputJson });
 				}
 				triggerLearningLoop(msg, this._currentProjectId, toolsArray, this._sessionTurnCount, getSink());
@@ -3421,6 +3720,59 @@ class CodeMindAgentEngineMainService extends Disposable {
 		this._onEvent.fire({ queryId, event });
 	}
 
+	/**
+	 * Surface Project Brain activity in the panel exactly like a normal tool call: a
+	 * `tool_use_start` followed by a `tool_result`, both carrying the `project_brain` name.
+	 */
+	private _emitPpbToolStart(queryId: string, operation: string, input: unknown): string | undefined {
+		if (!queryId) { return undefined; }
+		const id = `ppb_${operation}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+		this._emit(queryId, { kind: 'tool_use_start', toolUseId: id, toolName: 'project_brain', input });
+		return id;
+	}
+
+	private _emitPpbToolResult(queryId: string, id: string | undefined, content: string, isError = false): void {
+		if (!queryId || !id) { return; }
+		this._emit(queryId, { kind: 'tool_result', toolUseId: id, content, isError });
+	}
+
+	/** Map one ingestion stage from the sink to a visible tool card (extract + save). */
+	private _onPpbSinkEvent(event: PpbSinkEvent): void {
+		// Record every stage in ppb_telemetry so the dashboard can show what passed through.
+		this._recordPpbTelemetry(this._currentProjectId, `ppb.${event.stage}`, event.durationMs, {
+			turnId: event.turnId, count: event.count, ok: event.ok, detail: event.detail
+		});
+		if (event.stage === 'embed' || event.stage === 'project') { return; }
+		const queryId = event.turnId;
+		const op = event.stage === 'error' ? 'ingest' : event.stage;
+		const id = this._emitPpbToolStart(queryId, op, { operation: op, project: this._currentProjectId });
+		if (event.stage === 'error') {
+			this._emitPpbToolResult(queryId, id, `ingest failed: ${event.detail ?? 'unknown'}`, true);
+			return;
+		}
+		const label = event.stage === 'extract'
+			? `extracted ${event.count ?? 0} fact(s)`
+			: event.stage === 'supersede'
+				? `archived ${event.count ?? 0} superseded memory(ies)`
+				: `stored ${event.count ?? 0} memory(ies)`;
+		this._emitPpbToolResult(queryId, id, label);
+	}
+
+	/** Append one pipeline pass to `ppb_telemetry` (fire-and-forget; never affects a turn). */
+	private _recordPpbTelemetry(projectId: string | undefined, stage: string, durationMs: number | undefined, payload: unknown): void {
+		if (!projectId || !isPpbEnabled()) { return; }
+		try {
+			const stack = this._ensurePpbStack();
+			if (!stack) { return; }
+			void stack.read.query(
+				'INSERT INTO ppb_telemetry (project_id, stage, duration_ms, payload) VALUES ($1, $2, $3, $4::jsonb)',
+				[projectId, stage, durationMs ?? null, JSON.stringify(payload ?? {})]
+			).catch(() => { });
+		} catch {
+			// Telemetry must never affect a turn.
+		}
+	}
+
 	private _rejectPending(reason: Error): void {
 		for (const [, entry] of this._pending) { entry.reject(reason); }
 		this._pending.clear();
@@ -3450,6 +3802,13 @@ class CodeMindAgentEngineMainService extends Disposable {
 
 	override dispose(): void {
 		this._rejectPending(new Error('Engine disposed'));
+		// Release the live PPB stack (its connection keeps the process alive otherwise).
+		const stack = this._ppbStack;
+		this._ppbStack = undefined;
+		if (stack) {
+			stack.client.end().catch(() => { });
+			stack.driver.close().catch(() => { });
+		}
 		this._onEvent.dispose();
 		super.dispose();
 	}

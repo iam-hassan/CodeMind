@@ -1,0 +1,2459 @@
+
+CodeMind
+Phase 1 — Persistent Project Brain
+Test Scenarios and Verification Document
+200 Scenarios · 8 Groups · All Pipeline Stages + Headroom Verification
+
+Team:  Muhammad Hassan (BSCS23073)   |   Muhammad Sameer (BSCS23176)   |   Muhammad Musadiq (BSCS23148)
+Project:  CodeMind — Persistent Project Brain (Phase 1 FYP)
+Purpose:  Verify every subsystem of the Phase 1 pipeline, including all acceptance criteria and the Headroom compression layer integration.
+Institution:  Information Technology University (ITU), Lahore, BS Computer Science
+
+1.  How To Use This Document
+Each scenario in this document is a self-contained test case for one or more subsystems of the Phase 1 Persistent Project Brain pipeline. The scenarios are organised into eight groups corresponding to pipeline stages. Within each scenario, five fields are provided:
+Input Prompt: the exact input to provide — either a developer message typed into the CodeMind chat, a system trigger, or an evaluation harness command.
+Context / State: the precondition that must be set up before running the scenario — the project, the current state of the knowledge graph, and any active configuration.
+Expected Output: what the system must produce — nodes written to Neo4j, facts stored in PostgreSQL, log entries, API responses, or developer-visible answers. Use this as the pass/fail criterion.
+Headroom Check: what to verify specifically about the Headroom compression layer at this point in the pipeline. Every scenario includes this field because Headroom must be verified across the entire pipeline, not only in Group G.
+Note (where present): implementation details, acceptance criterion references, or edge case warnings.
+
+Scenarios marked with "CRITICAL" in the Headroom Check field are the highest-priority Headroom tests. S-136, S-140, S-143, S-146, S-147, S-151, S-156, and S-164 are the eight critical Headroom tests. All must pass before Phase 1 is considered complete.
+
+Scenario Groups at a Glance
+Group
+Scenarios
+Stage(s)
+Count
+Group A: Project Ingestion and Identification
+S-001 to S-015
+Ingestion / Isolation
+15
+Group B: Memory Extraction Engine
+S-016 to S-050
+Extraction
+35
+Group C: Knowledge Graph and Data Model
+S-051 to S-075
+Extraction / Retrieval
+25
+Group D: Ranking and Context Injection
+S-076 to S-095
+Retrieval / Injection
+20
+Group E: Conflict Detection and Versioning
+S-096 to S-115
+Conflict
+20
+Group F: Long-Term Reasoning Layer
+S-116 to S-135
+Reasoning
+20
+Group G: Headroom Integration Verification
+S-136 to S-165
+Headroom
+30
+Group H: End-to-End and Demo Project Scenarios
+S-166 to S-200
+E2E
+35
+
+Acceptance Criteria Reference
+Ref
+Acceptance Criterion
+AC-1
+A conversation with tech stack, architectural decision and constraint produces correctly categorised, deduplicated facts with complete metadata.
+AC-2
+Non-engineering conversation produces zero stored memories.
+AC-3
+Reopening the same workspace retrieves its memories. Opening a different workspace retrieves none of them.
+AC-4
+Global developer preferences are available in every project without appearing in project-scoped knowledge.
+AC-5
+A contradicting fact triggers developer confirmation. Superseded memory archived. Both remain queryable.
+AC-6
+A request reaches the model with relevant memories injected automatically. Developer attaches nothing.
+AC-7
+Every memory operation is performed by the Project Brain tool in claude-code/src/tools via standard dispatch.
+AC-8
+Every request reaching the model passes through Headroom as its final stage, after injection, on every request.
+AC-9
+Historical questions answered from graph with citations to source memory records.
+AC-10
+Extraction accuracy and retrieval relevance measured against evaluation dataset and reported.
+
+
+
+B.  Group A: Project Ingestion and Identification
+Scenarios S-001 through S-015 — 15 scenarios
+S-001  Resolve project from Git repository path
+Stage: Ingestion   |   Difficulty: Basic
+Input Prompt
+(Auto-triggered on workspace open) Workspace opened at D:\Projects\ecommerce-app
+Context / State
+No project record exists yet. Git repo found at path. Git remote: github.com/hassan/ecommerce-app
+Expected Output
+Project UUID generated and stored. Project registry record: { path: "D:\\Projects\\ecommerce-app", gitId: "<sha>", uuid: "proj_abc123", name: "ecommerce-app" }. All downstream writes use this UUID.
+Headroom Check
+No prompt assembled yet. Headroom not invoked. Verify: project_id propagated to all subsequent memory writes for this session.
+Note: Acceptance criterion AC-3 (multi-project isolation). The same UUID must survive workspace rename.
+
+S-002  Resolve same project after folder rename
+Stage: Ingestion   |   Difficulty: Intermediate
+Input Prompt
+Workspace reopened at D:\Projects\shop-v2 (renamed from ecommerce-app)
+Context / State
+Git remote unchanged: github.com/hassan/ecommerce-app. Project registry has old path.
+Expected Output
+Existing UUID proj_abc123 matched via Git remote ID. Registry path updated to new folder. No new project created. All memories from old path remain accessible.
+Headroom Check
+Headroom not invoked. Verify: project_id in memory reads remains proj_abc123 after rename.
+Note: Stability requirement from Section 5.2, C2.1.
+
+S-003  Capture developer turn in chat
+Stage: Ingestion   |   Difficulty: Basic
+Input Prompt
+Developer types: "We are using Next.js 14 with App Router and TypeScript for this project."
+Context / State
+ecommerce-app project identified (proj_abc123). Conversation ID: conv_001. Message ID: msg_001.
+Expected Output
+Segment captured: { project_id: "proj_abc123", conv_id: "conv_001", msg_id: "msg_001", role: "user", text: "We are using Next.js 14...", timestamp: "<iso>", editor_context: { open_files: [], active_module: null } }. Passed to extraction queue.
+Headroom Check
+No retrieval request assembled yet. Headroom not in path. Verify: segment object has project_id attached before reaching extraction boundary.
+Note: IF-1 payload compliance check.
+
+S-004  Filter non-engineering conversation
+Stage: Ingestion   |   Difficulty: Basic
+Input Prompt
+Developer types: "Hey, good morning! How are you doing today?"
+Context / State
+ecommerce-app project identified. Conversation ID: conv_002.
+Expected Output
+Pre-filter classifies segment as casual/non-engineering. Segment discarded. Extraction engine NOT called. Zero facts stored. Log entry: { action: "pre_filter_discard", reason: "non_engineering", conv_id: "conv_002" }.
+Headroom Check
+Headroom not invoked. Verify: no extraction latency recorded for this message.
+Note: Non-engineering content must never produce stored memories per Section 5.2, C2.2.
+
+S-005  Filter assistant greeting turn
+Stage: Ingestion   |   Difficulty: Basic
+Input Prompt
+Assistant replies: "Hello! I am Claude Code. How can I help you with your project today?"
+Context / State
+ecommerce-app project. Role: assistant.
+Expected Output
+Pre-filter discards assistant greeting. No extraction. Log: { role: "assistant", action: "discard", reason: "greeting_no_engineering_content" }.
+Headroom Check
+Not invoked. Verify: assistant non-engineering turns do not trigger extraction.
+
+S-006  Buffer short segment, defer extraction
+Stage: Ingestion   |   Difficulty: Intermediate
+Input Prompt
+Developer: "We use Tailwind."
+Context / State
+proj_abc123. Buffering policy: flush when segment length >= 50 tokens OR turn count >= 3 OR engineering keyword density high.
+Expected Output
+Segment buffered. Extraction not yet called. Buffer state: [{ text: "We use Tailwind.", token_count: 6 }]. Next turn will be appended.
+Headroom Check
+Not invoked yet. Verify: buffer log shows pending segment, no extraction call made.
+Note: Asynchronous handoff must never block developer chat turn.
+
+S-007  Flush buffer and trigger extraction
+Stage: Ingestion   |   Difficulty: Intermediate
+Input Prompt
+Developer (3rd turn in conv): "We use Tailwind CSS for all styling. PostgreSQL is our database. We deploy to AWS EC2."
+Context / State
+Buffer already holds 2 prior short turns for proj_abc123. Combined token count now exceeds flush threshold.
+Expected Output
+Buffer flushed. Combined segment assembled from 3 turns. Extraction engine called asynchronously. Flush log: { trigger: "token_threshold", segments_merged: 3, project_id: "proj_abc123" }.
+Headroom Check
+Extraction runs async. Headroom not invoked for this ingestion event. Verify: developer chat turn returned before extraction completed.
+
+S-008  Backfill existing repository on first open
+Stage: Ingestion   |   Difficulty: Intermediate
+Input Prompt
+(Auto-triggered) Developer opens a 6-month-old project: D:\Projects\legacy-api for the first time in CodeMind.
+Context / State
+No prior PPB entries for this project. Repository has 47 files, package.json declares Express, Mongoose, JWT.
+Expected Output
+Backfill triggered. package.json, README.md, key source files scanned. Segments generated from file content and passed to extraction. Initial facts stored: { framework: "Express", database: "MongoDB/Mongoose", auth: "JWT" }. Backfill log: { files_scanned: 47, facts_extracted: 12, duration_ms: "<val>" }.
+Headroom Check
+Not invoked during backfill scan. Verify: backfill does not block IDE load. Facts available for retrieval within 30 seconds.
+Note: Section 5.2, C2.5 first-open backfill requirement.
+
+S-009  Incremental update from new API endpoint
+Stage: Ingestion   |   Difficulty: Intermediate
+Input Prompt
+Developer adds src/routes/payments.ts to repository.
+Context / State
+proj_abc123 already has routes/auth.ts and routes/products.ts in knowledge graph. Continuous learning loop is active.
+Expected Output
+File-change trigger fires on payments.ts. Content scanned. Extracted fact: { category: "Architecture", fact: "Payment endpoint added at /api/payments", source: "file:src/routes/payments.ts" }. Graph updated with new Module node PAYMENTS linked to Project node.
+Headroom Check
+Not invoked for file-change event. Verify: extraction log shows trigger: "file_change", unchanged files not re-extracted.
+Note: Incrementality requirement: unchanged knowledge must not be re-extracted per Section 5.2, C2.5.
+
+S-010  Capture editor context with segment
+Stage: Ingestion   |   Difficulty: Basic
+Input Prompt
+Developer types: "Can you add error handling to this function?" with src/services/auth.ts open.
+Context / State
+proj_abc123. Active file: src/services/auth.ts. Active module inferred: Authentication.
+Expected Output
+Segment captured with editor context: { open_files: ["src/services/auth.ts"], active_module: "Authentication", selection: null }. Editor context forwarded to ranking engine as IF-7 signal.
+Headroom Check
+Retrieval request will include active_module: "Authentication" as ranking signal. Headroom receives the assembled prompt after injection.
+
+S-011  Classify developer intent for ranking
+Stage: Ingestion   |   Difficulty: Intermediate
+Input Prompt
+Developer types: "Generate the login form component for me."
+Context / State
+proj_abc123. Intent classifier model is active.
+Expected Output
+Intent classified as: "code_generation". IF-7 payload: { intent: "code_generation", confidence: 0.94 }. Ranking engine weights recency and current-file signals higher for code_generation intent.
+Headroom Check
+Intent forwarded to Headroom context. Verify: retrieval request includes classified intent.
+
+S-012  Two workspaces open simultaneously, no leakage
+Stage: Isolation   |   Difficulty: Intermediate
+Input Prompt
+Developer has two VS Code windows open: proj_abc123 (ecommerce-app) and proj_xyz789 (blog-platform). Types in ecommerce-app: "Use Stripe for payments."
+Context / State
+Both projects have separate UUIDs. Memory writes must be project-scoped.
+Expected Output
+Fact written to proj_abc123 graph only. proj_xyz789 graph unchanged. Scoping enforcement log: { write_project: "proj_abc123", isolation_check: "pass" }. Querying proj_xyz789 for payment tech returns empty.
+Headroom Check
+Retrieval requests from each workspace use their respective project_id. Headroom receives isolated prompt per workspace.
+Note: Zero cross-contamination requirement per Section 5.2, C2.4.
+
+S-013  Global developer preference persists across projects
+Stage: Isolation   |   Difficulty: Basic
+Input Prompt
+Developer types: "I always prefer async/await over promise chains in all my projects."
+Context / State
+Currently in proj_abc123. Global preference store is separate from project-scoped graph.
+Expected Output
+Fact stored in global preference store: { scope: "global", category: "Developer Preference", fact: "Prefers async/await over promise chains", developer_id: "<dev_id>" }. Available in proj_xyz789 without appearing in proj_abc123 project-scoped knowledge.
+Headroom Check
+Global preferences injected into every project's context block. Headroom sees these preferences in every assembled prompt.
+
+S-014  Conflict confirmation transport: request delivery
+Stage: Ingestion   |   Difficulty: Intermediate
+Input Prompt
+Part 1 emits IF-3 conflict confirmation request: existing memory says "PostgreSQL", incoming fact says "MongoDB".
+Context / State
+Part 2 owns confirmation transport. Developer is active in IDE.
+Expected Output
+IF-3 payload received by Part 2. Confirmation dialog trigger sent to Part 3 UI layer. Transport log: { if: "IF-3", conflict_id: "conf_001", delivered_to: "part3_dialog", timestamp: "<iso>" }.
+Headroom Check
+No prompt assembly during confirmation wait. Headroom not invoked. Verify: pipeline pauses at conflict point until response received.
+
+S-015  Register Project Brain as tool in claude-code/src/tools
+Stage: Ingestion   |   Difficulty: Basic
+Input Prompt
+(System startup) Claude Code tools directory initialises.
+Context / State
+Tool registration path: d:\HassanSem\Semester-6\FYP\CodeMind\claude-code\src\tools
+Expected Output
+ProjectBrainTool registered in tools directory. Tool manifest: { name: "project_brain", description: "Retrieve and update persistent project knowledge", parameters: ["operation", "project_id", "payload"] }. Tool appears in Claude Code tool list. Test: model can call project_brain tool via standard dispatch.
+Headroom Check
+After tool returns ranked memories, Part 2 assembles prompt, then calls Headroom as final stage before Claude Code inference. Verify: tool dispatch log shows project_brain -> inject -> headroom -> llm sequence.
+Note: Single entry-point requirement per Section 2.4.
+
+
+
+C.  Group B: Memory Extraction Engine
+Scenarios S-016 through S-050 — 35 scenarios
+S-016  Extract Technology Stack fact
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "We are building this with Next.js 14, TypeScript, and PostgreSQL."
+Context / State
+proj_abc123. Empty knowledge graph (day 1).
+Expected Output
+Extracted facts: [{ category: "Technology Stack", fact: "Next.js 14", confidence: 0.97 }, { category: "Technology Stack", fact: "TypeScript", confidence: 0.98 }, { category: "Technology Stack", fact: "PostgreSQL", confidence: 0.96 }]. All three stored as separate Technology nodes in Neo4j with USES relationships to Project node.
+Headroom Check
+Verify post-extraction: retrieval of "tech stack" returns these three facts. Headroom receives them in the injected context block on next request.
+
+S-017  Extract Architecture Pattern fact
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "We are following a clean architecture pattern with separate domain, application and infrastructure layers."
+Context / State
+proj_abc123. Day 2.
+Expected Output
+Extracted fact: { category: "Architecture Pattern", fact: "Clean Architecture with domain/application/infrastructure layers", confidence: 0.94 }. Architecture node created in Neo4j. PART_OF relationship to Project.
+Headroom Check
+Architecture patterns are high-importance memories. Verify: importance_score >= 0.8 assigned. Headroom receives this in every subsequent prompt context.
+
+S-018  Extract Business Rule
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "Users must verify their email before they can make a purchase."
+Context / State
+proj_abc123. Ecommerce project.
+Expected Output
+Extracted fact: { category: "Business Rule", fact: "Email verification required before purchase", confidence: 0.96 }. Business Rule node created. AFFECTS relationship to User module and Purchase module.
+Headroom Check
+Business rules are high-importance. Verify: importance_score >= 0.85. Injected into prompts when active_module is Authentication or Purchase.
+
+S-019  Extract Engineering Standard
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "All API endpoints must follow REST conventions and return standard HTTP status codes."
+Context / State
+proj_abc123.
+Expected Output
+Extracted fact: { category: "Engineering Standard", fact: "REST conventions with standard HTTP status codes for all API endpoints", confidence: 0.95 }. Standard node created. AFFECTS all API module nodes.
+Headroom Check
+Standards always injected regardless of intent. Headroom sees this in every prompt.
+
+S-020  Extract Constraint
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "We cannot use any paid third-party services. Everything must be open source."
+Context / State
+proj_abc123.
+Expected Output
+Extracted fact: { category: "Constraint", fact: "No paid third-party services allowed; open-source only", confidence: 0.97 }. Constraint node created with AFFECTS relationship to Project. High importance: 0.9.
+Headroom Check
+Constraints always injected. Verify: Headroom context always includes this constraint regardless of prompt topic.
+
+S-021  Extract Developer Preference
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "I prefer functional components over class components in React."
+Context / State
+proj_abc123.
+Expected Output
+Extracted fact: { category: "Developer Preference", fact: "Functional components preferred over class components in React", scope: "project", confidence: 0.95 }. Preference node created.
+Headroom Check
+Preferences injected when active file is a React component. Verify: Headroom sees preference in context when editing .tsx files.
+
+S-022  Discard casual content mixed with engineering content
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+Developer: "Good morning! By the way, we use Redis for caching session data."
+Context / State
+proj_abc123.
+Expected Output
+Pre-filter passes segment (engineering keyword density high enough). Extraction engine extracts only: { category: "Technology Stack", fact: "Redis for session caching", confidence: 0.95 }. Greeting phrase "Good morning!" produces no fact.
+Headroom Check
+Verify: only the Redis fact appears in subsequent retrieval. No "good morning" artifact in graph.
+Note: Mixed-content handling: engineering content must be extracted even from mixed turns.
+
+S-023  Reject malformed structured output and retry
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+Developer: "Authentication is handled by Clerk with social OAuth providers."
+Context / State
+proj_abc123. Extraction model returns malformed JSON on first call: missing "category" field.
+Expected Output
+Validation rejects first response. Retry triggered with corrected prompt. Second call returns valid: { category: "Technology Stack", fact: "Clerk for authentication with social OAuth", confidence: 0.96 }. Retry log: { attempt: 1, error: "missing_field_category", attempt: 2, result: "valid" }.
+Headroom Check
+Verify: only one fact stored despite two extraction calls. No duplicate in graph.
+Note: Retry and validation requirement per Section 4.2, C1.2.
+
+S-024  Deduplicate incoming fact against existing knowledge
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+Developer (later session): "We are using Next.js for the frontend."
+Context / State
+proj_abc123 graph already has: { category: "Technology Stack", fact: "Next.js 14", node_id: "n_001" }.
+Expected Output
+Deduplication check: incoming "Next.js" matches existing node n_001 with similarity 0.94 > threshold 0.85. New node NOT created. Existing node freshness updated: { last_mentioned: "<iso>", frequency: frequency+1 }. Dedup log: { action: "merge_into_existing", node_id: "n_001" }.
+Headroom Check
+Graph count unchanged. Verify: no duplicate Technology nodes for Next.js. Headroom context returns single fact.
+
+S-025  Assign metadata to extracted fact
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "We decided to use Zustand for global state management."
+Context / State
+proj_abc123.
+Expected Output
+Fact extracted with full metadata: { fact_id: "fact_xyz", category: "Technology Stack", fact: "Zustand for global state management", confidence: 0.96, importance_score: 0.78, extraction_timestamp: "<iso>", source_conv_id: "conv_005", source_msg_id: "msg_012", author: "Hassan" }. All metadata fields populated.
+Headroom Check
+importance_score used by ranking engine. Verify: higher importance = earlier position in Headroom-compressed context.
+
+S-026  Extract multiple facts from single message
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+Developer: "We use Next.js for frontend, Express.js for our admin backend, PostgreSQL as our primary database, Redis for caching, and S3 for file storage."
+Context / State
+proj_abc123.
+Expected Output
+Five separate facts extracted: Next.js (Technology Stack), Express.js admin backend (Architecture), PostgreSQL primary database (Technology Stack), Redis caching (Technology Stack), S3 file storage (Technology Stack). Five nodes created in Neo4j. Log: { facts_extracted: 5, from_single_message: true }.
+Headroom Check
+All five facts available for injection. Verify: Headroom receives combined context block without duplication.
+
+S-027  Extract Decision with reason and alternative
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+Developer: "We chose Clerk over Auth.js because Clerk handles social OAuth out of the box and we did not want to manage sessions manually."
+Context / State
+proj_abc123.
+Expected Output
+Decision record created: { decision: "Use Clerk for authentication", reason: "Handles social OAuth out of the box, no manual session management", alternatives_considered: ["Auth.js"], status: "Accepted", date: "<iso>" }. Auth.js node created with REJECTED relationship. Clerk node created with DECIDED_ON relationship.
+Headroom Check
+Decision memories are high-importance. Verify: both the decision and the rejected alternative appear in reasoning-layer answers.
+Note: Decision Memory model test per Section 4.2, C1.6.
+
+S-028  Extract Constraint from indirect statement
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+Developer: "We have to go live in 6 weeks, so nothing experimental."
+Context / State
+proj_abc123.
+Expected Output
+Extracted facts: [{ category: "Constraint", fact: "6-week go-live deadline" }, { category: "Constraint", fact: "No experimental technologies allowed" }]. Both stored. Note: deadline should be flagged with high importance (0.88) and time-sensitivity marker.
+Headroom Check
+Time-sensitive constraints injected with high priority. Verify: both constraints appear in Headroom-compressed context for all requests.
+
+S-029  Extract standard from code review comment
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+Developer: "All functions must have JSDoc comments. No function should exceed 50 lines."
+Context / State
+proj_abc123.
+Expected Output
+Two Engineering Standard facts extracted: { fact: "All functions require JSDoc comments" }, { fact: "Maximum function length: 50 lines" }. Both stored with AFFECTS relationship to all Module nodes.
+Headroom Check
+Standards always injected. Verify: Headroom always includes these two standards regardless of active file.
+
+S-030  No extraction from code-only message
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer pastes: "const getUser = async (id: string) => { return await db.users.findById(id); }"
+Context / State
+proj_abc123. Message is pure code, no natural language explanation.
+Expected Output
+Pre-filter or extraction engine produces zero facts from pure-code input with no surrounding explanation. Log: { action: "no_facts_extracted", reason: "code_only_no_engineering_declaration" }. No nodes created.
+Headroom Check
+Nothing stored. Headroom receives no new context from this message.
+
+S-031  Extract from assistant response containing confirmation
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+Assistant responds: "Understood. I will use PostgreSQL as the primary database and implement JWT refresh token rotation as you specified."
+Context / State
+proj_abc123. Role: assistant.
+Expected Output
+Extraction runs on assistant confirmation turn. Confirmed facts re-affirmed in graph (frequency +1). No new duplicate nodes. Log: { role: "assistant", confirmed_facts: ["PostgreSQL", "JWT refresh token rotation"] }.
+Headroom Check
+Frequency signal updated for confirmed facts. Ranking engine gives these higher scores. Verify: confirmed facts rank higher in Headroom context.
+
+S-032  High confidence threshold enforcement
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+Developer: "I think we might possibly consider maybe using GraphQL at some point."
+Context / State
+proj_abc123. Confidence threshold set at 0.75.
+Expected Output
+Extraction model returns: { category: "Technology Stack", fact: "GraphQL (tentative)", confidence: 0.52 }. Confidence below threshold. Fact NOT stored. Log: { action: "below_confidence_threshold", fact: "GraphQL", confidence: 0.52, threshold: 0.75 }.
+Headroom Check
+No GraphQL fact in graph. Headroom will not suggest GraphQL as part of the tech stack.
+Note: Confidence threshold prevents speculation from polluting the knowledge graph.
+
+S-033  Extract preference scoped to project vs global
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+Developer: "For this project specifically, I want to use Tailwind only. In general though, I prefer CSS Modules."
+Context / State
+proj_abc123.
+Expected Output
+Two preference facts extracted: { scope: "project", fact: "Use Tailwind CSS only", project_id: "proj_abc123" } and { scope: "global", fact: "Prefers CSS Modules in general", developer_id: "<dev>" }. Project preference takes precedence over global in ecommerce-app context.
+Headroom Check
+Project-scoped preference injected with higher priority than global. Headroom sees project preference overriding global in this workspace.
+
+S-034  Extract team size and collaboration constraint
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "There are three of us on this project: Hassan, Sameer, and Musadiq."
+Context / State
+proj_abc123.
+Expected Output
+Extracted fact: { category: "Constraint", fact: "Team size: 3 members (Hassan, Sameer, Musadiq)", confidence: 0.92 }. Author records updated for project.
+Headroom Check
+Team size context available in graph. Headroom includes this when generating PR descriptions or task breakdowns.
+
+S-035  Extract deployment target
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "We are deploying to AWS using EC2 for the backend and Vercel for the frontend."
+Context / State
+proj_abc123.
+Expected Output
+Two facts extracted: { category: "Technology Stack", fact: "AWS EC2 for backend deployment" }, { category: "Technology Stack", fact: "Vercel for frontend deployment" }. Both stored with HOSTED_ON relationships.
+Headroom Check
+Deployment targets available in context. Relevant when Headroom compresses prompts about DevOps or CI/CD.
+
+S-036  Extract database schema decision
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+Developer: "Users table will have id, email, name, created_at, verified_at fields. We are using UUID primary keys throughout."
+Context / State
+proj_abc123.
+Expected Output
+Two facts: { category: "Architecture", fact: "Users table schema: id(UUID), email, name, created_at, verified_at" }, { category: "Engineering Standard", fact: "UUID primary keys used throughout" }. Module node USER_TABLE created.
+Headroom Check
+Schema facts injected when active file is related to database or user model. Headroom compresses these efficiently.
+
+S-037  Extract security requirement
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "All sensitive routes must be protected with JWT authentication middleware."
+Context / State
+proj_abc123.
+Expected Output
+Extracted: { category: "Engineering Standard", fact: "All sensitive routes must use JWT authentication middleware", importance_score: 0.88 }. AFFECTS all Route nodes.
+Headroom Check
+Security standards are highest priority. Headroom never drops security facts below token budget threshold.
+
+S-038  Extract versioning information
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "We are pinning Node.js to version 20 LTS and npm to version 10."
+Context / State
+proj_abc123.
+Expected Output
+Facts: { category: "Engineering Standard", fact: "Node.js 20 LTS pinned" }, { fact: "npm version 10 pinned" }. Version constraints stored.
+Headroom Check
+Version pinning facts included in tech stack context block. Headroom includes in prompts about package management.
+
+S-039  Extract environment variable naming convention
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "Environment variables must be prefixed with CODEMIND_ for our custom vars and NEXT_PUBLIC_ for frontend vars."
+Context / State
+proj_abc123.
+Expected Output
+{ category: "Engineering Standard", fact: "Custom env vars: CODEMIND_ prefix; Frontend env vars: NEXT_PUBLIC_ prefix" }. Standard node with AFFECTS Project relationship.
+Headroom Check
+Convention injected when active file is .env or configuration file. Headroom includes in environment-related prompts.
+
+S-040  Extract test framework decision
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "We are using Vitest for unit tests and Playwright for E2E testing."
+Context / State
+proj_abc123.
+Expected Output
+Two Technology Stack facts: Vitest (unit testing), Playwright (E2E testing). Both stored with USED_FOR relationships.
+Headroom Check
+Test framework facts injected when developer intent is "test_generation". Headroom includes in test-related prompts.
+
+S-041  Extract API versioning strategy
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "API versioning will use URL path versioning: /api/v1/, /api/v2/ etc."
+Context / State
+proj_abc123.
+Expected Output
+{ category: "Engineering Standard", fact: "URL path versioning strategy: /api/v1/, /api/v2/", importance_score: 0.80 }.
+Headroom Check
+API standards injected when active module is API or Routes. Headroom includes in backend prompts.
+
+S-042  Extract logging framework
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "We are using Winston for logging with log levels: error, warn, info, debug."
+Context / State
+proj_abc123.
+Expected Output
+{ category: "Technology Stack", fact: "Winston logging framework with error/warn/info/debug levels" }.
+Headroom Check
+Logging facts relevant when debugging or error-handling prompts. Headroom includes selectively based on intent.
+
+S-043  Extract ORM decision
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "We chose Prisma as our ORM instead of TypeORM because of better TypeScript support."
+Context / State
+proj_abc123.
+Expected Output
+Decision record: { decision: "Use Prisma ORM", reason: "Better TypeScript support", alternatives: ["TypeORM"], status: "Accepted" }. TypeORM stored as REJECTED alternative.
+Headroom Check
+ORM decision injected when active file is database schema or service file. Headroom includes Prisma context.
+
+S-044  Extract monorepo structure decision
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+Developer: "We are using a Turborepo monorepo with apps/web, apps/admin, and packages/shared."
+Context / State
+proj_abc123.
+Expected Output
+Architecture fact: { fact: "Turborepo monorepo: apps/web, apps/admin, packages/shared" }. Three Module nodes created: WEB, ADMIN, SHARED. PART_OF relationships to Project.
+Headroom Check
+Monorepo structure injected when active file path indicates which app is open. Headroom uses active_module signal.
+
+S-045  Extract state management pattern
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "Server state is managed with TanStack Query. Client state with Zustand. No Redux."
+Context / State
+proj_abc123.
+Expected Output
+Three facts: { fact: "TanStack Query for server state" }, { fact: "Zustand for client state" }, { fact: "Redux explicitly rejected" }. Redux stored as REJECTED with reason: "not needed given Zustand + TanStack".
+Headroom Check
+State management context injected when editing React components. Headroom includes relevant pattern.
+
+S-046  Extract rate limiting policy
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "Public API endpoints are rate limited to 100 requests per minute per IP."
+Context / State
+proj_abc123.
+Expected Output
+{ category: "Engineering Standard", fact: "Public API rate limit: 100 req/min per IP", importance_score: 0.82 }. AFFECTS API Route nodes.
+Headroom Check
+Rate limiting standards injected with API-related prompts. Headroom includes when developer works on route files.
+
+S-047  Extract from long architectural discussion (200+ tokens)
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+Developer writes a 250-token message describing the full authentication flow: Clerk SDK on frontend, webhook to backend on user creation, PostgreSQL user table sync, JWT for subsequent API calls, refresh token stored in httpOnly cookie.
+Context / State
+proj_abc123.
+Expected Output
+Multiple facts extracted from long message: [Clerk SDK frontend, Webhook backend sync, PostgreSQL user table, JWT API auth, httpOnly cookie refresh token]. All five stored. Log: { input_tokens: 250, facts_extracted: 5, extraction_model_calls: 1 }.
+Headroom Check
+Long input to extraction model. Verify: extraction model call itself does NOT go through Headroom (Headroom is only in the LLM inference path, not the extraction sub-call path).
+Note: Critical architecture test: Headroom only wraps the final Claude Code inference, not internal sub-calls.
+
+S-048  Extract CI/CD pipeline decision
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "We are using GitHub Actions for CI/CD with automatic deployment to Vercel on merge to main."
+Context / State
+proj_abc123.
+Expected Output
+{ category: "Technology Stack", fact: "GitHub Actions CI/CD, auto-deploy to Vercel on main branch merge" }. Stored with HOSTED_ON Vercel relationship.
+Headroom Check
+CI/CD facts relevant for DevOps prompts. Headroom includes when developer asks about deployment.
+
+S-049  Extract error handling strategy
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Developer: "All API errors must return { success: false, error: { code, message } } format."
+Context / State
+proj_abc123.
+Expected Output
+{ category: "Engineering Standard", fact: "API error format: { success: false, error: { code, message } }" }. AFFECTS all API endpoints.
+Headroom Check
+Error format standard injected when developer writes error handlers. Headroom includes in API-related prompts.
+
+S-050  Extraction accuracy measurement via harness
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+(Part 3 Evaluation Harness) Run extraction accuracy benchmark on 50-scenario evaluation dataset.
+Context / State
+Evaluation dataset: 50 engineering conversations each paired with ground-truth facts. Harness calls extraction engine on each.
+Expected Output
+Harness reports: { precision: >=0.85, recall: >=0.80, per_category_breakdown: { Technology_Stack: {...}, Architecture: {...}, Business_Rule: {...}, Engineering_Standard: {...}, Constraint: {...}, Developer_Preference: {...} } }. Report written to benchmark/extraction_accuracy.json.
+Headroom Check
+Headroom not in evaluation path. Verify: benchmark scores extracted from harness, not from inference prompts.
+Note: Phase 1 acceptance criterion AC-10 (extraction accuracy measured and reported).
+
+
+
+D.  Group C: Knowledge Graph and Data Model
+Scenarios S-051 through S-075 — 25 scenarios
+S-051  Create Technology node in Neo4j
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Extracted fact: { category: "Technology Stack", fact: "Next.js 14" }
+Context / State
+proj_abc123. Neo4j is running. Repository API is active.
+Expected Output
+Node created: (:Technology { name: "Next.js 14", project_id: "proj_abc123", fact_id: "fact_001", created_at: "<iso>", importance: 0.78 }). USES relationship from (:Project { id: "proj_abc123" }) to this node. Graph query confirms node exists.
+Headroom Check
+Node queryable for retrieval. Verify: vector embedding of "Next.js 14" stored in pgvector alongside this node reference.
+
+S-052  Create USES relationship between Technology nodes
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Extracted fact: "Prisma ORM is used as the database access layer for PostgreSQL."
+Context / State
+proj_abc123. Both Prisma and PostgreSQL nodes already exist in graph.
+Expected Output
+Relationship created: (:Technology { name: "Prisma" })-[:USES]->(:Technology { name: "PostgreSQL" }). No duplicate nodes. Relationship has property { since: "<iso>" }.
+Headroom Check
+Relationship traversal used in graph-expansion step of hybrid retrieval. Headroom receives richer context when both Prisma and PostgreSQL are relevant.
+
+S-053  Create DEPENDS_ON relationship between modules
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Extracted architecture: "The Checkout module depends on the Authentication module and the Products module."
+Context / State
+proj_abc123. Auth and Products Module nodes exist.
+Expected Output
+Three DEPENDS_ON relationships created: CHECKOUT->AUTH, CHECKOUT->PRODUCTS. Module nodes created if not existing. Traversal query: "What does Checkout depend on?" returns [Authentication, Products].
+Headroom Check
+Dependency graph used for impact analysis. Headroom context includes dependencies when active_module is Checkout.
+
+S-054  Create DECIDED_ON relationship for decision
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Decision extracted: { decision: "Use Clerk", reason: "Social OAuth built-in", date: "2026-01-10" }
+Context / State
+proj_abc123.
+Expected Output
+Decision node created: (:Decision { title: "Use Clerk", reason: "Social OAuth built-in", date: "2026-01-10", status: "Accepted" }). DECIDED_ON relationship from Project to Decision. Clerk Technology node also linked.
+Headroom Check
+Decision node queryable for long-term reasoning. Headroom receives decision context when auth-related prompts are assembled.
+
+S-055  Create REJECTED relationship for discarded alternative
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Decision extracted with alternative: { decision: "Clerk chosen", alternatives: ["Auth.js", "NextAuth"] }
+Context / State
+proj_abc123.
+Expected Output
+Two REJECTED relationships created: Decision->(:Alternative { name: "Auth.js" }) and Decision->(:Alternative { name: "NextAuth" }). Both alternatives queryable. Rejected alternatives never re-proposed in context without their history.
+Headroom Check
+Rejected alternatives included in reasoning answers. Headroom may include "alternatives considered" section in planning prompts.
+
+S-056  Create SUPERSEDES relationship on technology migration
+Stage: Conflict   |   Difficulty: Intermediate
+Input Prompt
+Developer: "We are migrating from MongoDB to PostgreSQL."
+Context / State
+proj_abc123. MongoDB Technology node exists from Week 2. Current date: Week 6.
+Expected Output
+SUPERSEDES relationship: new PostgreSQL node -[:SUPERSEDES]-> old MongoDB node. MongoDB node status set to "Superseded". PostgreSQL node status: "Active". Event node created: { type: "Migration", from: "MongoDB", to: "PostgreSQL", date: "<iso>" }.
+Headroom Check
+Migration event stored as dated event. Reasoning layer can answer: "When did we migrate from MongoDB?" Headroom retrieves PostgreSQL as current database.
+Note: Dated event model per Section 4.2, C1.6.
+
+S-057  Impact analysis traversal: authentication change
+Stage: Reasoning   |   Difficulty: Intermediate
+Input Prompt
+Developer asks: "If we change the authentication provider, which modules will be affected?"
+Context / State
+proj_abc123. Graph has DEPENDS_ON relationships: Checkout->Auth, UserProfile->Auth, OrderHistory->Auth.
+Expected Output
+Graph traversal from Authentication node following incoming DEPENDS_ON edges. Result: [Checkout, UserProfile, OrderHistory]. Answer: "Changing authentication will affect: Checkout, UserProfile, and OrderHistory modules." Citations: three DEPENDS_ON relationship records.
+Headroom Check
+Impact analysis answer assembled. Headroom compresses the answer context before delivery. Verify: answer includes source graph citations.
+
+S-058  Query graph for all modules in project
+Stage: Reasoning   |   Difficulty: Basic
+Input Prompt
+Developer asks: "What modules have we defined so far for this project?"
+Context / State
+proj_abc123. Graph has 7 Module nodes: Auth, Products, Checkout, Orders, Users, Payments, Admin.
+Expected Output
+Graph traversal: match all Module nodes with project_id = proj_abc123. Result: list of 7 modules with their descriptions and creation dates. Ordered by creation date.
+Headroom Check
+Module list injected when developer is planning new modules. Headroom includes in architectural prompts.
+
+S-059  Query all rejected alternatives
+Stage: Reasoning   |   Difficulty: Basic
+Input Prompt
+Developer asks: "What technologies did we evaluate but decide against?"
+Context / State
+proj_abc123. Graph has REJECTED relationships for: Auth.js, NextAuth, TypeORM, Redux, MongoDB.
+Expected Output
+Query: match all nodes with incoming REJECTED relationships. Result: [Auth.js (auth), NextAuth (auth), TypeORM (ORM), Redux (state), MongoDB (database)] each with the reason for rejection. Formatted as a list with reasons.
+Headroom Check
+Rejected alternatives context available for reasoning. Headroom includes when developer proposes a potentially already-rejected technology.
+
+S-060  Query all decisions made in last 30 days
+Stage: Reasoning   |   Difficulty: Intermediate
+Input Prompt
+Developer asks: "What architectural decisions did we make in the past month?"
+Context / State
+proj_abc123. Decision nodes have date properties. Current date: 2026-09-07.
+Expected Output
+Query: match Decision nodes where date >= "2026-08-07" AND project_id = proj_abc123. Result: list of decisions with dates, reasons, and decision-makers. Ordered by date descending.
+Headroom Check
+Recent decisions high in recency signal. Headroom includes recent decisions prominently in context.
+
+S-061  Referential integrity between Neo4j and PostgreSQL
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+Fact extracted and stored in both PostgreSQL (relational) and Neo4j (graph).
+Context / State
+proj_abc123. PostgreSQL has facts table. Neo4j has corresponding node.
+Expected Output
+Fact stored in PostgreSQL with fact_id. Neo4j node has same fact_id as property. Cross-reference query confirms both records exist with matching IDs. Integrity check: { postgres_fact_id: "fact_001", neo4j_node_fact_id: "fact_001", match: true }.
+Headroom Check
+Graph traversal and vector search both reference the same underlying fact. Headroom receives consistent information.
+Note: Cross-store integrity requirement per Section 4.2, C1.8.
+
+S-062  Store dated event: technology added on specific day
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Fact extracted with timestamp: "Clerk added on day 1 of the project."
+Context / State
+proj_abc123. Project start date: 2026-07-01.
+Expected Output
+Event node created: (:Event { type: "TechnologyAdded", entity: "Clerk", date: "2026-07-01", project_id: "proj_abc123" }). Event queryable: "When was Clerk added?" returns "2026-07-01".
+Headroom Check
+Dated events available for timeline queries. Headroom includes timeline context for historical reasoning prompts.
+
+S-063  Store dated event: alternative rejected on specific day
+Stage: Extraction   |   Difficulty: Basic
+Input Prompt
+Decision record with date: "Auth.js evaluated and rejected on day 10."
+Context / State
+proj_abc123. Day 10: 2026-07-10.
+Expected Output
+Event node: (:Event { type: "AlternativeRejected", entity: "Auth.js", date: "2026-07-10" }). REJECTED relationship between Decision and Auth.js node has date property "2026-07-10".
+Headroom Check
+Rejection event with date queryable. Headroom context can include "Auth.js was rejected on July 10th" when relevant.
+
+S-064  Store dated event: technology migrated
+Stage: Conflict   |   Difficulty: Intermediate
+Input Prompt
+Developer confirms migration: MongoDB -> PostgreSQL on day 24.
+Context / State
+proj_abc123. Day 24: 2026-07-24.
+Expected Output
+Event node: (:Event { type: "Migration", from: "MongoDB", to: "PostgreSQL", date: "2026-07-24" }). Full event chain queryable: TechnologyAdded(MongoDB, day1), Migration(MongoDB->PostgreSQL, day24).
+Headroom Check
+Migration event causes PostgreSQL to rank higher than MongoDB in retrieval (recency + active status). Headroom receives PostgreSQL as current DB.
+
+S-065  Query causal chain: why did we migrate database?
+Stage: Reasoning   |   Difficulty: Intermediate
+Input Prompt
+Developer asks: "Why did we switch from MongoDB to PostgreSQL?"
+Context / State
+proj_abc123. Conflict record from migration exists with confirmed reason.
+Expected Output
+Reasoning layer traverses: MongoDB node (Superseded) -> Migration Event -> PostgreSQL node (Active) -> Decision record (reason). Answer: "MongoDB was replaced by PostgreSQL on 2026-07-24. Reason: [extracted reason from conflict confirmation]. Source: conflict_record_id: conf_db_001."
+Headroom Check
+Causal chain reasoning answer assembled. Headroom compresses this for delivery.
+Note: Causal reasoning test per Section 4.2, C1.7.
+
+S-066  Graph traversal: show full project timeline
+Stage: Reasoning   |   Difficulty: Intermediate
+Input Prompt
+Developer asks: "Show me the full evolution timeline of this project."
+Context / State
+proj_abc123. Graph has 8 Event nodes across 6 weeks.
+Expected Output
+Query all Event nodes for project ordered by date. Result: chronological list of [TechnologyAdded, TechnologyAdded, AlternativeRejected, DecisionMade, Migration, EndpointAdded, ...]. Formatted as timeline with dates.
+Headroom Check
+Full timeline context assembled. Headroom compresses to fit token budget while preserving most recent and most important events.
+
+S-067  Graph constraint enforcement: no orphan facts
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+Attempt to write a fact without a project_id.
+Context / State
+Bug scenario: extraction pipeline fails to attach project_id to a fact.
+Expected Output
+Repository API rejects write: { error: "CONSTRAINT_VIOLATION", field: "project_id", message: "All facts must have a project_id" }. No node created in Neo4j. Error logged: { level: "error", action: "rejected_orphan_fact", detail: "missing project_id" }.
+Headroom Check
+Orphan fact never reaches retrieval. Headroom never receives unscoped facts.
+Note: Isolation integrity: every fact must be project-scoped.
+
+S-068  Neo4j index performance: retrieve by project_id
+Stage: Retrieval   |   Difficulty: Basic
+Input Prompt
+Retrieval request: { project_id: "proj_abc123", query: "authentication" }
+Context / State
+proj_abc123 has 150 nodes. Neo4j has index on project_id property.
+Expected Output
+Query uses project_id index. Result returned in < 50ms. Query plan shows IndexSeek, not NodeScan. Performance log: { query_type: "project_scoped", duration_ms: "<50", nodes_scanned: "<20" }.
+Headroom Check
+Fast retrieval means Headroom receives context quickly. No added latency to the Headroom call.
+
+S-069  Schema migration: add new fact category
+Stage: Extraction   |   Difficulty: Intermediate
+Input Prompt
+(Schema update) New category "Security Requirement" added to extraction schema.
+Context / State
+Existing proj_abc123 facts in PostgreSQL use old schema. Migration v003 adds new enum value.
+Expected Output
+Migration v003 runs: ALTER TABLE facts ADD COLUMN IF NOT EXISTS security_level VARCHAR(20). Existing rows unaffected. New extractions can use "Security Requirement" category. Rollback path documented.
+Headroom Check
+After migration, security facts injected into context. Headroom treats security facts with high priority.
+Note: Versioned migration requirement per Section 4.2, C1.8.
+
+S-070  Embedding generation for new fact
+Stage: Retrieval   |   Difficulty: Basic
+Input Prompt
+New fact stored: { fact: "Prisma ORM for database access", category: "Technology Stack" }
+Context / State
+proj_abc123. BGE-M3 embedding service active.
+Expected Output
+BGE-M3 generates 768-dimensional embedding for "Prisma ORM for database access". Embedding stored in pgvector column of facts table with matching fact_id. Log: { fact_id: "fact_025", embedding_dim: 768, duration_ms: "<val>" }.
+Headroom Check
+Vector embedding enables semantic retrieval. Headroom benefits from semantically relevant context retrieved via pgvector.
+
+S-071  Vector similarity search returns relevant facts
+Stage: Retrieval   |   Difficulty: Intermediate
+Input Prompt
+Retrieval query: "What database are we using?" from a developer request.
+Context / State
+proj_abc123. pgvector index has embeddings for: PostgreSQL, Prisma ORM, Redis, Next.js, Clerk.
+Expected Output
+Query embedded by BGE-M3. Top-k=5 similarity search returns: PostgreSQL (0.93), Prisma ORM (0.89), Redis (0.71). Neo4j graph expansion pulls in: PostgreSQL DEPENDS_ON Prisma relationship. Final candidate set: [PostgreSQL, Prisma, PostgreSQL-Prisma relationship]. Returned to ranking engine.
+Headroom Check
+Database facts prominently ranked. Headroom receives database context in next assembled prompt.
+
+S-072  Graph expansion enriches vector search results
+Stage: Retrieval   |   Difficulty: Intermediate
+Input Prompt
+Retrieval query: "authentication middleware" with open file: src/middleware/auth.ts
+Context / State
+proj_abc123. Vector search returns: Clerk node, JWT node. Graph expansion: Clerk USES JWT, Auth module DEPENDS_ON Clerk.
+Expected Output
+Vector candidates: [Clerk(0.91), JWT(0.87)]. Graph expansion adds: [Auth module, JWT-Clerk relationship, Auth-Checkout dependency]. Fused candidate set: 5 items. Passed to ranking engine.
+Headroom Check
+Richer candidate set after graph expansion. Headroom receives comprehensive auth context without developer having to specify.
+Note: Hybrid retrieval test per Section 4.2, C1.3.
+
+S-073  Candidate fusion: merge vector and graph results
+Stage: Retrieval   |   Difficulty: Intermediate
+Input Prompt
+Vector search returns 5 candidates. Graph expansion adds 3 more (2 overlap with vector results).
+Context / State
+proj_abc123. Fusion function merges with deduplication.
+Expected Output
+Final fused set: 6 unique candidates (5 + 3 - 2 duplicates). Duplicate resolution: keep highest-scoring version. Dedup log: { vector_count: 5, graph_added: 3, duplicates_removed: 2, final_count: 6 }.
+Headroom Check
+Clean, deduplicated candidate set passed to ranking engine. Headroom receives non-redundant context.
+
+S-074  Redis cache hit for repeated retrieval request
+Stage: Retrieval   |   Difficulty: Basic
+Input Prompt
+Same retrieval request submitted twice within 5 minutes: { project_id: "proj_abc123", query: "tech stack", intent: "code_generation" }
+Context / State
+Redis cache active. TTL: 300 seconds. Cache key derived from request signature.
+Expected Output
+First request: cache MISS, full retrieval executed, result cached. Second request: cache HIT, result returned from Redis without Neo4j or pgvector query. Log: { request_1: "cache_miss", request_2: "cache_hit", latency_1_ms: "<val>", latency_2_ms: "<5" }.
+Headroom Check
+Cache hit dramatically reduces time to Headroom call. Verify: Headroom receives same context on cache hit as on cache miss.
+Note: Redis caching requirement per Section 6.2, C3.3.
+
+S-075  Cache invalidation on new fact stored
+Stage: Retrieval   |   Difficulty: Intermediate
+Input Prompt
+Developer adds new fact. Then same retrieval query is executed.
+Context / State
+proj_abc123. Redis cache had a cached result for "tech stack" query. New fact: "We added Stripe for payments."
+Expected Output
+New fact storage triggers cache invalidation for affected keys. Cache key for "tech stack" invalidated. Next retrieval request is cache MISS. New fact included in fresh result. Log: { invalidated_keys: ["proj_abc123:tech_stack:*"], trigger: "new_fact_write" }.
+Headroom Check
+After cache invalidation, Headroom receives updated context including Stripe. No stale context served.
+
+
+
+E.  Group D: Ranking and Context Injection
+Scenarios S-076 through S-095 — 20 scenarios
+S-076  Recency signal boosts recently mentioned fact
+Stage: Retrieval   |   Difficulty: Intermediate
+Input Prompt
+Retrieval request for "database" topic. Two candidates: PostgreSQL (stored 6 weeks ago, recency=0.2) and PostgreSQL schema update (stored 2 hours ago, recency=0.98).
+Context / State
+proj_abc123. Seven-signal ranking active.
+Expected Output
+Schema update ranked higher due to recency signal despite lower base importance. Ranking scores: schema_update_total=0.82, original_postgres_total=0.74. Schema update appears first in ranked list.
+Headroom Check
+Most recent database fact at top of Headroom context block. Developer gets current schema context.
+Note: Seven-signal ranking test per Section 4.2, C1.4.
+
+S-077  Importance signal prioritises high-importance facts
+Stage: Retrieval   |   Difficulty: Basic
+Input Prompt
+Retrieval request. Candidates: "Prefer async/await" (importance=0.55), "No paid services allowed" (importance=0.90), "Use Tailwind" (importance=0.60).
+Context / State
+proj_abc123. All three have similar recency.
+Expected Output
+Ranking order: "No paid services" (0.90 importance) > "Use Tailwind" (0.60) > "Prefer async/await" (0.55). Constraint ranked highest because constraints have higher importance baseline.
+Headroom Check
+Constraints always near top of Headroom context. Token budget drops lowest-ranked first.
+
+S-078  Frequency signal boosts repeatedly-retrieved fact
+Stage: Retrieval   |   Difficulty: Intermediate
+Input Prompt
+Retrieval request. Candidate: JWT fact (retrieved 15 times in past week, frequency=0.95) vs. a newer Redis fact (retrieved 2 times, frequency=0.12).
+Context / State
+proj_abc123. Both have similar importance and recency.
+Expected Output
+JWT fact ranked higher due to frequency signal: JWT_total=0.79 vs Redis_total=0.61. Frequency reflects that JWT context is frequently needed, indicating ongoing relevance.
+Headroom Check
+High-frequency facts reliably appear in Headroom context on every request.
+
+S-079  Current-file signal boosts module-relevant facts
+Stage: Retrieval   |   Difficulty: Intermediate
+Input Prompt
+Developer has src/services/auth.ts open. Retrieval request fired.
+Context / State
+proj_abc123. active_file signal: "auth.ts". Auth module facts: Clerk, JWT, OAuth. Products module facts: Stripe, SKU schema.
+Expected Output
+Current-file signal boosts Auth-module facts. Ranking: Clerk (file_signal=0.9) > JWT (0.88) > OAuth (0.85) >> Stripe (0.15) > SKU (0.12). Auth facts surface, Products facts suppressed.
+Headroom Check
+Headroom context is file-relevant. Developer receives auth context when editing auth.ts without specifying it.
+
+S-080  Intent signal adjusts ranking weights
+Stage: Retrieval   |   Difficulty: Intermediate
+Input Prompt
+Intent classified as "test_generation". Retrieval request fired.
+Context / State
+proj_abc123. Test framework: Vitest. Auth tests: described in Engineering Standards.
+Expected Output
+Intent signal boosts: test framework facts (Vitest, Playwright), testing standards, mocking preferences. Suppresses: deployment facts, UI preferences. Ranking recalibrated for "test_generation" intent profile.
+Headroom Check
+Test-specific context assembled. Headroom compresses test framework and standards block.
+
+S-081  Top-k selection limits injected memories
+Stage: Injection   |   Difficulty: Basic
+Input Prompt
+Ranking engine returns 23 ranked candidates. Token budget allows top 8.
+Context / State
+proj_abc123. k=8 selection threshold. Budget: 1200 tokens.
+Expected Output
+Top 8 candidates selected. Candidates 9-23 excluded. Selection log: { total_candidates: 23, top_k: 8, excluded: 15, budget_tokens: 1200, used_tokens: "<1200" }. Lowest-ranked memories dropped first.
+Headroom Check
+Headroom receives context with exactly top-8 memories. Further compresses if still over LLM context limit.
+Note: Top-k selection per Section 4.2, C1.4.
+
+S-082  Weight profile tuning via evaluation harness
+Stage: Retrieval   |   Difficulty: Intermediate
+Input Prompt
+(Part 3 Harness) Adjust recency weight from 0.20 to 0.30 in ranking weight profile.
+Context / State
+Benchmark dataset of 50 retrieval queries with ground-truth relevant facts.
+Expected Output
+Weight profile updated. Harness re-runs benchmark. New precision@k reported. If precision improves: weight change accepted. If not: rollback. Log: { weight_recency_old: 0.20, weight_recency_new: 0.30, precision_old: 0.82, precision_new: "<new>" }.
+Headroom Check
+Weight tuning affects which facts Headroom receives. Verify: benchmark measures quality of Headroom-received context.
+Note: Evaluation harness tuning capability per Section 4.2, C1.4.
+
+S-083  Project-module signal boosts active-module facts
+Stage: Retrieval   |   Difficulty: Intermediate
+Input Prompt
+Developer is working in the Checkout module (inferred from file paths). Retrieval request.
+Context / State
+proj_abc123. Checkout depends on Auth, Products, Payments. Active module: Checkout.
+Expected Output
+Project-module signal boosts: Checkout-related facts, Auth facts (dependency), Products facts (dependency), Payments facts (dependency). Facts from unrelated modules (Admin, Reporting) suppressed.
+Headroom Check
+Checkout-relevant context assembled. Headroom receives dependency-aware context for Checkout module.
+
+S-084  Ranking with all seven signals combined
+Stage: Retrieval   |   Difficulty: Intermediate
+Input Prompt
+Retrieval request: intent=code_generation, active_file=src/checkout/CheckoutForm.tsx, active_module=Checkout.
+Context / State
+proj_abc123. 45 candidate facts from hybrid retrieval. All seven signals computed.
+Expected Output
+Final ranking formula applied: score = w1*recency + w2*importance + w3*frequency + w4*current_task + w5*current_file + w6*intent + w7*project_module. Top-k=10 selected. Top 3 expected: [Checkout flow fact, Auth dependency fact, Stripe payment fact].
+Headroom Check
+Ten most relevant facts assembled into injection block. Headroom compresses to fit LLM context window.
+Note: Seven-signal combined ranking test per Section 4.2, C1.4.
+
+S-085  Ranking signal normalisation
+Stage: Retrieval   |   Difficulty: Intermediate
+Input Prompt
+Ranking engine receives candidates with raw signals in different scales (recency: 0-1, frequency: 0-100, importance: 0-1).
+Context / State
+proj_abc123. Normalisation step required before weighted sum.
+Expected Output
+All signals normalised to [0,1] range before weighting. Frequency: value/max_frequency. Normalised values log: { recency: 0.85, importance: 0.90, frequency: 0.72, current_task: 0.88, current_file: 0.95, intent: 0.80, project_module: 0.91 }.
+Headroom Check
+Consistent scoring ensures stable Headroom context across sessions with different frequency distributions.
+
+S-086  Decision memories always ranked above trivial preferences
+Stage: Retrieval   |   Difficulty: Basic
+Input Prompt
+Retrieval request for architectural question. Candidates include a Decision record and a Preference record.
+Context / State
+proj_abc123. Decision: "Use Clerk over Auth.js" (importance=0.88). Preference: "I prefer arrow functions" (importance=0.45).
+Expected Output
+Decision ranked higher: total_score=0.84 vs preference=0.52. Decision appears in top-k; preference may be excluded if k is small. Architectural decisions consistently outrank stylistic preferences.
+Headroom Check
+Decision context always in Headroom output. Stylistic preferences only if budget permits.
+
+S-087  Stale fact penalty in recency signal
+Stage: Retrieval   |   Difficulty: Intermediate
+Input Prompt
+Retrieval request. Candidate: "We use MongoDB" (stored 6 months ago, status=Superseded). New candidate: "We use PostgreSQL" (stored 2 weeks ago, status=Active).
+Context / State
+proj_abc123. MongoDB was superseded by PostgreSQL.
+Expected Output
+Recency signal: MongoDB=0.05 (6 months old, superseded). PostgreSQL=0.92 (2 weeks, active). PostgreSQL ranked far above MongoDB. MongoDB excluded from top-k. Headroom never shows MongoDB as current database.
+Headroom Check
+Superseded facts suppressed by low recency and status. Headroom always reflects current project state.
+Note: Critical: stale/superseded facts must not appear as current truth in context.
+
+S-088  Retrieval precision@k benchmark
+Stage: Retrieval   |   Difficulty: Intermediate
+Input Prompt
+(Part 3 Harness) Run retrieval relevance benchmark on 50 fixed queries.
+Context / State
+Ground-truth relevant facts known for each query. k=5.
+Expected Output
+Harness reports precision@5 >= 0.80 and MRR >= 0.75. Per-intent breakdown: code_generation, test_generation, debugging, refactoring each reported separately. Results written to benchmark/retrieval_relevance.json.
+Headroom Check
+Benchmark measures quality of context before Headroom. Separate Headroom compression quality test is in Headroom group.
+Note: Phase 1 acceptance criterion AC-10.
+
+S-089  Retrieval returns empty result for project with no facts
+Stage: Retrieval   |   Difficulty: Basic
+Input Prompt
+Retrieval request for brand new project: proj_new_001, no facts stored yet.
+Context / State
+proj_new_001. Knowledge graph is empty.
+Expected Output
+Retrieval returns: { project_id: "proj_new_001", memories: [], count: 0 }. No error. Injection layer receives empty memory list and assembles prompt without context block. Log: { action: "retrieval_empty", project_id: "proj_new_001" }.
+Headroom Check
+Empty memory list. Headroom still called (always called on every request). Receives base prompt with no injection block.
+
+S-090  Retrieval isolation enforcement
+Stage: Isolation   |   Difficulty: Intermediate
+Input Prompt
+Retrieval request: { project_id: "proj_abc123", query: "auth" }. Neo4j query must not scan proj_xyz789 nodes.
+Context / State
+Both projects have Auth-related facts. project_id filter required.
+Expected Output
+Neo4j query uses WHERE n.project_id = "proj_abc123" filter. pgvector query uses project_id metadata filter. No facts from proj_xyz789 appear in result. Isolation check log: { cross_project_leak: false }.
+Headroom Check
+Headroom receives only proj_abc123 context. Zero leakage into other project workspaces.
+Note: Zero cross-contamination requirement per acceptance criterion AC-3.
+
+S-091  MRR (mean reciprocal rank) benchmark
+Stage: Retrieval   |   Difficulty: Intermediate
+Input Prompt
+(Part 3 Harness) Compute MRR across 50 retrieval queries.
+Context / State
+For each query, the position of the first relevant fact in the ranked list is recorded.
+Expected Output
+MRR = mean(1/rank_of_first_relevant_fact) across all queries. Expected MRR >= 0.75. Log: { queries: 50, mrr: ">=0.75", benchmark_file: "retrieval_relevance.json" }.
+Headroom Check
+Higher MRR means most-relevant fact is higher in Headroom context. Validates ranking quality indirectly.
+
+S-092  Injection respects 1200-token budget
+Stage: Injection   |   Difficulty: Intermediate
+Input Prompt
+Ranked memory list: 12 memories totalling 1850 tokens. Budget: 1200 tokens.
+Context / State
+proj_abc123. Injection layer active.
+Expected Output
+Injection layer drops lowest-ranked memories until total <= 1200 tokens. Memories 10, 11, 12 dropped. Final injection block: 9 memories, 1178 tokens. Log: { original_count: 12, original_tokens: 1850, final_count: 9, final_tokens: 1178, budget: 1200, budget_respected: true }.
+Headroom Check
+Injection block sent to Headroom at 1178 tokens. Headroom may compress further if LLM window is smaller. Verify: Headroom receives content within budget.
+
+S-093  Injection block format: structured sections
+Stage: Injection   |   Difficulty: Basic
+Input Prompt
+Ranked memories assembled. Injection block format required.
+Context / State
+proj_abc123. 6 memories: 2 tech stack, 1 architecture, 1 constraint, 1 decision, 1 standard.
+Expected Output
+Injection block formatted with sections: [PROJECT KNOWLEDGE GRAPH - TECH STACK: Next.js 14, PostgreSQL] [ARCHITECTURE: Clean Architecture pattern] [CONSTRAINTS: No paid services] [DECISIONS: Clerk for auth (Auth.js rejected)] [STANDARDS: REST conventions]. Headroom receives this structured block.
+Headroom Check
+Structured injection block passed to Headroom. Headroom identifies section headers for intelligent compression (drops lowest-priority sections first).
+
+S-094  Zero-action context injection guarantee
+Stage: Injection   |   Difficulty: Basic
+Input Prompt
+Developer types: "Implement the user registration endpoint." No previous context attached by developer.
+Context / State
+proj_abc123. PPB has: framework=Next.js, database=PostgreSQL, auth=Clerk, constraint=no-paid-services.
+Expected Output
+Injection layer fires automatically. Relevant memories retrieved and ranked. Injection block assembled with auth, database, constraint, and framework facts. Prompt sent: [INJECTED CONTEXT: ...] + "Implement the user registration endpoint." Developer never had to specify any context.
+Headroom Check
+Assembled prompt (injected context + developer request) passed to Headroom. Headroom compresses and forwards to Claude Code. Verify: Claude Code response correctly uses Clerk and PostgreSQL without developer specifying them.
+Note: Zero-action guarantee per Section 5.2, C2.3.
+
+S-095  Injection ordering: constraints before preferences
+Stage: Injection   |   Difficulty: Basic
+Input Prompt
+Injection block contains: constraints, preferences, tech stack, standards.
+Context / State
+proj_abc123.
+Expected Output
+Injection block ordering: 1) Constraints (highest priority), 2) Standards, 3) Decisions, 4) Tech Stack, 5) Architecture, 6) Preferences (lowest priority). When budget forces cuts, preferences cut first, constraints never cut.
+Headroom Check
+Headroom receives constraints first. If Headroom compresses, preferences compressed/removed before constraints.
+
+
+
+F.  Group E: Conflict Detection and Versioning
+Scenarios S-096 through S-115 — 20 scenarios
+S-096  Detect database technology conflict
+Stage: Conflict   |   Difficulty: Intermediate
+Input Prompt
+Developer: "We are switching to MongoDB." Existing fact: PostgreSQL (Active).
+Context / State
+proj_abc123. Conflict detection rule: database_provider change triggers conflict.
+Expected Output
+Conflict detected. IF-3 emitted: { existing: "PostgreSQL (Active)", incoming: "MongoDB", category: "Technology Stack", sub_category: "Database", severity: "Migration", question: "The project currently uses PostgreSQL. Are you migrating to MongoDB?" }. Pipeline paused pending confirmation.
+Headroom Check
+Pipeline paused at conflict. Headroom not called until conflict resolved. Verify: no new database fact written until developer confirms.
+Note: Conflict detection per acceptance criterion AC-5.
+
+S-097  Detect authentication provider conflict
+Stage: Conflict   |   Difficulty: Intermediate
+Input Prompt
+Developer: "Let us replace Clerk with NextAuth." Existing fact: Clerk (Active) for authentication.
+Context / State
+proj_abc123. Conflict rule: auth_provider change triggers conflict.
+Expected Output
+Conflict detected: { existing: "Clerk", incoming: "NextAuth", category: "Technology Stack", sub_category: "Auth", severity: "Migration" }. Confirmation requested: "Clerk is currently the authentication provider. Are you migrating to NextAuth?" IF-3 emitted to Part 2.
+Headroom Check
+Headroom blocked until resolution. Verify: Clerk still returned in context during confirmation wait.
+
+S-098  Detect deployment target conflict
+Stage: Conflict   |   Difficulty: Intermediate
+Input Prompt
+Developer: "We are moving from Vercel to AWS for the frontend." Existing: Vercel (Active).
+Context / State
+proj_abc123.
+Expected Output
+Conflict detected: { existing: "Vercel frontend deployment", incoming: "AWS frontend deployment", severity: "Migration" }. Confirmation dialog triggers.
+Headroom Check
+No new deployment fact written. Headroom still shows Vercel until confirmation.
+
+S-099  No conflict for additive fact: new endpoint added
+Stage: Conflict   |   Difficulty: Basic
+Input Prompt
+Developer: "We added a /api/webhooks/stripe endpoint for Stripe webhooks."
+Context / State
+proj_abc123. Existing: /api/v1/users and /api/v1/products endpoints documented.
+Expected Output
+Conflict detection rules: new endpoint addition is NOT a conflict. No IF-3 emitted. Fact stored immediately: { category: "Architecture", fact: "Stripe webhook endpoint: /api/webhooks/stripe" }. Log: { action: "no_conflict", reason: "additive_endpoint" }.
+Headroom Check
+New endpoint fact immediately available. Headroom receives updated endpoint list on next request.
+Note: Additive facts must not trigger false conflicts.
+
+S-100  No conflict for preference change
+Stage: Conflict   |   Difficulty: Basic
+Input Prompt
+Developer: "Actually I want to use named exports instead of default exports now."
+Context / State
+proj_abc123. Existing preference: "Prefer default exports" (importance=0.45).
+Expected Output
+Conflict rules: preference change is NOT a conflict (preferences are lower-stakes than technology decisions). Old preference archived silently. New preference stored. No confirmation required. Log: { action: "preference_updated_silently", old: "default exports", new: "named exports" }.
+Headroom Check
+New preference immediately in context. Headroom receives updated preference.
+
+S-101  Classify migration vs misread severity
+Stage: Conflict   |   Difficulty: Intermediate
+Input Prompt
+Two scenarios: (A) Developer: "We are migrating to MongoDB." (B) Developer: "Did I say MongoDB earlier? I meant PostgreSQL."
+Context / State
+proj_abc123. Existing: PostgreSQL (Active).
+Expected Output
+Scenario A: severity=Migration (intentional change). Scenario B: severity=Misread (correction, low severity). Different confirmation messages generated. A: "You are migrating from PostgreSQL to MongoDB. Confirm?" B: "You appear to be correcting an earlier statement. Keep PostgreSQL?" Log: { conflict_id: "A", severity: "Migration" }, { conflict_id: "B", severity: "Misread" }.
+Headroom Check
+Misread corrections resolved faster (lower confirmation friction). Both await developer response before Headroom proceeds.
+Note: Severity classification per Section 4.2, C1.5.
+
+S-102  Developer confirms migration: archive old, activate new
+Stage: Conflict   |   Difficulty: Intermediate
+Input Prompt
+Developer confirms: "Yes, we are migrating to MongoDB." (IF-4 response: "accept_migration")
+Context / State
+proj_abc123. Conflict conf_db_001: PostgreSQL -> MongoDB.
+Expected Output
+PostgreSQL node status set to Superseded. MongoDB node created with status Active. SUPERSEDES relationship: MongoDB -> PostgreSQL. Event node created: { type: "Migration", from: "PostgreSQL", to: "MongoDB", date: "<iso>", confirmed_by: "Hassan" }. Both nodes remain queryable. Headroom now returns MongoDB as current database.
+Headroom Check
+Retrieval immediately returns MongoDB as active database. PostgreSQL appears only in historical queries. Headroom context updated.
+Note: Memory versioning per acceptance criterion AC-5.
+
+S-103  Developer rejects migration: keep existing
+Stage: Conflict   |   Difficulty: Basic
+Input Prompt
+Developer responds: "No, keep PostgreSQL." (IF-4 response: "keep_existing")
+Context / State
+proj_abc123. Conflict conf_db_001: PostgreSQL -> MongoDB.
+Expected Output
+PostgreSQL remains Active. MongoDB incoming fact discarded. Conflict record closed: { resolution: "keep_existing", discarded: "MongoDB" }. No SUPERSEDES relationship created. Log: { conflict_id: "conf_db_001", resolution: "keep_existing" }.
+Headroom Check
+No change to Headroom context. PostgreSQL still returned as current database.
+
+S-104  Developer discards incoming fact
+Stage: Conflict   |   Difficulty: Basic
+Input Prompt
+Developer responds: "Discard that last message about MongoDB, it was a mistake." (IF-4: "discard_incoming")
+Context / State
+proj_abc123. Conflict pending.
+Expected Output
+Incoming MongoDB fact discarded entirely. No new node created. No versioning change to PostgreSQL. Conflict closed: { resolution: "discard_incoming" }. No Event node created.
+Headroom Check
+No change. Headroom context unchanged from before the erroneous message.
+
+S-105  Superseded memory remains queryable in history
+Stage: Conflict   |   Difficulty: Intermediate
+Input Prompt
+After migration confirmed (MongoDB -> PostgreSQL), developer asks: "What database did we originally use?"
+Context / State
+proj_abc123. MongoDB node: status=Superseded. PostgreSQL: status=Active.
+Expected Output
+Reasoning layer query: match Superseded database nodes for project. Result: "The project originally used MongoDB (added day 1, superseded on 2026-07-24 when migrated to PostgreSQL)." Both Active and Superseded nodes queryable.
+Headroom Check
+Headroom returns only Active facts in current-context injection. Superseded facts available only through explicit historical reasoning queries.
+Note: Historical queryability requirement per Section 4.2, C1.5.
+
+S-106  Conflict for framework change
+Stage: Conflict   |   Difficulty: Intermediate
+Input Prompt
+Developer: "We are dropping Next.js and using Remix instead."
+Context / State
+proj_abc123. Next.js 14 is Active, marked as primary framework (importance=0.95).
+Expected Output
+Conflict detected: { severity: "Migration", sub_category: "Frontend Framework", existing: "Next.js 14", incoming: "Remix" }. High-severity conflict. Confirmation: "Next.js 14 is the current frontend framework. Are you migrating to Remix? This will affect the entire frontend architecture." IF-3 emitted.
+Headroom Check
+High importance of framework means this conflict blocks Headroom until resolved. No inference proceeds on frontend questions.
+
+S-107  No conflict: updating a technology version
+Stage: Conflict   |   Difficulty: Basic
+Input Prompt
+Developer: "We upgraded to Next.js 15."
+Context / State
+proj_abc123. Existing: Next.js 14 (Active).
+Expected Output
+Conflict detection rules: version upgrade of same technology is NOT a conflict. Existing node updated: { name: "Next.js 14" } -> { name: "Next.js 15", updated_at: "<iso>", previous_version: "14" }. Event node: { type: "VersionUpgrade", entity: "Next.js", from: "14", to: "15" }. No confirmation required.
+Headroom Check
+Headroom immediately reflects Next.js 15 in context.
+
+S-108  Conflict dialog renders correctly (Part 3)
+Stage: Conflict   |   Difficulty: Basic
+Input Prompt
+IF-3 received by Part 3 dialog: existing=PostgreSQL, incoming=MongoDB, severity=Migration.
+Context / State
+Part 3 UI layer. Dialog component active.
+Expected Output
+Dialog renders: Title: "Conflict Detected", Body: "Existing: PostgreSQL (Active since 2026-07-01)", "Incoming: MongoDB", "Severity: Migration", Options: [Confirm Migration] [Keep PostgreSQL] [Discard Incoming]. Developer selection triggers IF-4 response via Part 2 transport.
+Headroom Check
+Dialog UI blocks any new Headroom calls until developer responds. Pipeline correctly paused.
+Note: Conflict dialog per Section 6.2, C3.2.
+
+S-109  Multiple simultaneous conflicts queued
+Stage: Conflict   |   Difficulty: Intermediate
+Input Prompt
+Developer types a long message changing database, auth provider, and deployment in one turn.
+Context / State
+proj_abc123. Three conflicts detected simultaneously.
+Expected Output
+Three conflicts queued: [conf_db_002, conf_auth_001, conf_deploy_001]. Presented to developer one at a time in order of severity: Migration first. Developer resolves each sequentially. Log: { queued_conflicts: 3, resolution_order: "by_severity" }.
+Headroom Check
+Headroom blocked for all three affected context areas until all resolved.
+
+S-110  Conflict regression: genuine migration test case
+Stage: Conflict   |   Difficulty: Intermediate
+Input Prompt
+(Part 3 Harness) Run named conflict test case: "database_genuine_migration".
+Context / State
+Evaluation dataset has this scenario pre-labeled as severity=Migration.
+Expected Output
+Harness input: conversation with genuine migration intent. Expected output: conflict detected, severity=Migration. Actual output matches. Test PASS. Log: { test: "database_genuine_migration", result: "PASS", severity_predicted: "Migration", severity_expected: "Migration" }.
+Headroom Check
+Regression test validates conflict detection quality. Headroom not involved in harness run.
+Note: Conflict regression suite per Section 6.2, C3.1.
+
+S-111  Conflict regression: misread test case
+Stage: Conflict   |   Difficulty: Intermediate
+Input Prompt
+(Part 3 Harness) Run named test case: "auth_correction_misread".
+Context / State
+Developer said NextAuth but meant Clerk. Expected: severity=Misread.
+Expected Output
+Harness: conflict detected, severity=Misread. IF-3 question: "You appear to be correcting an earlier statement." Test PASS.
+Headroom Check
+Not in harness path.
+
+S-112  Conflict regression: non-conflicting addition test case
+Stage: Conflict   |   Difficulty: Basic
+Input Prompt
+(Part 3 Harness) Run test case: "additive_endpoint_no_conflict".
+Context / State
+New endpoint added. Expected: no conflict triggered.
+Expected Output
+No IF-3 emitted. Fact stored directly. Harness: conflict_triggered=false. Test PASS.
+Headroom Check
+Not in harness path.
+
+S-113  Conflict: ORM change detection
+Stage: Conflict   |   Difficulty: Intermediate
+Input Prompt
+Developer: "We are switching from Prisma to Drizzle ORM."
+Context / State
+proj_abc123. Prisma: Active ORM.
+Expected Output
+Conflict detected: ORM change. Severity: Migration. Confirmation requested. IF-3: { existing: "Prisma", incoming: "Drizzle", sub_category: "ORM", severity: "Migration" }.
+Headroom Check
+Headroom blocked. Prisma still in context until confirmed.
+
+S-114  Memory versioning: full history preserved
+Stage: Conflict   |   Difficulty: Intermediate
+Input Prompt
+Query all historical database technologies used in ecommerce-app.
+Context / State
+proj_abc123. History: MongoDB(day1, Superseded) -> PostgreSQL(day24, Active).
+Expected Output
+Versioning query returns complete history: [{ tech: "MongoDB", status: "Superseded", added: "day1", superseded: "day24" }, { tech: "PostgreSQL", status: "Active", added: "day24" }]. Full chain queryable.
+Headroom Check
+Active status determines what Headroom injects. Historical status available for reasoning-layer queries only.
+
+S-115  Conflict timeout: developer does not respond
+Stage: Conflict   |   Difficulty: Intermediate
+Input Prompt
+Conflict confirmed request (IF-3) sent. Developer does not respond for 10 minutes.
+Context / State
+proj_abc123. Timeout policy: 10 minutes without response = auto-discard incoming.
+Expected Output
+After timeout: incoming fact discarded. Existing fact unchanged. Conflict closed: { resolution: "timeout_discard", timeout_seconds: 600 }. Log: { conflict_id: "conf_xyz", resolution: "timeout" }. Developer notified: "Conflict timed out. Existing fact retained."
+Headroom Check
+After timeout resolution, Headroom resumes with existing fact in context.
+Note: Timeout policy prevents pipeline from blocking indefinitely.
+
+
+
+G.  Group F: Long-Term Reasoning Layer
+Scenarios S-116 through S-135 — 20 scenarios
+S-116  "Why did we choose X?" reasoning query
+Stage: Reasoning   |   Difficulty: Basic
+Input Prompt
+Developer asks: "Why did we choose Clerk for authentication?"
+Context / State
+proj_abc123. Decision record: { decision: "Clerk", reason: "Social OAuth built-in, no manual session management", alternatives: ["Auth.js", "NextAuth"], date: "2026-07-10" }.
+Expected Output
+Reasoning layer: query Decision nodes where entity=Clerk. Answer: "Clerk was chosen on 2026-07-10 for authentication because it provides social OAuth out of the box and eliminates manual session management. Alternatives evaluated: Auth.js and NextAuth (both rejected). Source: decision_record_id: dec_001."
+Headroom Check
+Reasoning answer assembled and compressed by Headroom before delivery. Citations preserved.
+Note: Reasoning per acceptance criterion AC-9.
+
+S-117  "What database are we using?" query
+Stage: Reasoning   |   Difficulty: Basic
+Input Prompt
+Developer asks: "What database are we currently using?"
+Context / State
+proj_abc123. PostgreSQL: Active. MongoDB: Superseded.
+Expected Output
+Reasoning layer: query Technology nodes where sub_category=Database AND status=Active. Answer: "The project currently uses PostgreSQL as the primary database. Note: MongoDB was used previously (superseded on 2026-07-24). Source: tech_node_id: n_pg_01."
+Headroom Check
+Current-state answer delivered via Headroom. Superseded MongoDB mentioned only as historical note.
+
+S-118  "Who suggested X?" query
+Stage: Reasoning   |   Difficulty: Intermediate
+Input Prompt
+Developer asks: "Who suggested using JWT and when was it first mentioned?"
+Context / State
+proj_abc123. Fact metadata: { fact: "JWT refresh tokens", author: "Hassan", extraction_timestamp: "2026-07-05", source_msg_id: "msg_022" }.
+Expected Output
+Answer: "JWT refresh token rotation was first mentioned by Hassan on 2026-07-05 (message msg_022). It is currently active in the project knowledge graph. Source: fact_id: fact_jwt_001."
+Headroom Check
+Attribution information included. Headroom compresses without losing author attribution.
+
+S-119  "What was evaluated but rejected?" query
+Stage: Reasoning   |   Difficulty: Basic
+Input Prompt
+Developer asks: "What authentication libraries did we evaluate but not select?"
+Context / State
+proj_abc123. REJECTED relationships: Auth.js, NextAuth.
+Expected Output
+Reasoning traversal: match all nodes with REJECTED relationship in auth sub_category. Answer: "Two authentication libraries were evaluated and rejected: (1) Auth.js - rejected because Clerk handles social OAuth out of the box and requires less manual session management. (2) NextAuth - rejected for the same reason. Source: decision_record_id: dec_001."
+Headroom Check
+Rejected alternatives context delivered. Headroom includes this when developer proposes new auth solution.
+
+S-120  "When did we migrate from X to Y?" query
+Stage: Reasoning   |   Difficulty: Intermediate
+Input Prompt
+Developer asks: "When exactly did we migrate from MongoDB to PostgreSQL?"
+Context / State
+proj_abc123. Event node: { type: "Migration", from: "MongoDB", to: "PostgreSQL", date: "2026-07-24", confirmed_by: "Hassan" }.
+Expected Output
+Answer: "The project migrated from MongoDB to PostgreSQL on 2026-07-24. The migration was confirmed by Hassan. Source: event_id: evt_migration_001."
+Headroom Check
+Migration timeline answer assembled. Headroom compresses for delivery.
+
+S-121  "Show all deployment decisions" query
+Stage: Reasoning   |   Difficulty: Intermediate
+Input Prompt
+Developer asks: "Show me all deployment decisions made since the project started."
+Context / State
+proj_abc123. Decision and Event nodes with deployment category: [EC2 backend on day 1, Vercel frontend on day 1, AWS CloudFront added on day 15].
+Expected Output
+Reasoning query: match Decision nodes and Event nodes where category=Deployment, ordered by date. Answer: chronological list of 3 decisions with dates, reasons, and decision-makers.
+Headroom Check
+Deployment decision list assembled. Headroom compresses to fit context window.
+
+S-122  Query composition: graph traversal + vector lookup
+Stage: Reasoning   |   Difficulty: Intermediate
+Input Prompt
+Developer asks: "What are all the security-related decisions in this project?"
+Context / State
+proj_abc123. Some security facts in Decision nodes (Clerk, JWT). Others in Standards nodes (route protection, rate limiting).
+Expected Output
+Reasoning layer: decompose into (1) vector search for semantic "security" matches, (2) graph traversal for nodes with security category. Merge results. Answer includes: Clerk auth, JWT middleware, route protection standard, rate limiting standard, httpOnly cookie policy.
+Headroom Check
+Combined security context assembled. Headroom receives comprehensive security block.
+
+S-123  Grounded answer with citations
+Stage: Reasoning   |   Difficulty: Intermediate
+Input Prompt
+Developer asks: "What is our current authentication setup?" Requires answer with source citations.
+Context / State
+proj_abc123. Multiple auth facts across Decision and Technology nodes.
+Expected Output
+Answer: "The authentication setup is: (1) Clerk SDK on frontend for user sign-in [Source: fact_id: fact_clerk_001, 2026-07-10], (2) Clerk webhook syncs user to PostgreSQL on registration [Source: fact_id: fact_webhook_002, 2026-07-12], (3) JWT for subsequent API calls with httpOnly cookie refresh [Source: fact_id: fact_jwt_003, 2026-07-14]." All citations point to retrievable memory records.
+Headroom Check
+Grounded, cited answer assembled. Headroom compresses while preserving citation markers.
+Note: Grounded answers requirement per Section 4.2, C1.7.
+
+S-124  "What constraints do we have?" global query
+Stage: Reasoning   |   Difficulty: Basic
+Input Prompt
+Developer asks: "What are all the constraints on this project?"
+Context / State
+proj_abc123. Constraint nodes: no-paid-services, 6-week-deadline, no-experimental-tech.
+Expected Output
+Query all Constraint nodes for project. Answer: "Project constraints: (1) No paid third-party services (open-source only) [Source: fact_003], (2) 6-week go-live deadline [Source: fact_008], (3) No experimental technologies [Source: fact_008]. All constraints are currently active."
+Headroom Check
+All constraints injected in every prompt context. Headroom never drops constraints below budget threshold.
+
+S-125  "What standards apply to API development?" query
+Stage: Reasoning   |   Difficulty: Basic
+Input Prompt
+Developer asks: "What engineering standards apply when I write API endpoints?"
+Context / State
+proj_abc123. Standards with AFFECTS API modules: REST conventions, HTTP status codes, error format, rate limiting, JWT middleware.
+Expected Output
+Reasoning traversal: match Standard nodes where AFFECTS API module. Answer: list of 5 standards with descriptions. Formatted for developer consumption.
+Headroom Check
+API standards block assembled. Headroom includes in all API-related prompts.
+
+S-126  Reasoning answer cites multiple memory records
+Stage: Reasoning   |   Difficulty: Intermediate
+Input Prompt
+Developer asks: "Give me a complete summary of how the auth system was designed."
+Context / State
+proj_abc123. Multiple auth-related records: 1 Decision, 2 Technology, 1 Standard, 2 Event nodes.
+Expected Output
+Reasoning synthesizes 6 records into coherent narrative. Each claim in the answer cites a specific memory record. Answer length: 150-200 words. Source list at end: [dec_001, fact_clerk, fact_jwt, std_auth, evt_clerk_added, evt_jwt_added].
+Headroom Check
+Multi-record synthesis compressed by Headroom. Citations preserved in compressed form.
+
+S-127  Historical query: what the project looked like on a specific date
+Stage: Reasoning   |   Difficulty: Intermediate
+Input Prompt
+Developer asks: "What was the tech stack on July 15th?"
+Context / State
+proj_abc123. Events: MongoDB added day1(July1), Next.js added day1, PostgreSQL added July24(after July15).
+Expected Output
+Reasoning: filter all TechnologyAdded events with date <= July15 AND not Superseded before July15. Result: MongoDB (active on July15), Next.js (active on July15). PostgreSQL NOT included (added July24). Answer: "On July 15th, the tech stack was: MongoDB (database), Next.js 14 (frontend), Clerk (auth)."
+Headroom Check
+Point-in-time state reconstruction. Headroom receives historical state for time-specific queries.
+Note: Event-driven memory enables point-in-time reconstruction per research contribution.
+
+S-128  "Show all decisions Hassan made" query
+Stage: Reasoning   |   Difficulty: Intermediate
+Input Prompt
+Developer asks: "What decisions did Hassan make in this project?"
+Context / State
+proj_abc123. Fact metadata includes author field. Decision records include confirmed_by field.
+Expected Output
+Query: match Decision nodes where author="Hassan" OR confirmed_by="Hassan". Result: list of decisions attributed to Hassan with dates. Answer: "Hassan was involved in: (1) Clerk selection (confirmed 2026-07-10), (2) PostgreSQL migration confirmation (2026-07-24), (3) JWT strategy (proposed 2026-07-05)."
+Headroom Check
+Author-attributed decisions assembled. Headroom includes for team accountability context.
+
+S-129  Reasoning handles unknown query gracefully
+Stage: Reasoning   |   Difficulty: Basic
+Input Prompt
+Developer asks: "What is our monetisation strategy?"
+Context / State
+proj_abc123. No monetisation-related facts in knowledge graph.
+Expected Output
+Reasoning layer finds no matching nodes. Answer: "No monetisation strategy has been discussed or recorded in the Project Brain for this project. Would you like to define one?" No hallucinated answer. Source: none.
+Headroom Check
+Empty reasoning result. Headroom receives prompt with no monetisation context. Claude Code responds from general knowledge.
+Note: Grounded answers must never hallucinate. Empty graph = honest "not found" response.
+
+S-130  "Why was X rejected?" query for any alternative
+Stage: Reasoning   |   Difficulty: Basic
+Input Prompt
+Developer asks: "Why was TypeORM rejected in favour of Prisma?"
+Context / State
+proj_abc123. Decision record has: { decision: "Prisma", reason: "Better TypeScript support", alternatives: ["TypeORM"], rejection_reason_for_TypeORM: "Weaker TypeScript inference" }.
+Expected Output
+Answer: "TypeORM was evaluated and rejected in favour of Prisma on [date]. Reason for rejection: weaker TypeScript type inference compared to Prisma. Source: dec_orm_001."
+Headroom Check
+Rejection rationale delivered. Headroom includes when developer proposes TypeORM in future.
+
+S-131  "What modules have been defined?" query
+Stage: Reasoning   |   Difficulty: Basic
+Input Prompt
+Developer asks: "What modules make up this project?"
+Context / State
+proj_abc123. Module nodes: Auth, Products, Checkout, Orders, Users, Payments, Admin (7 total).
+Expected Output
+Query all Module nodes for project. Answer: "7 modules defined: Authentication, Products, Checkout, Orders, Users, Payments, Admin. Each with their dependencies listed." Dependencies shown per module.
+Headroom Check
+Module list injected for architectural context. Headroom includes in planning and architecture prompts.
+
+S-132  Reasoning answer length control
+Stage: Reasoning   |   Difficulty: Basic
+Input Prompt
+Developer asks a simple: "What framework are we using?"
+Context / State
+proj_abc123. Next.js 14 is the framework.
+Expected Output
+Reasoning returns concise answer (not a multi-paragraph essay): "The frontend framework is Next.js 14. Source: fact_nextjs_001." Answer is direct and appropriately brief.
+Headroom Check
+Short answer delivered efficiently. Headroom compression minimal for short answers.
+Note: Reasoning layer must calibrate answer length to question complexity.
+
+S-133  Long-term reasoning handles project with 500+ facts
+Stage: Reasoning   |   Difficulty: Intermediate
+Input Prompt
+Developer asks: "What is our current tech stack?" Project has been active for 3 months with 500+ stored facts.
+Context / State
+proj_abc123. 500+ nodes in Neo4j. Query must be performant.
+Expected Output
+Query uses indexed project_id + category filters. Result returned in < 200ms. Only Technology Stack facts returned (not all 500 facts). Answer concise despite large graph.
+Headroom Check
+Performance: Headroom receives compact tech stack context, not 500 facts. Top-k selection critical at scale.
+Note: Performance at scale requirement.
+
+S-134  Reasoning via IF-8 and IF-9 interface contract
+Stage: Reasoning   |   Difficulty: Intermediate
+Input Prompt
+Part 2 sends IF-8: { question: "Why did we choose Clerk?", project_id: "proj_abc123", scope: "project" }
+Context / State
+IF-8 interface contract (Section 7.1).
+Expected Output
+Part 1 receives IF-8. Executes reasoning query. Returns IF-9: { answer: "Clerk chosen on 2026-07-10 for social OAuth...", citations: ["dec_001"], project_id: "proj_abc123" }. IF-9 payload matches contract specification.
+Headroom Check
+IF-9 answer delivered to Part 2 which then passes to developer. Headroom compresses if answer is long.
+Note: Interface contract IF-8 and IF-9 per Section 7.1.
+
+S-135  Memory browser displays all facts by category (Part 3)
+Stage: Reasoning   |   Difficulty: Basic
+Input Prompt
+Developer opens Memory Browser in CodeMind IDE.
+Context / State
+proj_abc123. 45 stored facts across 6 categories.
+Expected Output
+Memory browser renders 6 collapsible sections: Technology Stack (12), Architecture (8), Business Rules (5), Engineering Standards (7), Constraints (3), Developer Preferences (10). Each fact shows text, date, importance, status (Active/Superseded). Facts sorted by date within category.
+Headroom Check
+Memory browser reads directly from PostgreSQL/Neo4j, not through Headroom path. Verify: browser does not interfere with Headroom inference pipeline.
+Note: Memory browser per Section 6.2, C3.2.
+
+
+
+H.  Group G: Headroom Integration Verification
+Scenarios S-136 through S-165 — 30 scenarios
+S-136  Headroom called on every request, not just large prompts
+Stage: Headroom   |   Difficulty: Basic
+Input Prompt
+Developer sends a very short request: "Fix typo." Assembled prompt with context: 280 tokens.
+Context / State
+proj_abc123. Injection block: 180 tokens. Developer request: 3 tokens. Total: ~283 tokens.
+Expected Output
+Headroom called regardless of small prompt size. Log: { headroom_called: true, input_tokens: 283, action: "forwarded_unchanged", reason: "small_prompt_below_compression_threshold" }. Prompt forwarded to Claude Code unchanged. Verify: Headroom is in the call stack even for tiny prompts.
+Headroom Check
+CRITICAL: Headroom MUST be called on every single request per Section 2.4 and acceptance criterion AC-8. This test verifies that.
+Note: Acceptance criterion AC-8: Headroom called on every request without exception.
+
+S-137  Headroom forwards small prompt unchanged
+Stage: Headroom   |   Difficulty: Basic
+Input Prompt
+Assembled prompt: 350 tokens. Headroom small-prompt threshold: 500 tokens.
+Context / State
+proj_abc123.
+Expected Output
+Headroom classifies: "small_prompt". Action: forward unchanged. Output prompt = input prompt. Headroom log: { input_tokens: 350, output_tokens: 350, compression_ratio: 1.0, action: "forwarded_unchanged" }.
+Headroom Check
+No compression applied. Latency overhead minimal. Claude Code receives exact prompt.
+
+S-138  Headroom applies light compression to medium prompt
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+Assembled prompt: 2400 tokens. Medium threshold: 500-3000 tokens.
+Context / State
+proj_abc123. Injection block includes verbose reasoning and repeated context.
+Expected Output
+Headroom classifies: "medium_prompt". Action: light compression. Removes repeated phrases, condenses verbose sections. Output: 1800 tokens. Compression ratio: 0.75. Log: { input_tokens: 2400, output_tokens: 1800, action: "light_compression", ratio: 0.75 }.
+Headroom Check
+Light compression preserves all factual content. Claude Code receives complete context, more efficiently packed.
+
+S-139  Headroom applies aggressive compression to large prompt
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+Assembled prompt: 8500 tokens. Large prompt threshold: > 3000 tokens.
+Context / State
+proj_abc123. Injection block is very large (many memories retrieved).
+Expected Output
+Headroom classifies: "large_prompt". Action: aggressive compression. Summarises verbose sections, removes low-priority memory details. Output: 4200 tokens. Ratio: 0.49. Log: { input_tokens: 8500, output_tokens: 4200, action: "aggressive_compression", ratio: 0.49 }. Critical: essential engineering facts (tech stack, constraints, decisions) preserved. Stylistic preferences may be abbreviated.
+Headroom Check
+Aggressive compression must preserve: constraints (never removed), decisions, tech stack. Preferences and verbose explanations compressed most aggressively.
+Note: Headroom compression levels per document Section 2.1.
+
+S-140  Headroom preserves constraints under aggressive compression
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+Large prompt (9000 tokens) with constraint: "No paid services allowed" buried in injection block.
+Context / State
+proj_abc123. Constraint importance: 0.90.
+Expected Output
+After aggressive compression to ~4000 tokens: constraint "No paid services allowed" still present in output. No compression removes or abbreviates constraints. Verify by checking output for constraint text.
+Headroom Check
+CRITICAL: constraints must survive compression at any level. Claude Code must always know project constraints.
+Note: Critical preservation test: constraints never removed by Headroom.
+
+S-141  Headroom preserves tech stack facts under compression
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+Large prompt (7000 tokens). Tech stack: Next.js, PostgreSQL, Clerk, Redis buried in injection block.
+Context / State
+proj_abc123.
+Expected Output
+After aggressive compression: all four tech stack facts present in output. Stack facts may be condensed (e.g., "Tech: Next.js 14, PostgreSQL, Clerk, Redis" rather than verbose descriptions) but not removed.
+Headroom Check
+Tech stack always preserved. Verbosity reduced, core information retained.
+
+S-142  Headroom token count verification after compression
+Stage: Headroom   |   Difficulty: Basic
+Input Prompt
+Assembled prompt: 6000 tokens. Claude Code context window: 5000 tokens.
+Context / State
+proj_abc123.
+Expected Output
+Headroom detects output must fit within 5000 token window. Compresses until output_tokens <= 5000. Final output: 4800 tokens. Verify: output_tokens < context_window_limit. Log: { target_window: 5000, output_tokens: 4800, within_limit: true }.
+Headroom Check
+Headroom ensures Claude Code never receives a prompt exceeding its context window.
+
+S-143  Headroom call site is the last stage before Claude Code
+Stage: Headroom   |   Difficulty: Basic
+Input Prompt
+Trace the full pipeline for: developer request -> extraction -> retrieval -> ranking -> injection -> Headroom -> Claude Code.
+Context / State
+proj_abc123. Full pipeline trace.
+Expected Output
+Pipeline trace log: { 1: "chat_capture(Part2)", 2: "extraction(Part1)", 3: "graph_write(Part1)", 4: "retrieval_request(Part2)", 5: "ranking(Part1)", 6: "injection_formatting(Part2)", 7: "headroom_compression(existing)", 8: "claude_code_inference" }. Headroom is step 7. Nothing runs between Headroom and Claude Code inference.
+Headroom Check
+Headroom is positioned correctly as the final stage. Verify: no processing occurs between Headroom output and Claude Code input.
+Note: Pipeline order per Section 2.1 acceptance criterion AC-8.
+
+S-144  Headroom logs every call with input and output token counts
+Stage: Headroom   |   Difficulty: Basic
+Input Prompt
+Any developer request triggering Claude Code inference.
+Context / State
+proj_abc123. Part 3 observability active.
+Expected Output
+Every Headroom call produces a log entry: { timestamp: "<iso>", project_id: "proj_abc123", input_tokens: <n>, output_tokens: <m>, action: "<forwarded_unchanged|light|aggressive>", compression_ratio: <ratio>, latency_ms: <val> }. Log queryable by Part 3 metrics dashboard.
+Headroom Check
+Self-test: Headroom logs its own invocation on every call.
+Note: Observability requirement per Section 6.2, C3.3.
+
+S-145  Headroom compression ratio tracked over time
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+(Part 3 Metrics) Compute average Headroom compression ratio over 100 requests in the past hour.
+Context / State
+proj_abc123. 100 Headroom call logs available.
+Expected Output
+Metrics: { requests: 100, avg_compression_ratio: <val>, small_prompts: <n>(forwarded), medium_prompts: <n>(light), large_prompts: <n>(aggressive), avg_latency_ms: <val> }. Dashboard updated. Alert if avg_ratio < 0.6 on large prompts (may indicate insufficient compression).
+Headroom Check
+Headroom performance metrics confirm compression is working as designed.
+
+S-146  Headroom does not alter developer request text
+Stage: Headroom   |   Difficulty: Basic
+Input Prompt
+Developer request text: "Implement the payment gateway integration using Stripe." Injection block attached before it.
+Context / State
+proj_abc123.
+Expected Output
+Headroom may compress the injection block but MUST NOT alter the developer's literal request text. Output: [COMPRESSED CONTEXT BLOCK] + "Implement the payment gateway integration using Stripe." Developer request preserved verbatim.
+Headroom Check
+CRITICAL: Headroom only compresses the injected context prefix, never the developer's own request.
+Note: Data integrity: developer intent must be preserved exactly.
+
+S-147  Headroom compression does not introduce factual errors
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+Injection block states: "Database: PostgreSQL 15, hosted on AWS RDS, connection pooled via PgBouncer."
+Context / State
+proj_abc123. After aggressive compression.
+Expected Output
+Compressed version must not change: database name, version, hosting provider, or connection pooler. Acceptable compression: "DB: PostgreSQL 15, AWS RDS, PgBouncer." Unacceptable: changing PostgreSQL to MySQL, or omitting RDS.
+Headroom Check
+Headroom compression must be lossless for factual content. Verbosity reduced, facts preserved exactly.
+Note: Critical: compression must not introduce factual errors.
+
+S-148  Headroom latency does not exceed 500ms
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+Headroom receives a 4000-token prompt requiring aggressive compression.
+Context / State
+proj_abc123. Performance SLA: Headroom must complete within 500ms.
+Expected Output
+Headroom completes compression in < 500ms. Log: { action: "aggressive_compression", latency_ms: "<500" }. If latency > 500ms, alert triggered. Total pipeline latency: extraction (async) + retrieval + ranking + injection + Headroom must not noticeably delay developer experience.
+Headroom Check
+Performance SLA for Headroom itself.
+
+S-149  Headroom called after conflict resolution
+Stage: Headroom   |   Difficulty: Basic
+Input Prompt
+Developer confirms migration (MongoDB -> PostgreSQL). Next request fires immediately after.
+Context / State
+proj_abc123. Conflict resolved. New PostgreSQL fact now Active.
+Expected Output
+After conflict resolution, normal pipeline resumes. Retrieval returns PostgreSQL. Injection assembles prompt with PostgreSQL. Headroom called with updated context. Headroom log: { call_after_conflict_resolution: true, database_in_context: "PostgreSQL" }.
+Headroom Check
+Post-conflict Headroom call uses updated facts. No stale MongoDB context appears.
+
+S-150  Headroom position verified in tool dispatch trace
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+Trace tool call sequence for a developer code generation request.
+Context / State
+proj_abc123. Tool dispatch system active.
+Expected Output
+Tool dispatch log: { 1: "project_brain(retrieve)", 2: "project_brain(rank)", 3: "project_brain(inject)", 4: "headroom(compress)" } followed by LLM inference. Project brain tool is steps 1-3. Headroom is step 4 (outside the project brain tool, in Part 2 downstream adapter). Sequence order verified.
+Headroom Check
+Headroom is called by Part 2 downstream adapter (P2-T08), outside the project brain tool boundary.
+Note: Architecture verification: Headroom is not inside the project brain tool, it is called after tool return.
+
+S-151  Headroom called even when injection block is empty
+Stage: Headroom   |   Difficulty: Basic
+Input Prompt
+Brand new project, no facts in PPB. Developer sends first request: "Help me set up the project structure."
+Context / State
+proj_new_002. Zero facts stored.
+Expected Output
+Retrieval returns empty. Injection block: empty. Prompt assembled: [no injection block] + "Help me set up the project structure." Headroom STILL CALLED with this minimal prompt. Log: { headroom_called: true, injection_block_empty: true, input_tokens: 12, action: "forwarded_unchanged" }.
+Headroom Check
+CRITICAL: Headroom called unconditionally, even with no injection block. Empty injection = small prompt = forwarded unchanged.
+Note: Unconditional Headroom invocation requirement.
+
+S-152  Headroom handles structured injection sections intelligently
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+Injection block has six labelled sections: [TECH STACK], [CONSTRAINTS], [DECISIONS], [STANDARDS], [ARCHITECTURE], [PREFERENCES]. Total: 5500 tokens.
+Context / State
+proj_abc123. Target: 3000 tokens.
+Expected Output
+Headroom compresses intelligently by section priority. Drops [PREFERENCES] first (lowest priority), then abbreviates [ARCHITECTURE]. Preserves [CONSTRAINTS] and [TECH STACK] fully. Output sections: [TECH STACK](full), [CONSTRAINTS](full), [DECISIONS](full), [STANDARDS](abbreviated), [ARCHITECTURE](abbreviated), [PREFERENCES](removed). Output: ~2900 tokens.
+Headroom Check
+Section-aware compression verifies Headroom understands injection block structure.
+
+S-153  Headroom compression ratio benchmark
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+(Part 3 Evaluation) Run Headroom benchmark: 20 large prompts (>3000 tokens each), verify compression quality.
+Context / State
+Benchmark prompts with known essential facts. After compression, check essential fact preservation.
+Expected Output
+Benchmark results: { prompts_tested: 20, avg_compression_ratio_large: "<0.6", essential_fact_retention: ">=95%", constraint_retention: "100%", tech_stack_retention: "100%", latency_p95_ms: "<500" }. Written to benchmark/headroom_quality.json.
+Headroom Check
+Headroom self-benchmark confirming all acceptance criteria.
+
+S-154  Headroom called via Part 2 P2-T08 downstream adapter
+Stage: Headroom   |   Difficulty: Basic
+Input Prompt
+Code trace: Part 2 Task P2-T08 "Call Headroom as final stage of every request before it reaches Claude Code."
+Context / State
+P2-T08 implementation check.
+Expected Output
+P2-T08 code calls Headroom endpoint after injection layer (P2-T07) completes. Headroom receives assembled prompt. Returns compressed prompt. P2-T08 passes compressed prompt to Claude Code. No other code path reaches Claude Code without going through P2-T08 -> Headroom.
+Headroom Check
+P2-T08 is the sole Headroom call site in the entire codebase. Verify: grep/search confirms single Headroom invocation point.
+Note: Single call site requirement per Section 2.4.
+
+S-155  Headroom reduces token cost for repeated context
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+Developer makes 10 consecutive requests in the same session. Injection block is similar for each (same tech stack, constraints).
+Context / State
+proj_abc123. Repeated context across requests.
+Expected Output
+Headroom compresses repeated context on each request independently. If Headroom has context-aware compression: recognise repeated patterns and apply stronger compression. Token cost savings measured: baseline (no Headroom) 10 * 2000 = 20000 tokens. With Headroom: 10 * 1400 = 14000 tokens. Savings: 30%.
+Headroom Check
+Token cost reduction is a key value of Headroom per research contribution.
+
+S-156  Verify Headroom does not run during extraction sub-calls
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+Memory extraction engine calls LLM for structured-output extraction.
+Context / State
+proj_abc123. Extraction is an internal sub-call, not a developer inference request.
+Expected Output
+Headroom NOT called for extraction sub-calls. Extraction LLM call goes directly to model. Headroom only wraps the final developer-facing Claude Code inference. Log: { headroom_calls_total: 1 } per developer request (not 2 despite two LLM calls).
+Headroom Check
+CRITICAL: Headroom only in the developer inference path. Internal extraction calls bypass Headroom.
+Note: Architecture boundary: Headroom is a developer-facing inference wrapper, not a general LLM proxy.
+
+S-157  Headroom with maximum-size injection block
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+Injection block at maximum allowed size (1200 tokens, after token budget enforcement). Developer request: 50 tokens. Total: 1250 tokens.
+Context / State
+proj_abc123. Budget control already applied by injection layer.
+Expected Output
+Total 1250 tokens is a small-to-medium prompt. Headroom action: light compression or forward unchanged depending on Claude Code context window. Log: { input_tokens: 1250, action: "<forward|light>", output_tokens: "<1250" }.
+Headroom Check
+Double-check: injection budget (1200 tokens) + Headroom compression work together without conflict.
+
+S-158  Headroom metrics visible in Part 3 dashboard
+Stage: Headroom   |   Difficulty: Basic
+Input Prompt
+(Part 3) Open observability dashboard. View Headroom metrics.
+Context / State
+proj_abc123. Structured logging active. Redis metrics cache.
+Expected Output
+Dashboard shows: requests_through_headroom (count), avg_input_tokens, avg_output_tokens, avg_compression_ratio, actions_breakdown (forwarded/light/aggressive percentages), p95_latency_ms. Updated in near-real-time.
+Headroom Check
+Part 3 metrics verify Headroom health. Alert rules: ratio < 0.5 on average = too aggressive; latency > 1000ms = performance issue.
+Note: Observability per Section 6.2, C3.3.
+
+S-159  Headroom called after cache hit
+Stage: Headroom   |   Difficulty: Basic
+Input Prompt
+Retrieval request is a Redis cache hit. Cached ranked memories returned instantly.
+Context / State
+proj_abc123.
+Expected Output
+Even when retrieval result is served from Redis cache, injection proceeds normally, and Headroom is still called with the assembled prompt. Cache hit does not bypass Headroom. Log: { retrieval_source: "cache", headroom_called: true }.
+Headroom Check
+Cache hits do not skip Headroom. Unconditional Headroom invocation applies regardless of retrieval path.
+
+S-160  Headroom preserves injection section ordering
+Stage: Headroom   |   Difficulty: Basic
+Input Prompt
+Injection block order: [CONSTRAINTS] first, then [TECH STACK], then [DECISIONS].
+Context / State
+proj_abc123.
+Expected Output
+After Headroom compression, section ordering is preserved. [CONSTRAINTS] still appears before [TECH STACK] in compressed output. Headroom does not reorder sections. Output structure matches input structure (with possible content reduction).
+Headroom Check
+Section order preserved. Claude Code reads constraints before tech stack as intended.
+
+S-161  Headroom handles Unicode and special characters
+Stage: Headroom   |   Difficulty: Basic
+Input Prompt
+Injection block contains: "Module: Ödeme (Turkish for Payments). Constraint: Must support UTF-8 throughout."
+Context / State
+proj_abc123. Multilingual project.
+Expected Output
+Headroom handles Unicode correctly. After compression: both the Turkish module name and the UTF-8 constraint preserved verbatim. No encoding corruption. Output contains correct Unicode characters.
+Headroom Check
+Character encoding integrity under compression.
+
+S-162  Headroom compression performance under concurrent requests
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+5 concurrent developer requests arrive within 100ms of each other.
+Context / State
+proj_abc123. Headroom must handle concurrent calls.
+Expected Output
+All 5 calls complete within 2000ms total. No deadlocks or race conditions. Each call produces independent correct output. Log shows 5 separate Headroom call entries with distinct request IDs.
+Headroom Check
+Concurrency test for Headroom.
+
+S-163  Headroom with injection block in different language
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+Injection block contains mixed English and project-specific terminology: "Authentication module (Modul kimlik doğrulama) uses Clerk."
+Context / State
+proj_abc123.
+Expected Output
+Headroom preserves technical terminology even when mixed with other language content. "Clerk" preserved. "Modul kimlik dogrulama" preserved or equivalently compressed. No technical fact omitted due to language ambiguity.
+Headroom Check
+Technical terminology preservation under multilingual content.
+
+S-164  Headroom decision memory passed to Claude Code
+Stage: Headroom   |   Difficulty: Basic
+Input Prompt
+Developer request: "Implement auth for the checkout flow." Decision memory injected: "Clerk chosen for auth because social OAuth built-in."
+Context / State
+proj_abc123.
+Expected Output
+After Headroom compression: decision memory "Clerk for auth (social OAuth)" still in compressed output. Claude Code generates Clerk-based auth implementation, not a generic JWT implementation. Verify by checking response for Clerk-specific code.
+Headroom Check
+End-to-end test: decision memory survives Headroom compression and influences Claude Code output correctly.
+Note: This is the most important end-to-end Headroom validation test.
+
+S-165  Headroom output verified before Claude Code call
+Stage: Headroom   |   Difficulty: Intermediate
+Input Prompt
+After Headroom compresses prompt, output is validated before being sent to Claude Code.
+Context / State
+proj_abc123.
+Expected Output
+Validation checks: (1) output_tokens <= context_window_limit, (2) developer request text present and unmodified, (3) no obvious compression artifacts (truncated mid-sentence essential facts), (4) all constraint facts present. If validation fails: Headroom re-compresses with lighter ratio.
+Headroom Check
+Output validation loop ensures Headroom never sends a broken prompt to Claude Code.
+
+
+
+I.  Group H: End-to-End and Demo Project Scenarios
+Scenarios S-166 through S-200 — 35 scenarios
+S-166  E2E: First day of a new project (demo project setup)
+Stage: E2E   |   Difficulty: Basic
+Input Prompt
+Developer opens new workspace: TaskFlow - a project management SaaS. Types: "This is a Next.js 14 app with TypeScript. Backend is Node.js with Express. PostgreSQL database. We are deploying to AWS. Team: 3 people."
+Context / State
+New project, empty PPB. proj_taskflow created.
+Expected Output
+Pipeline: (1) Project identified, UUID assigned. (2) Segment captured. (3) Pre-filter passes (engineering content). (4) Extraction: 5 facts (Next.js, TypeScript, Express, PostgreSQL, AWS). (5) 5 nodes written to graph. (6) Retrieval returns 5 facts. (7) Injection assembles context block. (8) Headroom called (small prompt, forwarded). (9) Claude Code responds. Memory browser shows 5 facts under Technology Stack.
+Headroom Check
+Full pipeline trace verified. Headroom called at step 8. All 5 facts visible in Headroom context on next request.
+Note: Demo project #1: TaskFlow SaaS.
+
+S-167  E2E: Week 2 - Tech decision captured and injected
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Developer asks: "What ORM should we use?" without specifying anything. Assistant suggests Prisma. Developer confirms: "Yes, use Prisma over TypeORM because of better TypeScript support."
+Context / State
+proj_taskflow. Existing PPB: 5 facts from day 1.
+Expected Output
+(1) Decision extracted: Prisma chosen, TypeORM rejected, reason captured. (2) Prisma node + DECIDED_ON + TypeORM REJECTED written to graph. (3) Later request: "Implement the user service" - retrieval pulls: PostgreSQL, Prisma, TypeScript, Express. Injection includes ORM decision. Headroom compresses medium prompt. Claude Code generates Prisma-based user service correctly.
+Headroom Check
+Decision memory survives to next session. Headroom receives Prisma context. Claude Code uses Prisma without being told again.
+Note: Demo project #1: week 2 decision capture.
+
+S-168  E2E: Conflict scenario - database migration in demo project
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Developer: "We need to switch to MySQL because our client requires it."
+Context / State
+proj_taskflow. PostgreSQL is Active. Week 4.
+Expected Output
+Conflict detected (database change). IF-3 emitted. Dialog shown. Developer confirms migration. PostgreSQL archived. MySQL activated. SUPERSEDES relationship created. Event node: { type: "Migration", from: "PostgreSQL", to: "MySQL", date: "Week4", reason: "Client requirement" }. Next request: Headroom context shows MySQL, not PostgreSQL.
+Headroom Check
+Post-migration Headroom context updated correctly. No stale PostgreSQL references.
+Note: Demo project #1: conflict and migration scenario.
+
+S-169  E2E: Historical query in demo project
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Developer asks (week 6): "Why did we switch from PostgreSQL to MySQL?"
+Context / State
+proj_taskflow. Migration event from week 4 stored.
+Expected Output
+Reasoning layer: traverses Migration event node. Answer: "The project migrated from PostgreSQL to MySQL in week 4. Reason: client required MySQL for their infrastructure compatibility. Confirmed by [developer]. Source: event_id: evt_migration_taskflow."
+Headroom Check
+Historical reasoning answer delivered via Headroom.
+
+S-170  E2E: Multi-session memory persistence
+Stage: E2E   |   Difficulty: Basic
+Input Prompt
+Developer closes VS Code. Reopens next day. Types: "Continue with the authentication module."
+Context / State
+proj_taskflow. PPB has 15 facts from previous sessions.
+Expected Output
+Project identified from workspace path. Memories loaded. Request assembled: "Continue with the authentication module." Retrieval pulls auth-related facts: Clerk (auth), JWT, user table schema. Injection assembles context. Headroom compresses. Claude Code responds with Clerk-aware implementation. Developer never re-explained the stack.
+Headroom Check
+Session boundary crossed. Headroom receives persisted context from PPB. Continuity maintained.
+Note: Acceptance criterion AC-3: multi-session persistence.
+
+S-171  E2E: Demo project 2 - BlogPlatform (solo developer)
+Stage: E2E   |   Difficulty: Basic
+Input Prompt
+Developer sets up: "BlogPlatform - Next.js 14, MDX for content, Prisma, PostgreSQL, Vercel deployment, Tailwind, solo developer."
+Context / State
+New project: proj_blogplatform.
+Expected Output
+7 facts extracted and stored. Module: Content (MDX), Database (PostgreSQL/Prisma), Frontend (Next.js/Tailwind), Deployment (Vercel). On next request: "Create a blog post model", retrieval returns Prisma + PostgreSQL facts. Headroom context assembles correctly.
+Headroom Check
+Solo developer project. Fewer authors. Verify: global preferences also available in BlogPlatform context.
+Note: Demo project #2: BlogPlatform.
+
+S-172  E2E: Demo project 3 - RealEstate API (backend-heavy)
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Developer: "RealEstate API: Express.js, MongoDB, JWT auth, AWS Lambda, Serverless Framework. No frontend. OpenAPI spec required for all endpoints."
+Context / State
+New project: proj_realestate.
+Expected Output
+6 facts extracted: Express, MongoDB, JWT, AWS Lambda, Serverless Framework, OpenAPI standard. On request "Implement property listing endpoint": retrieval returns all 6 facts. Headroom context includes OpenAPI standard. Claude Code generates endpoint with OpenAPI-compliant response format.
+Headroom Check
+Engineering standard (OpenAPI) injected. Headroom includes standard in all API prompts.
+Note: Demo project #3: RealEstate API.
+
+S-173  E2E: Demo project 4 - MobileApp BFF (Backend for Frontend)
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Developer: "MobileAppBFF: GraphQL API (not REST), Apollo Server, PostgreSQL with Prisma, Redis cache for queries, JWT with short expiry (15min), React Native frontend connects to this."
+Context / State
+New project: proj_mobilebff.
+Expected Output
+6+ facts extracted. GraphQL decision stored (REST not used - store as constraint). Redis for query caching. JWT 15-min expiry as Security Standard. On request "Add user authentication mutation": retrieval returns GraphQL + JWT + short-expiry standard. Headroom context drives correct GraphQL mutation response.
+Headroom Check
+GraphQL schema and JWT expiry standard in Headroom context. Correct implementation without re-specification.
+Note: Demo project #4: GraphQL BFF.
+
+S-174  E2E: Two projects open, isolation verified
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+proj_taskflow uses MySQL. proj_blogplatform uses PostgreSQL. Developer is in proj_blogplatform and asks: "What database are we using?"
+Context / State
+Both projects active. Developer in blogplatform workspace.
+Expected Output
+Retrieval: project_id = proj_blogplatform. Result: PostgreSQL. MySQL from proj_taskflow NOT returned. Answer: "PostgreSQL." If developer switches to taskflow window and asks same question: MySQL returned. Zero cross-contamination.
+Headroom Check
+Each workspace's Headroom call uses its own project_id. Isolated contexts verified.
+Note: Isolation acceptance criterion AC-3.
+
+S-175  E2E: Decision timeline view populated correctly
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+(Part 3 View) Developer opens Decision Timeline for proj_taskflow after 6 weeks.
+Context / State
+proj_taskflow. 8 decision nodes, 3 migration events, 5 addition events.
+Expected Output
+Decision Timeline renders: chronological list of 16 events from week 1 to week 6. Each entry: date, type (Decision/Migration/Addition/Rejection), entity, reason, author. Filter by type works. Export to PDF works.
+Headroom Check
+Decision timeline reads from Part 1 reasoning API (IF-9). Headroom not in this UI read path.
+Note: Decision timeline per Section 6.2, C3.2.
+
+S-176  E2E: Full pipeline logging for one request
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Single developer request: "Implement the checkout page component."
+Context / State
+proj_taskflow. Full pipeline with Part 3 observability.
+Expected Output
+Pipeline log entries: { stage: "chat_capture", latency_ms: <v>, project_id: "proj_taskflow" }, { stage: "retrieval", latency_ms: <v>, candidates: 12 }, { stage: "ranking", latency_ms: <v>, top_k: 8 }, { stage: "injection", tokens: 980 }, { stage: "headroom", input_tokens: 1020, output_tokens: 780, ratio: 0.76, latency_ms: <v> }, { stage: "claude_code_inference", latency_ms: <v> }. All 6 stages logged.
+Headroom Check
+Headroom stage is one of 6 logged pipeline stages. Latency and compression ratio both recorded.
+Note: Full observability per Section 6.2, C3.3.
+
+S-177  E2E: Repository backfill then immediate useful context
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Developer opens an existing 3-month-old project in CodeMind for the first time. Asks immediately: "Help me add a new payment endpoint."
+Context / State
+proj_legacy. Backfill triggered on open. Project has Express, MongoDB, JWT in package.json and README.
+Expected Output
+Backfill completes within 30 seconds. Extraction produces: Express, MongoDB, JWT facts. Retrieval request fires for "payment endpoint". Retrieval returns: Express (routes structure), MongoDB (data model), JWT (auth middleware). Headroom context assembled. Claude Code generates payment endpoint in correct Express/MongoDB/JWT style without developer explaining the stack.
+Headroom Check
+Backfill -> immediate retrieval -> Headroom -> useful response. First-use experience with existing project.
+Note: Backfill + immediate use test per acceptance criterion AC-3.
+
+S-178  E2E: Provisioning script sets up full stack
+Stage: E2E   |   Difficulty: Basic
+Input Prompt
+(Part 3 Ops) Run provision.sh on a fresh machine.
+Context / State
+Fresh Ubuntu 22.04. Docker available.
+Expected Output
+Provisioning script: (1) Starts PostgreSQL 16 with pgvector extension, (2) Starts Neo4j 5 with indexes, (3) Starts Redis 7, (4) Runs database migrations (v001 through latest), (5) Seeds evaluation dataset, (6) Confirms all connections healthy. Script exits 0. All services running. PPB pipeline can accept connections.
+Headroom Check
+Headroom is pre-existing engine component. Provisioning only covers PPB infrastructure. Verify: Headroom service is running independently.
+Note: Provisioning requirement per Section 6.2, C3.3.
+
+S-179  E2E: End-to-end test suite runs on CI
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+(Part 3) Run full end-to-end pipeline test suite on GitHub Actions CI.
+Context / State
+CI environment. Docker Compose spins up PostgreSQL, Neo4j, Redis.
+Expected Output
+Test suite: 15 end-to-end scenarios covering ingestion, extraction, conflict, retrieval, injection, Headroom, and reasoning. All 15 pass. Suite runtime < 10 minutes. Coverage report generated. CI status: green.
+Headroom Check
+Headroom mock or real instance in CI. At minimum, verify Headroom is called at correct pipeline position.
+Note: CI test suite per Section 6.2, C3.1.
+
+S-180  E2E: Acceptance criterion AC-1 verified
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Run acceptance test: "A conversation stating tech stack, decision, and constraint produces correctly categorised facts."
+Context / State
+Clean project. Single conversation: "We use Next.js 14. We chose Clerk over Auth.js for social OAuth. We cannot use paid services."
+Expected Output
+Three facts extracted: [Technology Stack: Next.js 14, confidence >= 0.90], [Decision: Clerk chosen over Auth.js, reason: social OAuth], [Constraint: No paid services]. All correctly categorised. All deduplicated. All have complete metadata. Test PASS: AC-1.
+Headroom Check
+Post-test: verify all three facts available in Headroom context on next request.
+Note: Formal acceptance criterion AC-1 test.
+
+S-181  E2E: Acceptance criterion AC-2 verified (non-engineering produces no memories)
+Stage: E2E   |   Difficulty: Basic
+Input Prompt
+Send 5 purely non-engineering messages: greetings, weather talk, lunch discussion, joke, general question about history.
+Context / State
+proj_taskflow.
+Expected Output
+Zero facts stored after 5 messages. Knowledge graph count unchanged. Log shows 5 pre-filter discards. Test PASS: AC-2.
+Headroom Check
+No new context in Headroom. Zero facts = zero injection for non-engineering conversations.
+Note: Formal acceptance criterion AC-2.
+
+S-182  E2E: Acceptance criterion AC-4 (global preferences across projects)
+Stage: E2E   |   Difficulty: Basic
+Input Prompt
+Set global preference: "Always use async/await." Check in proj_taskflow and proj_blogplatform.
+Context / State
+Both projects active.
+Expected Output
+Global preference stored in developer-level store. Retrieved in both proj_taskflow and proj_blogplatform retrieval results. Does NOT appear as a project-scoped fact in either project. Test PASS: AC-4.
+Headroom Check
+Global preferences always in Headroom context regardless of active project.
+Note: Formal acceptance criterion AC-4.
+
+S-183  E2E: Acceptance criterion AC-6 (auto-context injection without developer action)
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Developer session has 20 stored facts. Developer types: "Implement the login screen." Developer did NOT attach any previous context.
+Context / State
+proj_taskflow. 20 facts in PPB including auth stack, constraints, standards.
+Expected Output
+System automatically retrieves relevant auth facts. Injects into prompt. Headroom compresses. Claude Code response demonstrates knowledge of Clerk, JWT, TypeScript without developer specifying. Test PASS: AC-6. Key metric: developer typed 4 words and received a full context-aware implementation.
+Headroom Check
+Zero-action guarantee verified. Headroom delivers context-rich prompt to Claude Code from developer's 4-word request.
+Note: Formal acceptance criterion AC-6.
+
+S-184  E2E: Acceptance criterion AC-7 (project brain tool invocation)
+Stage: E2E   |   Difficulty: Basic
+Input Prompt
+Trace a complete request. Verify project brain tool is invoked through claude-code/src/tools dispatch.
+Context / State
+proj_taskflow.
+Expected Output
+Tool dispatch log shows: { tool: "project_brain", operation: "retrieve", project_id: "proj_taskflow", invoked_via: "claude_code_tools_dispatch" }. Every memory operation goes through this single tool entry point. No memory operations bypass the tool. Test PASS: AC-7.
+Headroom Check
+Tool dispatch -> project brain -> result returned to Part 2 -> Headroom -> Claude Code. Sequence verified.
+Note: Formal acceptance criterion AC-7.
+
+S-185  E2E: Acceptance criterion AC-8 (Headroom on every request)
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Send 50 consecutive requests of varying sizes (5 tokens to 8000 tokens) to Claude Code through the PPB pipeline.
+Context / State
+proj_taskflow.
+Expected Output
+Headroom call log shows exactly 50 entries (one per request). No request skipped. Log: { total_requests: 50, headroom_calls: 50, skip_count: 0 }. Test PASS: AC-8.
+Headroom Check
+100% call rate required. Even 49/50 is a FAIL. This is the strictest Headroom test.
+Note: Formal acceptance criterion AC-8.
+
+S-186  E2E: Acceptance criterion AC-9 (historical reasoning answers)
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Run 5 historical reasoning queries on proj_taskflow after 6 weeks of usage.
+Context / State
+Queries: (1) Why Clerk? (2) When MySQL migration? (3) Who suggested Prisma? (4) What was rejected for auth? (5) What did the stack look like on week 2?
+Expected Output
+All 5 questions answered from graph with citations. No "I don't know" for stored information. No hallucinated answers for unknown information. Answers include source memory record IDs. Test PASS: AC-9.
+Headroom Check
+Reasoning answers delivered through Headroom.
+Note: Formal acceptance criterion AC-9.
+
+S-187  E2E: Demo project 5 - InventorySystem (enterprise-scale test)
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Developer sets up: "InventorySystem: microservices with 8 services (Products, Orders, Users, Inventory, Notifications, Auth, Reporting, Gateway). Each service is Node.js with its own PostgreSQL DB. Redis for inter-service messaging. Docker + Kubernetes. JWT RS256. gRPC for internal communication."
+Context / State
+New project: proj_inventory. Complex enterprise setup.
+Expected Output
+12+ facts extracted: 8 service modules, 2 databases, Redis messaging, Docker+K8s, JWT RS256, gRPC. All 8 Module nodes created in Neo4j with DEPENDS_ON relationships. On request "Implement inventory service endpoint": correct context (gRPC, PostgreSQL, JWT RS256) injected. Headroom handles the large injection block efficiently.
+Headroom Check
+Large graph (8 modules) and complex context. Headroom compresses intelligently, preserving service-specific context based on active_module signal.
+Note: Demo project #5: Enterprise-scale microservices.
+
+S-188  E2E: Demo project 6 - AIStartup landing page (frontend-only)
+Stage: E2E   |   Difficulty: Basic
+Input Prompt
+Developer: "AIStartup landing page: Next.js 14, Tailwind, Framer Motion, deployed to Vercel. No backend. Contentful CMS for blog content."
+Context / State
+New project: proj_ailanding.
+Expected Output
+5 facts extracted. No backend facts. Modules: UI (Tailwind/Framer), Content (Contentful), Deployment (Vercel). On request "Implement the hero section animation": retrieval returns Framer Motion + Tailwind. Headroom delivers clean frontend-specific context.
+Headroom Check
+Frontend-only context. No backend facts pollute Headroom output.
+Note: Demo project #6: Frontend-only.
+
+S-189  E2E: Real developer workflow simulation (4 hours of work)
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Simulate 4 hours of development: 30 engineering messages, 3 decisions, 1 conflict (auth migration), 2 preference updates, 50 code generation requests.
+Context / State
+proj_taskflow. Fresh start.
+Expected Output
+After simulation: 25+ facts in graph, 3 decision records, 1 resolved conflict, migration event, 2 updated preferences. Retrieval precision@5 >= 0.80 across all 50 requests. Headroom called 50 times (100%). 48+ Claude Code responses correctly use project context. Test validates real-world usage.
+Headroom Check
+50 Headroom calls across 4-hour simulation. Compression ratios logged. Average ratio within expected range.
+Note: Full workflow simulation for demonstration.
+
+S-190  E2E: Extraction accuracy report generated
+Stage: E2E   |   Difficulty: Basic
+Input Prompt
+(Part 3) Generate final extraction accuracy report.
+Context / State
+Evaluation dataset: 50 conversations, ground truth.
+Expected Output
+Report: { total_scenarios: 50, precision: >=0.85, recall: >=0.80, f1_score: >=0.82, per_category: { Technology_Stack: {...}, Architecture: {...}, Business_Rule: {...}, Constraint: {...}, Standard: {...}, Preference: {...} }, generated_at: "<iso>" }. Written to reports/extraction_accuracy_final.json.
+Headroom Check
+Not in report generation path.
+Note: Formal acceptance criterion AC-10.
+
+S-191  E2E: Retrieval relevance report generated
+Stage: E2E   |   Difficulty: Basic
+Input Prompt
+(Part 3) Generate final retrieval relevance report.
+Context / State
+50 fixed retrieval queries with ground truth.
+Expected Output
+Report: { total_queries: 50, precision_at_5: >=0.80, mrr: >=0.75, per_intent: { code_generation: {...}, test_generation: {...}, debugging: {...}, refactoring: {...} }, generated_at: "<iso>" }. Written to reports/retrieval_relevance_final.json.
+Headroom Check
+Not in report generation path.
+Note: Formal acceptance criterion AC-10.
+
+S-192  E2E: Conflict regression report generated
+Stage: E2E   |   Difficulty: Basic
+Input Prompt
+(Part 3) Generate conflict regression report.
+Context / State
+Named test cases: database_genuine_migration, auth_correction_misread, additive_no_conflict (and 15 others).
+Expected Output
+Report: { total_test_cases: 18, passed: 18, failed: 0, pass_rate: "100%", by_type: { genuine_migration: 8, misread: 5, non_conflicting: 5 } }. Written to reports/conflict_regression_final.json.
+Headroom Check
+Not in report generation path.
+Note: Formal acceptance criterion AC-10.
+
+S-193  E2E: Full demonstration script run
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+(Part 3) Run scripted demonstration for supervisor review.
+Context / State
+Demo workspace: proj_taskflow with 6 weeks of simulated data.
+Expected Output
+Demo steps: (1) Show empty project -> type tech stack -> memory browser shows extracted facts. (2) Ask why we chose Clerk -> reasoning answer with citations. (3) Type MongoDB migration -> conflict dialog appears -> confirm -> PostgreSQL archived. (4) Ask "What was the stack on week 2?" -> historical answer. (5) Show Headroom metrics dashboard. (6) Show precision@k >= 0.80. (7) End-to-end latency: <3 seconds from developer message to Claude Code response. All steps pass.
+Headroom Check
+Step 5 explicitly shows Headroom dashboard to supervisor. Headroom metrics are part of the demo.
+Note: Formal demonstration requirement per Section 6.2, C3.4.
+
+S-194  E2E: Performance baseline on realistic project
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Measure end-to-end pipeline latency on proj_taskflow with 100 stored facts.
+Context / State
+50 sequential requests. Target: total pipeline latency < 3 seconds per request (excluding LLM inference time).
+Expected Output
+P50 latency: <1.5s. P95 latency: <3s. P99 latency: <5s. Breakdown: retrieval <200ms, ranking <100ms, injection <50ms, Headroom <500ms. LLM inference excluded from this measurement (external dependency). Performance report written.
+Headroom Check
+Headroom contributes <500ms (P95) of the total 3-second budget.
+Note: Performance baseline for FYP evaluation.
+
+S-195  E2E: Zero cross-project leakage stress test
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Run 100 retrieval requests alternating between proj_taskflow (MySQL) and proj_blogplatform (PostgreSQL).
+Context / State
+Strict isolation. 50 requests per project.
+Expected Output
+50 taskflow requests: all return MySQL, never PostgreSQL. 50 blogplatform requests: all return PostgreSQL, never MySQL. Cross-leakage count: 0/100. Test PASS: zero cross-contamination under concurrent multi-project load.
+Headroom Check
+Each Headroom call is project-isolated. No leakage in Headroom context.
+Note: Isolation stress test: most important safety property of PPB.
+
+S-196  E2E: Memory browser search and filter
+Stage: E2E   |   Difficulty: Basic
+Input Prompt
+Developer opens Memory Browser, searches for "auth", filters by category "Technology Stack".
+Context / State
+proj_taskflow. Memory browser connected to PostgreSQL/Neo4j via Part 1 query API.
+Expected Output
+Search returns: Clerk (auth technology), JWT (auth token), httpOnly cookie (auth security). Filter by Technology Stack: shows only tech facts (no standard or decision facts). Result count matches expected. UI renders within 500ms.
+Headroom Check
+Memory browser does not go through Headroom. Direct read from PPB.
+
+S-197  E2E: Pipeline survives extraction model failure (graceful degradation)
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Extraction LLM endpoint returns HTTP 503 on 3 consecutive retries.
+Context / State
+proj_taskflow. Developer request in flight.
+Expected Output
+Extraction fails after 3 retries. Fact not stored. Pipeline logs error: { stage: "extraction", error: "503_after_3_retries", action: "skip_storage" }. Developer chat turn is NOT blocked. Response returned using existing context from PPB (pre-failure facts). Developer notified: "Memory extraction temporarily unavailable. Using existing project knowledge." Headroom still called with pre-existing context.
+Headroom Check
+Headroom still invoked with pre-existing injection block. Graceful degradation: system still useful despite extraction failure.
+Note: Graceful degradation test for production robustness.
+
+S-198  E2E: Pipeline survives Neo4j connection failure
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+Neo4j connection drops mid-session.
+Context / State
+proj_taskflow. Developer is actively chatting.
+Expected Output
+Neo4j failure caught by repository API. Read operations: fallback to pgvector-only vector search. Write operations: queued for retry when connection restores. Developer not blocked. Degraded mode log: { neo4j_status: "disconnected", fallback: "pgvector_only", queued_writes: <n> }. Graph-dependent queries (impact analysis, historical reasoning) return error: "Graph temporarily unavailable".
+Headroom Check
+Headroom receives vector-only context (no graph expansion). Context is less rich but still useful.
+Note: Resilience test: system must not crash on partial infrastructure failure.
+
+S-199  E2E: 200 scenarios complete - final system health check
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+(System Health Check) Run after all 200 test scenarios completed.
+Context / State
+All demo projects: proj_taskflow, proj_blogplatform, proj_realestate, proj_mobilebff, proj_inventory, proj_ailanding. All data accumulated.
+Expected Output
+Health check: (1) Neo4j: <500 nodes total, all have project_id, no orphans. (2) PostgreSQL: facts table row count matches graph node count. (3) pgvector: all facts have embeddings. (4) Redis: no stale keys beyond TTL. (5) Headroom: call_count = total_requests across all projects. (6) All 6 demo projects isolated: zero cross-contamination. (7) All 10 acceptance criteria verified: AC-1 through AC-10 all PASS.
+Headroom Check
+Final Headroom health: total calls = total requests (100% call rate). Average compression ratio within 0.5-1.0 range. No failed Headroom calls in production log.
+Note: Final system health gate. All 200 scenarios complete. Phase 1 ready for supervisor demonstration.
+
+S-200  E2E: Phase 1 complete - supervisor acceptance demonstration
+Stage: E2E   |   Difficulty: Intermediate
+Input Prompt
+(Supervisor Demo) Present Phase 1 PPB to supervisor and FYP committee.
+Context / State
+proj_taskflow demo project. All components live.
+Expected Output
+Demonstration covers all 10 acceptance criteria: AC-1 (extraction), AC-2 (non-engineering filtered), AC-3 (multi-session persistence + isolation), AC-4 (global preferences), AC-5 (conflict detection + versioning), AC-6 (auto-injection), AC-7 (tool invocation), AC-8 (Headroom on every request), AC-9 (historical reasoning), AC-10 (benchmarks reported). All criteria demonstrated live. Reports shown. Pipeline metrics shown. Headroom dashboard shown. Phase 1 accepted.
+Headroom Check
+Headroom demonstrated as AC-8 requirement: show Headroom call log with 100% call rate. Show compression ratios. Show token savings compared to uncompressed baseline.
+Note: FINAL SCENARIO. Phase 1 is complete when this demonstration passes all 10 acceptance criteria before the supervisor.
+
+
+
+Z.  Test Completion Checklist
+Mark each group complete only when every scenario in the group passes and all Headroom Check items in the group are verified.
+Done
+Group
+Scenarios
+Critical Headroom Tests
+Status
+[ ]
+Group A: Project Ingestion and Identification
+S-001-S-015
+—
+Pending
+[ ]
+Group B: Memory Extraction Engine
+S-016-S-050
+—
+Pending
+[ ]
+Group C: Knowledge Graph and Data Model
+S-051-S-075
+—
+Pending
+[ ]
+Group D: Ranking and Context Injection
+S-076-S-095
+—
+Pending
+[ ]
+Group E: Conflict Detection and Versioning
+S-096-S-115
+—
+Pending
+[ ]
+Group F: Long-Term Reasoning Layer
+S-116-S-135
+—
+Pending
+[ ]
+Group G: Headroom Integration Verification
+S-136-S-165
+S-136,140,143,146,147,151,156,164
+Pending
+[ ]
+Group H: End-to-End and Demo Project Scenarios
+S-166-S-200
+—
+Pending
+
+Phase 1 is complete when: (1) All 200 scenarios pass. (2) All 10 acceptance criteria verified. (3) All 8 critical Headroom tests pass with 100% call rate. (4) Extraction accuracy >= 0.85 precision, >= 0.80 recall. (5) Retrieval precision@5 >= 0.80, MRR >= 0.75. (6) Conflict regression: 100% pass. (7) Headroom call rate: 100% across all requests. (8) Zero cross-project leakage in isolation stress test. (9) End-to-end latency P95 < 3 seconds. (10) Supervisor demonstration completed successfully.
+

@@ -271,6 +271,14 @@ else
 		|| die "downloading Electron failed (output above)."
 fi
 
+step "PPB database clients (pg, neo4j-driver, ioredis)"
+if [ ! -d "${CODIUM}/vscode/node_modules/pg" ] || [ ! -d "${CODIUM}/vscode/node_modules/@types/pg" ] || [ ! -d "${CODIUM}/vscode/node_modules/neo4j-driver" ]; then
+  ( set +u; cd "${CODIUM}/vscode" && npm install --save --no-audit --no-fund pg @types/pg neo4j-driver ioredis ) \
+    || die "installing the PPB database clients failed (output above)."
+else
+  note "already installed"
+fi
+
 step "Compile the workbench (vscodium/vscode/out)"
 note "a few minutes on a warm machine, longer on the first run"
 ( set +u; cd "${CODIUM}/vscode" && npm run compile-client ) \

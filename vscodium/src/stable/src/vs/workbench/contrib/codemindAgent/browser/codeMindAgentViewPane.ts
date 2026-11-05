@@ -1091,6 +1091,8 @@ export class CodeMindAgentViewPane extends ViewPane {
 				break;
 			case 'clearHistory':
 				this._history.length = 0;
+				this._lastSessionId = undefined;
+				this._resetTodos();
 				this._pendingResumeSessionId = undefined;
 				// A stopped turn belonged to the conversation being discarded.
 				this._interruptedTurn = undefined;
@@ -2065,6 +2067,12 @@ export class CodeMindAgentViewPane extends ViewPane {
 		this._postMessage({ type: 'panelData', payload: { panelId: 'tasks', items: this._collectTasks() } });
 	}
 
+	/** Drop the plan shown in the Tasks panel (called when the conversation is cleared). */
+	private _resetTodos(): void {
+		this._todos = [];
+		this._postMessage({ type: 'panelData', payload: { panelId: 'tasks', items: [] } });
+	}
+
 	/** Resolve the rows a panel should show, then push them to the webview. */
 	private _sendPanelData(panelId: PanelId): void {
 		const resolve = panelId === 'memory'
@@ -2987,8 +2995,12 @@ export class CodeMindAgentViewPane extends ViewPane {
 			this._appendSystemMessage(`Could not delete that session: ${err instanceof Error ? err.message : String(err)}`);
 			return;
 		}
-		if (this._lastSessionId === payload.id) {
+		const wasCurrent = this._lastSessionId === payload.id;
+		if (wasCurrent) {
 			this._lastSessionId = undefined;
+			// Dropping the current conversation must also drop the engine session and its
+			// persisted todo list, or the next turn resumes a plan the user threw away.
+			this._engineService.clearSession().catch(() => { });
 		}
 		if (this._pendingResumeSessionId === payload.id) {
 			this._pendingResumeSessionId = undefined;
@@ -4081,6 +4093,10 @@ export class CodeMindAgentViewPane extends ViewPane {
 	public clearHistory(): void {
 		this._history.length = 0;
 		this._lastSessionId = undefined;
+		this._resetTodos();
+		// Starting over must also reset the engine session, so its persisted todo list cannot
+		// reappear on the next turn.
+		this._engineService.clearSession().catch(() => { });
 		// Starting over must not quietly re-attach the conversation just discarded.
 		this._pendingResumeSessionId = undefined;
 		this._interruptedTurn = undefined;

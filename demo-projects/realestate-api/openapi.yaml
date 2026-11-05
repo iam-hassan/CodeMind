@@ -1,0 +1,11 @@
+openapi: 3.0.0
+info:
+  title: RealEstate API
+  version: '1.0.0'
+paths:
+  /properties:
+    get:
+      summary: List properties
+      responses:
+        '200':
+          description: OK

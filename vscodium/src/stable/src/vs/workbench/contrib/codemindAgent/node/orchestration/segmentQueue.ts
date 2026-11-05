@@ -116,9 +116,6 @@ export class NoopSegmentSink implements ISegmentSink {
 /** The ring buffer holding segments waiting to be drained. */
 let _ring: ConversationSegment[] = [];
 
-/** Index of the next write slot (wraps at RING_CAPACITY). */
-let _writeIdx = 0;
-
 /** True if a setImmediate drain is already pending. */
 let _drainScheduled = false;
 
@@ -182,7 +179,6 @@ async function drain(): Promise<void> {
 
 	if (_ring.length > 0) {
 		const batch = _ring.splice(0, _ring.length);
-		_writeIdx = 0;
 
 		try {
 			await _sink.ingest(batch);
@@ -238,7 +234,6 @@ function pushToRing(segment: ConversationSegment): void {
 		_ring.push(segment);
 		_stats.overflows++;
 	}
-	_writeIdx = _ring.length;
 }
 
 // ── Public enqueue ────────────────────────────────────────────────────────────
@@ -308,7 +303,6 @@ export function enqueue(raw: Omit<ConversationSegment, 'text'> & { text: string 
  */
 export function _resetQueueForTests(): void {
 	_ring = [];
-	_writeIdx = 0;
 	_drainScheduled = false;
 	if (_drainResolve) { _drainResolve(); }
 	_drainPromise = null;

@@ -3,15 +3,14 @@ import { resolvePreferences, setGlobalDeveloperPrefs, _setRegistryDirForTests } 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { 
-	enqueue, 
-	setSink, 
-	getSegmentQueueStats, 
-	_resetQueueForTests, 
-	ISegmentSink, 
-	flush 
+import {
+	enqueue,
+	setSink,
+	_resetQueueForTests,
+	ISegmentSink,
+	flush
 } from '../orchestration/segmentQueue.js';
-import { buildRetrievalRequest, executeRetrieval, IProjectBrainRetriever, RetrievedFact } from '../orchestration/retrievalRequest.js';
+import { buildRetrievalRequest, executeRetrieval, IProjectBrainRetriever } from '../orchestration/retrievalRequest.js';
 import { formatInjectionBlock } from '../orchestration/injectionBlock.js';
 // Removed ProjectBrainTool import because it cannot be loaded cross-project in this mocha run
 const ProjectBrainTool: any = null;

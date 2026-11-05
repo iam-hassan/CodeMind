@@ -73,6 +73,10 @@ interface ICodeMindAgentEngineWorkerService {
 	// ProxyChannel call is marshalled as a promise, so it is typed as one here.
 	setDevMode(enabled: boolean): Promise<void>;
 	getOrchestrationPerf(): Promise<any>;
+	getEditorState(): Promise<unknown>;
+	getSegmentQueueStats(): Promise<unknown>;
+	getGlobalDeveloperPrefs(): Promise<unknown>;
+	setGlobalDeveloperPrefs(prefs: unknown): Promise<void>;
 	getTraceHistory(): Promise<any[]>;
 }
 

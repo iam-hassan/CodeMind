@@ -13,7 +13,6 @@ import {
 	deleteProject,
 	getGlobalDeveloperPrefs,
 	setGlobalDeveloperPrefs,
-	getPerProjectPrefs,
 	setPerProjectPrefs,
 	resolvePreferences,
 	filterToProject,

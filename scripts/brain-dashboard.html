@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodeMind · Project Brain dashboard</title>
+<style>
+	:root { --bg:#0f1216; --panel:#171b21; --panel2:#1e232b; --line:#2b313a; --text:#d7dde5; --muted:#8b95a3; --accent:#4f9cf9; --ok:#2ecc71; --warn:#f0b429; --bad:#e8564b; }
+	* { box-sizing: border-box; }
+	body { margin:0; background:var(--bg); color:var(--text); font:13px/1.5 "Segoe UI",system-ui,sans-serif; }
+	header { position:sticky; top:0; z-index:5; background:var(--panel); border-bottom:1px solid var(--line); padding:10px 18px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+	header h1 { font-size:14px; margin:0; font-weight:600; white-space:nowrap; }
+	header .meta { color:var(--muted); font-size:12px; }
+	header select { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font-size:13px; min-width:280px; }
+	header label { color:var(--muted); font-size:12px; display:flex; align-items:center; gap:4px; }
+	header button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; font-size:12px; }
+	header .actions { margin-left:auto; display:flex; gap:8px; }
+	header button.danger { background:var(--bad); }
+	header button:disabled { opacity:.45; cursor:not-allowed; }
+	.wrap { padding:16px 18px 60px; max-width:1600px; margin:0 auto; }
+	.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(115px,1fr)); gap:12px; }
+	.card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+	.card .n { font-size:22px; font-weight:700; }
+	.card .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+	section { background:var(--panel); border:1px solid var(--line); border-radius:8px; margin-top:14px; }
+	section > h2 { font-size:13px; margin:0; padding:10px 12px; border-bottom:1px solid var(--line); font-weight:600; }
+	section > .body { padding:12px; }
+	.tablewrap { overflow:auto; max-height:340px; }
+	table { border-collapse:collapse; width:100%; font-size:12px; }
+	th,td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+	th { position:sticky; top:0; background:var(--panel2); color:var(--muted); font-weight:600; }
+	code,.mono { font-family:"Cascadia Mono",Consolas,monospace; }
+	.pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; background:var(--panel2); }
+	.pill.active { background:rgba(46,204,113,.15); color:var(--ok); }
+	.pill.superseded { background:rgba(232,86,75,.15); color:var(--bad); }
+	.pill.archived { background:rgba(240,180,41,.15); color:var(--warn); }
+	.two { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+	@media (max-width:1150px){ .two { grid-template-columns:1fr; } }
+	#graph { width:100%; height:460px; display:block; background:#0b0e12; border-radius:6px; }
+	.legend { display:flex; gap:12px; flex-wrap:wrap; color:var(--muted); font-size:11px; margin-top:8px; }
+	.dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+	.note { color:var(--muted); font-size:12px; margin:6px 0 0; }
+	.err { color:var(--bad); }
+	.arch td:first-child { white-space:nowrap; }
+	.tag { font-size:10px; padding:1px 6px; border-radius:4px; background:var(--panel2); color:var(--muted); white-space:nowrap; }
+	/* pipeline */
+	.pipeline { display:flex; align-items:stretch; gap:0; flex-wrap:wrap; }
+	.stage { flex:1 1 170px; min-width:150px; background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:9px 10px; }
+	.stage.ok { border-color:rgba(46,204,113,.5); }
+	.stage .stage-top { display:flex; justify-content:space-between; align-items:center; gap:6px; }
+	.stage .stage-what { color:var(--muted); font-size:11px; margin:5px 0; }
+	.stage .stage-meta { font-size:11px; color:var(--muted); }
+	.arrow { display:flex; align-items:center; color:var(--muted); padding:0 6px; font-size:16px; }
+	.checklist { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:6px; }
+	.check { padding:6px 9px; border-radius:6px; font-size:12px; border:1px solid var(--line); }
+	.check.ok { color:var(--ok); border-color:rgba(46,204,113,.35); background:rgba(46,204,113,.07); }
+	.check.bad { color:var(--bad); border-color:rgba(232,86,75,.35); background:rgba(232,86,75,.07); }
+</style>
+</head>
+<body>
+<header>
+	<h1>CodeMind · Project Brain</h1>
+	<select id="project"></select>
+	<label><input type="checkbox" id="auto" checked> auto-refresh</label>
+	<span class="meta" id="meta">loading…</span>
+	<div class="actions">
+		<button id="refresh">Refresh</button>
+		<button id="resetProject" class="danger">Reset project</button>
+		<button id="resetAll" class="danger">Reset all</button>
+	</div>
+</header>
+
+<div class="wrap">
+	<div class="cards" id="cards"></div>
+
+	<section>
+		<h2>Verification checklist <span class="meta" id="checklistFor"></span></h2>
+		<div class="body"><div class="checklist" id="checklist"></div></div>
+	</section>
+
+	<section>
+		<h2>How it flows through the layers</h2>
+		<div class="body"><div class="pipeline" id="pipeline"></div></div>
+	</section>
+
+	<div class="two">
+		<section>
+			<h2>What passed through (ppb_telemetry)</h2>
+			<div class="body tablewrap"><table id="telemetry"></table></div>
+		</section>
+		<section>
+			<h2>Projects</h2>
+			<div class="body tablewrap"><table id="projects"></table></div>
+		</section>
+	</div>
+
+	<section>
+		<h2>PostgreSQL — stored knowledge</h2>
+		<div class="body">
+			<h3 style="font-size:12px;color:var(--muted);margin:0 0 6px">Memories</h3>
+			<div class="tablewrap"><table id="memories"></table></div>
+			<div class="two" style="margin-top:12px">
+				<div><h3 style="font-size:12px;color:var(--muted);margin:0 0 6px">Decisions</h3><div class="tablewrap"><table id="decisions"></table></div></div>
+				<div><h3 style="font-size:12px;color:var(--muted);margin:0 0 6px">Events</h3><div class="tablewrap"><table id="events"></table></div></div>
+			</div>
+			<div style="margin-top:12px"><h3 style="font-size:12px;color:var(--muted);margin:0 0 6px">Conflicts</h3><div class="tablewrap"><table id="conflicts"></table></div></div>
+		</div>
+	</section>
+
+	<section>
+		<h2>Neo4j knowledge graph <span class="meta" id="graphMeta"></span></h2>
+		<div class="body">
+			<canvas id="graph"></canvas>
+			<div class="legend" id="legend"></div>
+		</div>
+	</section>
+</div>
+
+<script>
+const LABEL_COLORS = { Technology:'#3b82f6', Project:'#e5e7eb', Constraint:'#ef4444', Decision:'#8b5cf6', Standard:'#10b981', Event:'#f59e0b', Preference:'#ec4899', Architecture:'#06b6d4', BusinessRule:'#a3e635', Module:'#64748b', Alternative:'#f97316' };
+let state = { project: new URLSearchParams(location.search).get('project') || '' };
+let graphSignature = '';
+
+const el = (id) => document.getElementById(id);
+const esc = (v) => String(v==null?'':v).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const short = (v,n) => { v=String(v==null?'':v); return v.length>n ? esc(v.slice(0,n))+'…' : esc(v); };
+const pill = (s) => { s=String(s||''); const c=s==='active'?'active':s==='superseded'?'superseded':s==='archived'?'archived':''; return '<span class="pill '+c+'">'+esc(s)+'</span>'; };
+
+function table(node, cols, rows){
+	if(!rows || !rows.length){ node.innerHTML='<tbody><tr><td style="color:#8b95a3">(none)</td></tr></tbody>'; return; }
+	node.innerHTML = '<thead><tr>'+cols.map(c=>'<th>'+esc(c.label)+'</th>').join('')+'</tr></thead><tbody>'+
+		rows.map(r=>'<tr>'+cols.map(c=>{ let v=c.key.split('.').reduce((o,k)=>o==null?undefined:o[k],r); return '<td>'+(c.render?c.render(v,r):esc(v))+'</td>'; }).join('')+'</tr>').join('')+'</tbody>';
+}
+const ts = (v) => v ? esc(new Date(v).toLocaleString()) : '';
+const tm = (v) => v ? esc(new Date(v).toLocaleTimeString()) : '';
+
+function renderSelector(data){
+	const sel = el('project');
+	const cur = state.project;
+	sel.innerHTML = '<option value="">All projects</option>' + (data.projects||[]).map(p =>
+		'<option value="'+esc(p.id)+'">'+esc(p.name)+' — '+p.memories+' mem'+(p.source==='registry'?' (not saved)':'')+'</option>').join('');
+	sel.value = (data.projects||[]).some(p=>p.id===cur) ? cur : '';
+	el('resetProject').disabled = !sel.value;
+}
+el('project').addEventListener('change', (e)=>{ state.project = e.target.value; const u=new URL(location); if(state.project)u.searchParams.set('project',state.project); else u.searchParams.delete('project'); history.replaceState(null,'',u); load(); });
+
+function renderCards(data){
+	const c = data.selected ? (data.pg.projectCounts||{}) : (data.pg.counts||{});
+	const items = [['Memories',c.memories],['Decisions',c.decisions],['Events',c.events],['Conflicts',c.conflicts],['Embeddings',c.embeddings],['Telemetry',c.telemetry],['Outbox pending',data.selected?null:(data.pg.counts||{}).outbox_pending]];
+	el('cards').innerHTML = items.map(([l,n])=>'<div class="card"><div class="n">'+(n==null?'–':n)+'</div><div class="l">'+l+'</div></div>').join('');
+}
+
+function renderChecklist(data){
+	el('checklistFor').textContent = data.selected ? ('· ' + (data.projects.find(p=>p.id===data.selected)?.name || data.selected)) : '';
+	const box = el('checklist');
+	if(!data.selected){ box.innerHTML = '<p class="note">Select a project above to see its checklist — every box should be ✔ if the brain is working for that folder.</p>'; return; }
+	const pg = data.pg||{}, neo = data.neo4j||{}, pc = pg.projectCounts||{};
+	const nodes = (neo.nodes||[]).length;
+	const items = [
+		['Workspace registered', (data.projects||[]).some(p=>p.id===data.selected)],
+		['DB project row exists', (pg.dbProjects||[]).some(p=>p.id===data.selected)],
+		['Memories stored', (pc.memories||0)>0],
+		['Embeddings generated', (pc.embeddings||0)>0],
+		['Neo4j nodes projected', nodes>0],
+		['Pipeline passes recorded', (pc.telemetry||0)>0],
+		['Outbox drained', ((pg.counts||{}).outbox_pending||0)===0],
+	];
+	box.innerHTML = items.map(([l,ok])=>'<div class="check '+(ok?'ok':'bad')+'">'+(ok?'✔':'✕')+' '+esc(l)+'</div>').join('');
+}
+
+function renderPipeline(data){
+	const t = (data.pg.telemetry)||[];
+	const by = {};
+	for(const row of t){ const s=String(row.stage||'').replace(/^ppb\./,''); (by[s] ||= {count:0,last:null}).count++; if(!by[s].last) by[s].last=row; }
+	const layers = data.layers||[];
+	el('pipeline').innerHTML = layers.map((L,i)=>{
+		const s = by[L.id]; const ok = !!(s && s.count>0);
+		const dur = s && s.last && s.last.duration_ms!=null ? (Math.round(s.last.duration_ms)+'ms') : '';
+		return '<div class="stage '+(ok?'ok':'')+'">'
+			+'<div class="stage-top"><b>'+esc(L.label)+'</b><span class="tag">'+esc(L.part)+'</span></div>'
+			+'<div class="stage-what">'+esc(L.what)+'</div>'
+			+'<div class="stage-meta">passes <b>'+(s?s.count:0)+'</b>'+(dur?(' · last '+dur):'')+' · stores '+esc(L.store)+'</div>'
+			+'</div>'+(i<layers.length-1?'<div class="arrow">→</div>':'');
+	}).join('');
+}
+
+function renderGraph(neo){
+	const nodes = neo.nodes||[], rels = neo.rels||[];
+	const canvas = el('graph'), ctx = canvas.getContext('2d');
+	const dpr = window.devicePixelRatio||1, W = canvas.clientWidth||600, H = canvas.clientHeight||460;
+	canvas.width=W*dpr; canvas.height=H*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+	el('graphMeta').textContent = '· '+(nodes.length)+' nodes, '+(rels.length)+' relationships';
+	if(!nodes.length){ ctx.clearRect(0,0,W,H); ctx.fillStyle='#8b95a3'; ctx.font='13px sans-serif'; ctx.fillText('No nodes for this selection.',16,28); el('legend').innerHTML=''; return; }
+	const idx = new Map();
+	const pts = nodes.map((n,i)=>{ idx.set(n.eid,i); return { x:W/2+(Math.random()-.5)*W*.7, y:H/2+(Math.random()-.5)*H*.7, vx:0, vy:0, n }; });
+	const edges = rels.map(r=>({a:idx.get(r.from), b:idx.get(r.to)})).filter(e=>e.a!=null&&e.b!=null);
+	let ticks=0;
+	(function frame(){
+		for(let i=0;i<pts.length;i++) for(let j=i+1;j<pts.length;j++){ const a=pts[i],b=pts[j]; let dx=b.x-a.x,dy=b.y-a.y,d2=dx*dx+dy*dy||.01,d=Math.sqrt(d2); const rep=1700/d2,fx=dx/d*rep,fy=dy/d*rep; a.vx-=fx;a.vy-=fy;b.vx+=fx;b.vy+=fy; }
+		for(const e of edges){ const a=pts[e.a],b=pts[e.b]; let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||.01,k=(d-78)*.02; a.vx+=dx/d*k;a.vy+=dy/d*k;b.vx-=dx/d*k;b.vy-=dy/d*k; }
+		for(const p of pts){ p.vx+=(W/2-p.x)*.002;p.vy+=(H/2-p.y)*.002;p.vx*=.85;p.vy*=.85;p.x=Math.max(12,Math.min(W-12,p.x+p.vx));p.y=Math.max(12,Math.min(H-12,p.y+p.vy)); }
+		ctx.clearRect(0,0,W,H); ctx.strokeStyle='rgba(140,140,140,.35)'; ctx.lineWidth=1;
+		for(const e of edges){ const a=pts[e.a],b=pts[e.b]; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke(); }
+		for(const p of pts){ const label=(p.n.labels&&p.n.labels[0])||'Node'; ctx.fillStyle=LABEL_COLORS[label]||'#6b7280'; ctx.beginPath(); ctx.arc(p.x,p.y,6,0,Math.PI*2); ctx.fill(); if(pts.length<=90){ ctx.fillStyle='#94a3b8'; ctx.font='9px sans-serif'; const tt=p.n.name||p.n.title||p.n.id||''; if(tt) ctx.fillText(String(tt).slice(0,22),p.x+8,p.y+3); } }
+		if(++ticks<320) requestAnimationFrame(frame);
+	})();
+	const lc = neo.labelCounts||{};
+	el('legend').innerHTML = Object.keys(lc).map(l=>'<span><span class="dot" style="background:'+(LABEL_COLORS[l]||'#6b7280')+'"></span>'+esc(l)+' ('+lc[l]+')</span>').join('');
+}
+
+function render(data){
+	const pg = data.pg||{}, neo = data.neo4j||{};
+	el('meta').textContent = 'updated '+new Date(data.generatedAt).toLocaleTimeString()+(pg.error?' · PG error':'')+(neo.error?' · Neo4j error':'');
+	renderSelector(data);
+	renderCards(data);
+	renderChecklist(data);
+	renderPipeline(data);
+	table(el('telemetry'),[
+		{key:'recorded_at',label:'time',render:tm},
+		{key:'stage',label:'layer'},
+		{key:'duration_ms',label:'ms',render:v=>v==null?'':Math.round(v)},
+		{key:'payload',label:'detail',render:v=>short(JSON.stringify(v),110)},
+	],pg.telemetry||[]);
+	table(el('projects'),[
+		{key:'name',label:'project'},
+		{key:'source',label:'known from'},
+		{key:'memories',label:'memories'},
+		{key:'embeddings',label:'embeddings'},
+		{key:'repoPath',label:'path',render:v=>short(v,60)},
+	],data.projects||[]);
+	table(el('memories'),[
+		{key:'category',label:'category'},{key:'content',label:'content',render:v=>short(v,90)},
+		{key:'status',label:'status',render:pill},{key:'importance',label:'imp',render:v=>v==null?'':Number(v).toFixed(2)},
+		{key:'project_id',label:'project',render:v=>short(v,10)},
+	],pg.memories||[]);
+	table(el('decisions'),[{key:'decision',label:'decision',render:v=>short(v,50)},{key:'reason',label:'reason',render:v=>short(v,50)},{key:'status',label:'status'},{key:'decided_at',label:'date',render:v=>v?esc(new Date(v).toLocaleDateString()):''}],pg.decisions||[]);
+	table(el('events'),[{key:'event_type',label:'type'},{key:'description',label:'description',render:v=>short(v,70)},{key:'occurred_at',label:'date',render:ts}],pg.events||[]);
+	table(el('conflicts'),[{key:'category',label:'category'},{key:'severity',label:'severity'},{key:'question',label:'question',render:v=>short(v,60)},{key:'status',label:'status'},{key:'resolution',label:'resolution'}],pg.conflicts||[]);
+	if(!neo.error){ const sig=(neo.nodes||[]).length+':'+(neo.rels||[]).length+':'+(neo.nodes||[]).map(n=>n.eid).join(','); if(sig!==graphSignature){ graphSignature=sig; renderGraph(neo); } }
+	else { const c=el('graph'),ctx=c.getContext('2d'); ctx.clearRect(0,0,c.width,c.height); ctx.fillStyle='#e8564b'; ctx.font='13px sans-serif'; ctx.fillText('Neo4j error: '+neo.error,12,24); }
+}
+
+async function load(){
+	try { const r = await fetch('/api/data' + (state.project ? ('?project='+encodeURIComponent(state.project)) : '')); render(await r.json()); }
+	catch(e){ el('meta').textContent = 'load failed: '+e; }
+}
+el('refresh').addEventListener('click', load);
+el('resetProject').addEventListener('click', () => { const v = el('project').value; if (!v) { alert('Select a project first.'); return; } doReset(v); });
+el('resetAll').addEventListener('click', () => doReset(''));
+async function doReset(scope) {
+	if (!scope) {
+		// "Reset all" only when nothing is selected; otherwise the project button is explicit.
+	}
+	const label = scope ? ('project "' + (state.project) + '"') : 'ALL projects';
+	if (!confirm('Delete all stored brain data for ' + label + '? This cannot be undone.')) { return; }
+	el('meta').textContent = 'resetting…';
+	try {
+		await fetch('/api/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(scope ? { project: scope } : { all: true }) });
+	} catch (e) { el('meta').textContent = 'reset failed: ' + e; return; }
+	graphSignature = '';
+	load();
+}
+let timer = setInterval(()=>{ if(el('auto').checked) load(); }, 5000);
+load();
+</script>
+</body>
+</html>

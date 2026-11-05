@@ -92,21 +92,104 @@ What setup produces, all of it ignored by git:
 
 ```bash
 scripts/run.sh [folder]      # Linux, macOS
-scripts\run.bat [folder]     # Windows
+scripts\run.bat [folder]     # Windows; starts the Project Brain stack too
 ```
 
 This runs the compiled workbench through the Electron runtime; it is a
-development build, not a packaged application. On first use the panel asks for
-an Anthropic API key and stores it in the editor's secret storage.
+development build, not a packaged application. On first use the panel asks for an Anthropic API key and stores it in the editor's secret storage.
+
+On Windows, `scripts\run.bat` starts PostgreSQL/pgvector, Neo4j, Redis, the local development embedding stand-in, Headroom when available, and CodeMind. It opens a new window; pass a folder to open that project:
+
+```powershell
+scripts\run.bat D:\path\to\project
+```
+
+The Project Brain is enabled by default. Its dashboard is available at `http://127.0.0.1:20200` and shows the selected project's pipeline telemetry, PostgreSQL records, and Neo4j graph. Use `/brain` in the CodeMind panel to view brain status.
 
 After editing the panel sources, re-overlay and recompile:
+
 
 ```bash
 scripts/setup.sh --compile
 ```
 
+Windows:
+
+```bat
+scripts\setup.bat --compile
+```
+
 `vscodium/src/stable` is an overlay — nothing in the build copies it for you, so
 edits there only reach the workbench through this step.
+
+## Persistent Project Brain (PPB)
+
+The Project Brain is integrated into CodeMind's normal launch path. It stores
+project knowledge in PostgreSQL/pgvector and Neo4j, retrieves relevant memories,
+and exposes the `project_brain` tool to the agent. The brain is enabled by
+default; set `CODEMIND_PPB_ENABLED=0` only when you explicitly want it disabled.
+
+### PPB prerequisites
+
+Start Docker Desktop. The local PPB stack uses:
+
+| Service | Host port |
+|---|---:|
+| PostgreSQL + pgvector | `55432` |
+| Neo4j Bolt | `57687` |
+| Neo4j HTTP | `57300` |
+| Redis | `56379` |
+| Project Brain dashboard | `20200` |
+
+The normal Windows launcher starts the stack and the local development embedding
+stand-in automatically:
+
+```bat
+scripts\run.bat [folder]
+```
+
+For PowerShell users, the equivalent explicit launcher is:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run-brain.ps1 D:\path\to\project
+```
+
+The launcher reads optional provider overrides from:
+
+```text
+%USERPROFILE%\.codemind\ppb.env
+```
+
+Normally, select the chat provider, model, and API key in the CodeMind panel.
+The extraction model follows the selected chat model. The panel endpoint is
+normalized automatically for the OpenAI-shaped extraction request. Use a model
+that returns JSON content for extraction; reasoning-only models may return empty
+content. A real embedding provider can replace the local stand-in with
+`PPB_EMBED_BASE_URL`, `PPB_EMBED_MODEL`, and `PPB_EMBEDDING_DIM` overrides.
+
+### PPB dashboard
+
+Open the read-only verification dashboard at:
+
+```text
+http://127.0.0.1:20200
+```
+
+It provides a project selector, a layer-by-layer pipeline view, telemetry rows,
+PostgreSQL memories/decisions/events/conflicts, and a scoped Neo4j graph. The
+Reset project and Reset all actions clear PPB data; reset also clears the relevant
+CodeMind session runtime so stale todo plans do not return.
+
+For a real-project smoke test:
+
+1. Launch with `scripts\\run.bat D:\\path\\to\\project`.
+2. In the panel, send a durable fact, for example: `We use PostgreSQL for persistence.`
+3. Look for `project_brain` tool cards: `extract`, `save`, `recall`, and `inject`.
+4. Select the project in the dashboard and confirm the checklist, telemetry, DB rows,
+   embeddings, and Neo4j nodes are populated.
+
+Detailed PPB testing instructions are in `docs/ppb/BRAIN_UI_QUICKSTART.md` and the
+200-scenario execution report is in `docs/ppb/SCENARIO_EXECUTION_REPORT.md`.
 
 ## Project structure
 

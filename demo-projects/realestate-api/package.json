@@ -1,0 +1,16 @@
+{
+  "name": "realestate-api",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "express": "4.19.2",
+    "mongoose": "8.8.0",
+    "jsonwebtoken": "9.0.2",
+    "serverless-http": "3.2.0"
+  },
+  "devDependencies": {
+    "serverless": "3.39.0",
+    "typescript": "5.6.3",
+    "@types/express": "4.17.21"
+  }
+}

@@ -1,0 +1,70 @@
+# CodeMind Phase 1 Part 1 — local dev infrastructure (PLACEHOLDER ports/config; spec §26/§32).
+#
+# Usage:
+#   docker compose -f infra/ppb/docker-compose.yml up -d
+#   docker compose -f infra/ppb/docker-compose.yml ps
+#
+# Host ports are offset to avoid clashing with local services that may already be
+# installed on this machine (e.g. a native PostgreSQL on 5432). Override any port via
+# environment variables, e.g. PPB_PG_PORT=55432.
+#
+# After the stack is up, point the engine at it (PowerShell example):
+#   $env:CODEMIND_PPB_ENABLED = '1'
+#   $env:PPB_PG_URL     = 'postgres://postgres:postgres@localhost:55432/codemind_ppb'
+#   $env:PPB_NEO4J_URL  = 'bolt://localhost:57687'
+#   $env:PPB_REDIS_URL  = 'redis://localhost:56379'
+
+services:
+  ppb-postgres:
+    image: pgvector/pgvector:pg17
+    container_name: ppb-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: codemind_ppb
+    ports:
+      - "127.0.0.1:${PPB_PG_PORT:-55432}:5432"
+    volumes:
+      - ppb-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d codemind_ppb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ppb-neo4j:
+    image: neo4j:5-community
+    container_name: ppb-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/codemindppb
+    ports:
+      # 57474 fell inside a Windows/WSL excluded TCP range (57432–57531) and the bind was refused
+      # (WSAEACCES); the default is now 57300, verified free on 2026-09-28. Ranges shift across
+      # reboots, so keep the env override (PPB_NEO4J_HTTP_PORT) as the escape hatch.
+      - "127.0.0.1:${PPB_NEO4J_HTTP_PORT:-57300}:7474"
+      - "127.0.0.1:${PPB_NEO4J_BOLT_PORT:-57687}:7687"
+    volumes:
+      - ppb-neo4jdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ppb-redis:
+    image: redis:7-alpine
+    container_name: ppb-redis
+    ports:
+      - "127.0.0.1:${PPB_REDIS_PORT:-56379}:6379"
+    volumes:
+      - ppb-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  ppb-pgdata:
+  ppb-neo4jdata:
+  ppb-redisdata:

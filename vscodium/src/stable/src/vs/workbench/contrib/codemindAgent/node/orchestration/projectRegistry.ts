@@ -111,7 +111,7 @@ interface RegistryFile {
 
 function defaultGlobalPrefs(): GlobalDeveloperPrefs {
 	return {
-		ppbEnabled: false,           // off by default; requires CODEMIND_PPB_ENABLED=1
+		ppbEnabled: true,            // part of CodeMind by default; unset env CODEMIND_PPB_ENABLED=0 disables
 		maxInjectionTokens: 2000,
 		preferredLanguages: [],
 		indentStyle: 'spaces',

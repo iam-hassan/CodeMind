@@ -1068,6 +1068,29 @@ function registerSessionCommands(registry: CodeMindCommandRegistry): void {
 			].join('\n'));
 		},
 	});
+
+	registry.register({
+		name: 'brain',
+		description: localize('cmcmd.brain', 'Show or change the Project Brain — persistent project memory. Usage: /brain [on|off].'),
+		args: '[on|off]',
+		execute: async (args, ctx) => {
+			const action = args.trim().toLowerCase();
+			if (action === 'on' || action === 'off') {
+				await ctx.engineService.setGlobalDeveloperPrefs({ ppbEnabled: action === 'on' });
+			}
+			const prefs = await ctx.engineService.getGlobalDeveloperPrefs() as { ppbEnabled?: boolean; maxInjectionTokens?: number } | undefined;
+			const stats = await ctx.engineService.getSegmentQueueStats() as { queued?: number; drained?: number; dropped?: number } | undefined;
+			const enabled = prefs?.ppbEnabled === true;
+			ctx.appendSystemMessage([
+				`Project Brain: ${enabled ? 'ON' : 'OFF'}`,
+				...(enabled
+					? ['The agent can use the project_brain tool (recall / store / list / reason), and relevant memories are injected into each turn automatically.']
+					: ['Turn it on with /brain on. It also requires the PPB environment (CODEMIND_PPB_ENABLED=1) and the local databases to be running.']),
+				`Injection budget: ${prefs?.maxInjectionTokens ?? 2000} tokens`,
+				...(stats ? [`Memory queue: ${stats.queued ?? 0} queued, ${stats.drained ?? 0} processed, ${stats.dropped ?? 0} skipped`] : []),
+			].join('\n'));
+		},
+	});
 }
 
 /** Token counts read better rounded once they are into the thousands. */
