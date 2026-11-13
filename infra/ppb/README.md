@@ -87,3 +87,7 @@ Test-NetConnection localhost -Port 6379   # or 56379 for Route A
   the Null retriever and ingestion to the Noop sink; the chat turn is never broken.
 - `CODEMIND_PPB_ENABLED=1` is required to enable any Part 1 runtime behavior; when unset the
   system is byte-for-byte inert.
+- Ranked retrieval results are cached in Redis (IF-12). Cache keys are versioned per project and
+  invalidated after every write, so retrieval sees new knowledge immediately. Set
+  `PPB_REDIS_CACHE=0` to bypass the cache or `PPB_REDIS_CACHE_TTL_SECONDS` to change the 60 s
+  default; if Redis is down the engine falls back to a no-op cache and keeps serving queries.

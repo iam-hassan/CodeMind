@@ -46,6 +46,9 @@ if (-not $env:PPB_EMBEDDING_DIM)      { $env:PPB_EMBEDDING_DIM      = '2048' }
 if (-not $env:PPB_PG_URL)             { $env:PPB_PG_URL             = 'postgres://postgres:postgres@localhost:55432/codemind_ppb' }
 if (-not $env:PPB_NEO4J_URL)          { $env:PPB_NEO4J_URL          = 'bolt://localhost:57687' }
 if (-not $env:PPB_REDIS_URL)          { $env:PPB_REDIS_URL          = 'redis://localhost:56379' }
+# Ranked-result cache (IF-12). Set PPB_REDIS_CACHE=0 to bypass it; the TTL is a placeholder default.
+if (-not $env:PPB_REDIS_CACHE)        { $env:PPB_REDIS_CACHE        = '1' }
+if (-not $env:PPB_REDIS_CACHE_TTL_SECONDS) { $env:PPB_REDIS_CACHE_TTL_SECONDS = '60' }
 if (-not $env:PPB_EMBED_API_KEY)      { $env:PPB_EMBED_API_KEY      = '' }
 $env:CODEMIND_PPB_ENABLED = '1'
 # Reasoning-model gateways can burn the whole output budget on extended thinking and never emit a
