@@ -20,6 +20,10 @@ export interface PpbConfig {
 	readonly neo4jPassword: string;
 	/** Redis connection string (IF-12 cache). PLACEHOLDER (local dev default). */
 	readonly redisUrl: string;
+	/** Set false to bypass the ranked-result cache entirely (still no behaviour change otherwise). */
+	readonly redisCacheEnabled: boolean;
+	/** TTL for a cached ranked result. PLACEHOLDER pending real measurement (spec §26/§32). */
+	readonly redisCacheTtlSeconds: number;
 	/** OpenAI-compatible endpoint for BGE-M3 embeddings. PLACEHOLDER (local proxy default). */
 	readonly embedBaseUrl: string;
 	readonly embedModel: string;
@@ -59,6 +63,8 @@ export function loadPpbConfig(env: PpbEnv = process.env): PpbConfig {
 		neo4jUser: env.PPB_NEO4J_USER ?? 'neo4j',
 		neo4jPassword: env.PPB_NEO4J_PASSWORD ?? 'codemindppb', // PLACEHOLDER (local dev only)
 		redisUrl: env.PPB_REDIS_URL ?? 'redis://localhost:56379', // PLACEHOLDER — Route A Docker stack
+		redisCacheEnabled: env.PPB_REDIS_CACHE !== '0',
+		redisCacheTtlSeconds: Number.parseInt(env.PPB_REDIS_CACHE_TTL_SECONDS ?? '', 10) || 60,
 		embedBaseUrl: env.PPB_EMBED_BASE_URL ?? 'http://127.0.0.1:20128/v1', // PLACEHOLDER (local OpenAI-compatible proxy)
 		embedModel: env.PPB_EMBED_MODEL ?? PPB_EMBEDDING_MODEL,
 		embedApiKey: env.PPB_EMBED_API_KEY ?? '', // PLACEHOLDER — empty for the local proxy

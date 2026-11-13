@@ -8,8 +8,9 @@
 import assert from 'assert';
 import type { EmbeddingClient } from '../../ppb/embeddings/embedder.js';
 import type { GraphRepository, GraphNode } from '../../ppb/graph/graphRepo.js';
-import type { RetrievalRequest } from '../../orchestration/retrievalRequest.js';
-import { PpbRetriever } from '../../ppb/retrieval/retriever.js';
+import type { RetrievalRequest, RetrievedFact } from '../../orchestration/retrievalRequest.js';
+import { PpbRetriever, applyTokenBudget, estimateFactTokens } from '../../ppb/retrieval/retriever.js';
+import type { RetrievalCache } from '../../ppb/storage/redis.js';
 
 function row(id: string, category: string, content: string): Record<string, unknown> {
 	return { id, project_id: 'projectA', category, content, confidence: 0.9, importance: 0.8, source_ref: `projectA:${id}`, author: 'user', extracted_at: '2026-01-10T00:00:00.000Z', status: 'active', access_count: 0 };
@@ -85,4 +86,145 @@ suite('PPB retriever service (IF-5 → IF-6, spec §15/§16/§24)', () => {
 			assert.ok(['decision', 'pattern', 'fact', 'convention'].includes(CATEGORY_TO_RETRIEVED[category]), category);
 		}
 	});
+
+	test('enforces maxTokenBudget on the ranked list (§8)', async () => {
+		const long = 'x'.repeat(400); // estimate = ceil((400 + 40) / 4) = 110 tokens
+		const read = new FakeReadClient(
+			new Map([
+				['m1', row('m1', 'technology_stack', long)],
+				['m2', row('m2', 'technology_stack', long)],
+				['m3', row('m3', 'technology_stack', long)]
+			]),
+			[
+				{ owner_id: 'm1', owner_kind: 'fact', similarity: 0.95 },
+				{ owner_id: 'm2', owner_kind: 'fact', similarity: 0.94 },
+				{ owner_id: 'm3', owner_kind: 'fact', similarity: 0.93 }
+			]
+		);
+		const retriever = new PpbRetriever({ read, graph: graph([]), embedding });
+
+		const facts = await retriever.retrieve(request({ maxTokenBudget: 250 }));
+
+		assert.strictEqual(facts.length, 2, 'two 110-token facts fit in a 250-token budget');
+		const used = facts.reduce((total, fact) => total + estimateFactTokens(fact), 0);
+		assert.ok(used <= 250, `budget respected (${used}/250)`);
+	});
+
+	test('a budget smaller than one fact yields an empty list rather than overrunning', async () => {
+		const read = new FakeReadClient(
+			new Map([['m1', row('m1', 'technology_stack', 'x'.repeat(400))]]),
+			[{ owner_id: 'm1', owner_kind: 'fact', similarity: 0.9 }]
+		);
+		const retriever = new PpbRetriever({ read, graph: graph([]), embedding });
+		assert.deepStrictEqual(await retriever.retrieve(request({ maxTokenBudget: 20 })), []);
+	});
+
+	test('applyTokenBudget rejects a non-positive/absent budget as "no budget"', () => {
+		const facts: RetrievedFact[] = [
+			{ id: 'a', content: 'a'.repeat(400), score: 0.9, category: 'fact', projectId: 'projectA' },
+			{ id: 'b', content: 'b'.repeat(400), score: 0.8, category: 'fact', projectId: 'projectA' }
+		];
+		assert.strictEqual(applyTokenBudget(facts, 0).length, 2);
+		assert.strictEqual(applyTokenBudget(facts, undefined).length, 2);
+		assert.strictEqual(applyTokenBudget(facts, 'nope').length, 2);
+	});
+
+	test('serves a repeated request from the IF-12 cache without re-querying storage', async () => {
+		const cache = new FakeCache();
+		const base = new FakeReadClient(
+			new Map([['m1', row('m1', 'technology_stack', 'PostgreSQL is the store')]]),
+			[{ owner_id: 'm1', owner_kind: 'fact', similarity: 0.9 }]
+		);
+		let queries = 0;
+		const read = { query: (text: string, params?: readonly unknown[]) => { queries++; return base.query(text, params); } };
+		const retriever = new PpbRetriever({ read, graph: graph([]), embedding, cache });
+
+		const first = await retriever.retrieve(request());
+		const queriesAfterMiss = queries;
+		const second = await retriever.retrieve(request());
+
+		assert.deepStrictEqual(second, first);
+		assert.strictEqual(queries, queriesAfterMiss, 'cache hit must not hit PostgreSQL/vector');
+		assert.strictEqual(cache.sets, 1);
+		assert.strictEqual(cache.gets, 2);
+	});
+
+	test('a cache hit for another project is ignored and the direct query runs (§2)', async () => {
+		const cache = new FakeCache();
+		cache.poison = [{ id: 'evil', content: 'project B secret', score: 0.99, category: 'fact', projectId: 'projectB' }];
+		const read = new FakeReadClient(
+			new Map([['m1', row('m1', 'technology_stack', 'PostgreSQL is the store')]]),
+			[{ owner_id: 'm1', owner_kind: 'fact', similarity: 0.9 }]
+		);
+		const retriever = new PpbRetriever({ read, graph: graph([]), embedding, cache });
+
+		const facts = await retriever.retrieve(request());
+		assert.deepStrictEqual(facts.map(fact => fact.id), ['m1']);
+	});
+
+	test('cache read/write failures never break retrieval (§24)', async () => {
+		const cache = new FakeCache();
+		cache.throwOnGet = true;
+		cache.throwOnSet = true;
+		const read = new FakeReadClient(
+			new Map([['m1', row('m1', 'technology_stack', 'PostgreSQL is the store')]]),
+			[{ owner_id: 'm1', owner_kind: 'fact', similarity: 0.9 }]
+		);
+		const retriever = new PpbRetriever({ read, graph: graph([]), embedding, cache });
+
+		assert.deepStrictEqual((await retriever.retrieve(request())).map(fact => fact.id), ['m1']);
+	});
+
+	test('redacts credential-shaped stored content before it can be injected (§8)', async () => {
+		const read = new FakeReadClient(
+			new Map([['m1', row('m1', 'technology_stack', 'prod key: sk-abcdefghijklmnopqrstuvwxyz012345')]]),
+			[{ owner_id: 'm1', owner_kind: 'fact', similarity: 0.9 }]
+		);
+		const retriever = new PpbRetriever({ read, graph: graph([]), embedding });
+		const facts = await retriever.retrieve(request());
+		assert.strictEqual(facts.length, 1);
+		assert.ok(!facts[0].content.includes('sk-abcdefghijklmnopqrstuvwxyz012345'));
+	});
 });
+
+class FakeCache implements RetrievalCache {
+	readonly enabled = true;
+	readonly store = new Map<string, RetrievedFact[]>();
+	gets = 0;
+	sets = 0;
+	invalidations = 0;
+	poison: RetrievedFact[] | undefined;
+	throwOnGet = false;
+	throwOnSet = false;
+
+	private _key(projectId: string, signature: string): string {
+		return `${projectId}:${signature}`;
+	}
+
+	async get(projectId: string, signature: string): Promise<RetrievedFact[] | undefined> {
+		this.gets++;
+		if (this.throwOnGet) {
+			throw new Error('cache down');
+		}
+		return this.poison ?? this.store.get(this._key(projectId, signature));
+	}
+
+	async set(projectId: string, signature: string, facts: readonly RetrievedFact[]): Promise<void> {
+		this.sets++;
+		if (this.throwOnSet) {
+			throw new Error('cache down');
+		}
+		this.store.set(this._key(projectId, signature), [...facts]);
+	}
+
+	async invalidate(projectId: string): Promise<void> {
+		this.invalidations++;
+		for (const key of [...this.store.keys()]) {
+			if (key.startsWith(`${projectId}:`)) {
+				this.store.delete(key);
+			}
+		}
+	}
+
+	async close(): Promise<void> { /* no-op */ }
+}

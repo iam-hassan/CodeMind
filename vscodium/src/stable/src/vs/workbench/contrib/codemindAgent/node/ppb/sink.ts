@@ -7,6 +7,8 @@ import type { ConversationSegment, ISegmentSink } from '../orchestration/segment
 import { StubExtractor } from './extraction/stubExtractor.js';
 import type { ExtractedFact, Extractor } from './extraction/types.js';
 import { projectOutbox, type GraphProjectionTarget } from './graph/projector.js';
+import { redact, redactJson } from './redact.js';
+import type { RetrievalCache } from './storage/redis.js';
 import type { WriteQueryable } from './storage/write.js';
 
 export interface PpbSinkOptions {
@@ -22,6 +24,8 @@ export interface PpbSinkOptions {
 	readonly log?: (message: string) => void;
 	/** Optional observer so the UI can surface ingestion as tool activity. */
 	readonly onEvent?: (event: PpbSinkEvent) => void;
+	/** Optional IF-12 ranked-result cache; dropped after a write so retrieval sees new knowledge. */
+	readonly cache?: RetrievalCache;
 }
 
 /** One step of the ingestion pipeline, reported to `options.onEvent`. */
@@ -72,6 +76,7 @@ export class PpbSegmentSink implements ISegmentSink {
 	private readonly _embedder: PpbSinkOptions['embedder'] | undefined;
 	private readonly _log: (message: string) => void;
 	private readonly _onEvent: ((event: PpbSinkEvent) => void) | undefined;
+	private readonly _cache: RetrievalCache | undefined;
 
 	constructor(options: PpbSinkOptions = {}) {
 		this._extractor = options.extractor ?? new StubExtractor();
@@ -80,6 +85,7 @@ export class PpbSegmentSink implements ISegmentSink {
 		this._embedder = options.embedder;
 		this._log = options.log ?? (() => { });
 		this._onEvent = options.onEvent;
+		this._cache = options.cache;
 	}
 
 	private _emit(event: PpbSinkEvent): void {
@@ -153,10 +159,13 @@ export class PpbSegmentSink implements ISegmentSink {
 						this._log(`ppb: turn ${segment.turnId} -> archived ${superseded.length} superseded memory(ies)`);
 					} catch { /* archiving is best-effort */ }
 				}
+				// IF-12: stored knowledge changed, so any cached ranked list for this project is stale.
+				await this._invalidateCache(segment.projectId);
 			} catch (error) {
 				// Never reject: a failed segment must not break the queue (§24).
-				this._emit({ turnId: segment.turnId, stage: 'error', ok: false, durationMs: took(started), detail: String(error) });
-				this._log(`ppb: ingestion failed for turn ${segment.turnId}: ${String(error)}`);
+				const detail = redact(String(error));
+				this._emit({ turnId: segment.turnId, stage: 'error', ok: false, durationMs: took(started), detail });
+				this._log(`ppb: ingestion failed for turn ${segment.turnId}: ${detail}`);
 			}
 		}
 	}
@@ -176,7 +185,7 @@ export class PpbSegmentSink implements ISegmentSink {
 
 	scheduleBackfill(projectId: string, options: any): void {
 		try {
-			this._log(`ppb: backfill requested for ${projectId} (${JSON.stringify(options ?? {})})`);
+			this._log(`ppb: backfill requested for ${projectId} (${redactJson(options ?? {})})`);
 		} catch {
 			// Never throw — the learning loop calls this fire-and-forget.
 		}
@@ -197,7 +206,7 @@ export class PpbSegmentSink implements ISegmentSink {
 				});
 			}
 		} catch (error) {
-			this._log(`ppb: embedding failed: ${String(error)}`);
+			this._log(`ppb: embedding failed: ${redact(String(error))}`);
 		}
 	}
 
@@ -209,7 +218,19 @@ export class PpbSegmentSink implements ISegmentSink {
 		try {
 			await projectOutbox(this._write, this._projector);
 		} catch (error) {
-			this._log(`ppb: projection failed: ${String(error)}`);
+			this._log(`ppb: projection failed: ${redact(String(error))}`);
+		}
+	}
+
+	/** IF-12 — drop this project's cached ranked lists after stored knowledge changed. */
+	private async _invalidateCache(projectId: string): Promise<void> {
+		if (!this._cache) {
+			return;
+		}
+		try {
+			await this._cache.invalidate(projectId);
+		} catch {
+			/* a failed invalidation must never fail ingestion; entries expire via TTL */
 		}
 	}
 }

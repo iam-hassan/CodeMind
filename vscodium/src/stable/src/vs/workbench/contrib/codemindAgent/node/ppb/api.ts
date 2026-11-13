@@ -80,7 +80,7 @@ export const PPB_INTERFACES: readonly PpbInterfaceDescriptor[] = [
 	},
 	{
 		id: 'IF-12', producer: 'Part 1', consumer: 'Part 1 retrieval / Part 3 policy', purpose: 'Ranked-result cache read/write.',
-		payload: ['key', 'value'], status: 'published'
+		payload: ['projectId', 'key', 'value', 'ttlSeconds'], status: 'implemented'
 	}
 ];
 

@@ -112,8 +112,12 @@ Each contract lists: Producer → Consumer, Purpose, Shape, Required/optional, E
 
 - **Producer/implementer → Consumer:** Part 1 (read/write in the retrieval path) → Part 1 retrieval.
 - **Purpose:** serve ranked retrieval results without recomputation.
-- **Shape:** keyed by retrieval-request signature; exact key/value schema **to be finalized during implementation** (§18.5).
-- **Error behaviour:** cache unavailable → direct path; retrieval never fails because of the cache (§9.4).
+- **Shape:** keyed by retrieval-request signature. The implementation (`node/ppb/storage/redis.ts`) uses a versioned key schema:
+  - `ppb:retrieval:v1:version:<projectId>` — invalidation counter (bumped after a write/supersede);
+  - `ppb:retrieval:v1:<projectId>:<version>:<sha256(signature)>` — JSON array of `RetrievedFact`.
+  The signature covers query, intent, open files, recent turns, `maxResults`, `maxTokenBudget` and the active ranking-weight profile. Every cached entry carries its `projectId` and is rejected on read if it does not match the requesting project. `ttlSeconds` is bounded by `PPB_REDIS_CACHE_TTL_SECONDS` (PLACEHOLDER default 60 s).
+- **Error behaviour:** cache unavailable, slow, or returning a malformed/foreign entry → direct query path; retrieval never fails because of the cache (§9.4). The implementation degrades to a no-op cache for the process after the first Redis command failure.
+- **Invalidation:** `PpbSegmentSink` drops the project's cached lists after persistence/supersiding, so retrieval observes new knowledge immediately.
 - **Ownership:** Part 3 owns cache policy; Part 1 implements read/write.
 - **Part 1 implementation:** `node/ppb/storage/redis.ts` (M4).
 

@@ -65,6 +65,8 @@ import { GraphRepository } from './ppb/graph/graphRepo.js';
 import { createNeo4jDriver } from './ppb/storage/neo4j.js';
 import { createPgClient } from './ppb/storage/pg.js';
 import { registerProjectBrainTool, setProjectBrainRetrieverAdapter, type McpToolFactory, type ZodLike } from './ppb/tool.js';
+import { createRetrievalCache, type RetrievalCache } from './ppb/storage/redis.js';
+import { redactJson } from './ppb/redact.js';
 
 /**
  * Node-side worker that owns the Claude Agent SDK engine and exposes a
@@ -810,6 +812,8 @@ class CodeMindAgentEngineMainService extends Disposable {
 		readonly driver: ReturnType<typeof createNeo4jDriver>;
 		readonly graph: GraphRepository;
 		readonly retriever: PpbRetriever;
+		/** IF-12 ranked-result cache shared by the retriever and the ingestion sink. */
+		readonly cache: RetrievalCache;
 		/** Query wrapper that waits for the lazy connection before touching the client. */
 		readonly read: { query(text: string, params?: readonly unknown[]): Promise<{ rows: Array<Record<string, unknown>> }> };
 	} | undefined;
@@ -1496,6 +1500,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 				write: stack?.read,
 				projector: stack?.graph,
 				embedder: stack ? createEmbeddingClient(config) : undefined,
+				cache: stack?.cache,
 				onEvent: (event) => this._onPpbSinkEvent(event)
 			}));
 			if (stack) {
@@ -1538,6 +1543,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 		driver: ReturnType<typeof createNeo4jDriver>;
 		graph: GraphRepository;
 		retriever: PpbRetriever;
+		cache: RetrievalCache;
 		read: { query(text: string, params?: readonly unknown[]): Promise<{ rows: Array<Record<string, unknown>> }> };
 	} | undefined {
 		if (this._ppbStack) {
@@ -1559,8 +1565,9 @@ class CodeMindAgentEngineMainService extends Disposable {
 			};
 			const driver = createNeo4jDriver(config);
 			const graph = new GraphRepository(driver);
-			const retriever = new PpbRetriever({ read, graph, embedding: createEmbeddingClient(config) });
-			this._ppbStack = { client, driver, graph, retriever, read };
+			const cache = createRetrievalCache(config);
+			const retriever = new PpbRetriever({ read, graph, embedding: createEmbeddingClient(config), cache });
+			this._ppbStack = { client, driver, graph, retriever, read, cache };
 			return this._ppbStack;
 		} catch {
 			return undefined;
@@ -1700,7 +1707,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 		if (stack && typeof sdkTool === 'function' && sdkZod) {
 			try {
 				const config = this._ppbConfig ?? loadPpbConfig();
-				const sink = new PpbSegmentSink({ write: stack.read, projector: stack.graph, embedder: createEmbeddingClient(config), log: () => { } });
+				const sink = new PpbSegmentSink({ write: stack.read, projector: stack.graph, embedder: createEmbeddingClient(config), cache: stack.cache, log: () => { } });
 				this._ppbMcpServer = registerProjectBrainTool({
 					createMcpServer: createMcpServer as (options: { name: string; version?: string; tools?: readonly unknown[] }) => unknown,
 					tool: sdkTool,
@@ -3766,7 +3773,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 			if (!stack) { return; }
 			void stack.read.query(
 				'INSERT INTO ppb_telemetry (project_id, stage, duration_ms, payload) VALUES ($1, $2, $3, $4::jsonb)',
-				[projectId, stage, durationMs ?? null, JSON.stringify(payload ?? {})]
+				[projectId, stage, durationMs ?? null, redactJson(payload ?? {})]
 			).catch(() => { });
 		} catch {
 			// Telemetry must never affect a turn.
@@ -3806,6 +3813,7 @@ class CodeMindAgentEngineMainService extends Disposable {
 		const stack = this._ppbStack;
 		this._ppbStack = undefined;
 		if (stack) {
+			void stack.cache.close().catch(() => { });
 			stack.client.end().catch(() => { });
 			stack.driver.close().catch(() => { });
 		}

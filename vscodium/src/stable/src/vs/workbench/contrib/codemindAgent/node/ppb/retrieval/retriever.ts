@@ -11,13 +11,20 @@
  * list. It never throws — retrieval failure degrades to an empty list so a chat turn is never
  * broken (§24). Category projection maps the six knowledge categories onto Part 2's
  * `RetrievedFact` categories (`decision`/`pattern`/`fact`/`convention`).
+ *
+ * Two spec guarantees live here:
+ *  - `maxTokenBudget` is enforced on the returned list (§8 "respects a token budget").
+ *  - results are served from the IF-12 ranked-result cache when one is configured, with a
+ *    direct-query fallback when the cache is unavailable (§8/§10).
  */
 
 import type { IProjectBrainRetriever, RetrievalRequest, RetrievedFact } from '../../orchestration/retrievalRequest.js';
 import type { EmbeddingClient } from '../embeddings/embedder.js';
 import type { GraphRepository } from '../graph/graphRepo.js';
 import type { MemoryCategory } from '../ontology.js';
+import { redact } from '../redact.js';
 import type { ReadQueryable } from '../storage/read.js';
+import { retrievalCacheSignature, type RetrievalCache } from '../storage/redis.js';
 import { hybridRetrieve } from './hybrid.js';
 import { rank, type RankingWeights } from './ranker.js';
 import { defaultWeightProfile, mergeWeightProfile, type RankingWeightProfile } from './weightProfile.js';
@@ -32,6 +39,46 @@ export const CATEGORY_TO_RETRIEVED: Readonly<Record<MemoryCategory, RetrievedFac
 	developer_preferences: 'convention'
 };
 
+/** chars-per-token heuristic shared with the headroom/injection layer (spec §8). */
+export const TOKENS_PER_CHAR = 1 / 4;
+
+/**
+ * Fixed allowance for the rendered bullet (`• Category: … (score 0.93)\n`) that the injection
+ * layer adds around the raw content. Counting it here means the final injected block cannot
+ * exceed the caller's budget merely because of framing.
+ */
+export const FACT_LINE_OVERHEAD_CHARS = 40;
+
+/** Estimated tokens for one fact; `chars/4` plus the rendered-line framing. */
+export function estimateFactTokens(fact: Pick<RetrievedFact, 'content'>): number {
+	return Math.ceil(((typeof fact.content === 'string' ? fact.content.length : 0) + FACT_LINE_OVERHEAD_CHARS) * TOKENS_PER_CHAR);
+}
+
+/**
+ * Trim a ranked list to a token budget. Order is preserved (highest score first) and the first
+ * fact that would overflow stops the list — matching the injection layer's drop policy so the
+ * two layers cannot disagree about what "fits".
+ *
+ * A missing, non-finite or non-positive budget means "no budget" (the caller did not set one).
+ */
+export function applyTokenBudget(facts: readonly RetrievedFact[], maxTokenBudget: unknown): RetrievedFact[] {
+	const budget = Number(maxTokenBudget);
+	if (!Number.isFinite(budget) || budget <= 0) {
+		return [...facts];
+	}
+	const kept: RetrievedFact[] = [];
+	let used = 0;
+	for (const fact of facts) {
+		const cost = estimateFactTokens(fact);
+		if (used + cost > budget) {
+			break;
+		}
+		kept.push(fact);
+		used += cost;
+	}
+	return kept;
+}
+
 export interface RetrieverDeps {
 	readonly read: ReadQueryable;
 	readonly graph: GraphRepository;
@@ -39,6 +86,8 @@ export interface RetrieverDeps {
 	readonly embedding?: EmbeddingClient;
 	/** Optional weight overrides (T14 tuning). */
 	readonly weights?: Partial<RankingWeights>;
+	/** Optional IF-12 ranked-result cache; failure always degrades to a direct query. */
+	readonly cache?: RetrievalCache;
 }
 
 export class PpbRetriever implements IProjectBrainRetriever {
@@ -66,6 +115,18 @@ export class PpbRetriever implements IProjectBrainRetriever {
 		if (typeof projectId !== 'string' || projectId.length === 0) {
 			return [];
 		}
+
+		// IF-12: the cache is upstream of the query work; an unusable cache is simply skipped.
+		const cache = this._deps.cache;
+		let signature: string | undefined;
+		if (cache) {
+			signature = retrievalCacheSignature(req, this.weightProfile);
+			const cached = await this._cacheGet(cache, projectId, signature);
+			if (cached !== undefined) {
+				return cached;
+			}
+		}
+
 		try {
 			let queryEmbedding: number[] | undefined;
 			const query = (req as { query?: unknown }).query;
@@ -86,16 +147,43 @@ export class PpbRetriever implements IProjectBrainRetriever {
 				currentTask: typeof query === 'string' ? query : undefined
 			}, { weights: this._profile.weights, topK: maxResults });
 
-			return ranked.map(entry => ({
+			// §8 — redact credential-shaped content before it can be cached or injected.
+			const mapped = ranked.map(entry => ({
 				id: entry.fact.id,
-				content: entry.fact.content,
+				content: redact(entry.fact.content),
 				score: entry.score,
 				category: CATEGORY_TO_RETRIEVED[entry.fact.category],
 				sourceRef: entry.fact.sourceRef,
 				projectId
 			}));
+			const result = applyTokenBudget(mapped, (req as { maxTokenBudget?: unknown }).maxTokenBudget);
+			if (cache && signature) {
+				await this._cacheSet(cache, projectId, signature, result);
+			}
+			return result;
 		} catch {
 			return [];
+		}
+	}
+
+	private async _cacheGet(cache: RetrievalCache, projectId: string, signature: string): Promise<RetrievedFact[] | undefined> {
+		try {
+			const cached = await cache.get(projectId, signature);
+			// Defensive: never serve a foreign project's facts even if a cache implementation misbehaves.
+			if (cached !== undefined && cached.every(fact => fact.projectId === projectId)) {
+				return cached;
+			}
+			return undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	private async _cacheSet(cache: RetrievalCache, projectId: string, signature: string, facts: readonly RetrievedFact[]): Promise<void> {
+		try {
+			await cache.set(projectId, signature, facts);
+		} catch {
+			/* cache writes are best-effort (§9.4) */
 		}
 	}
 }

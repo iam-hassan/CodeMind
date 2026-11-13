@@ -11,6 +11,8 @@
  * engine stays unit-testable without a network.
  */
 
+import { redact } from '../redact.js';
+
 export type LlmClientErrorCode = 'http' | 'malformed-response' | 'network' | 'timeout';
 
 export class LlmClientError extends Error {
@@ -97,7 +99,7 @@ export class OpenAiCompatibleClient implements LlmClient {
 			throw new LlmClientError(
 				aborted
 					? `chat request timed out after ${timeoutMs} ms`
-					: `chat request failed: ${error instanceof Error ? error.message : String(error)}`,
+					: redact(`chat request failed: ${error instanceof Error ? error.message : String(error)}`),
 				aborted ? 'timeout' : 'network'
 			);
 		} finally {
@@ -110,7 +112,7 @@ export class OpenAiCompatibleClient implements LlmClient {
 		try {
 			payload = await response.json();
 		} catch (error) {
-			throw new LlmClientError(`chat response was not JSON: ${error instanceof Error ? error.message : String(error)}`, 'malformed-response');
+			throw new LlmClientError(redact(`chat response was not JSON: ${error instanceof Error ? error.message : String(error)}`), 'malformed-response');
 		}
 		const content = (payload as { choices?: Array<{ message?: { content?: unknown } }> })
 			?.choices?.[0]?.message?.content;

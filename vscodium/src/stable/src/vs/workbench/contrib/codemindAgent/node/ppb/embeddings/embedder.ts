@@ -14,6 +14,7 @@
 
 import { loadPpbConfig, PPB_EMBEDDING_DIM, type PpbConfig } from '../config.js';
 import type { FetchLike } from '../llm/client.js';
+import { redact } from '../redact.js';
 
 export class EmbeddingError extends Error {
 	constructor(message: string, readonly code: 'http' | 'malformed-response' | 'dimension-mismatch' | 'network') {
@@ -73,7 +74,7 @@ export class OpenAiCompatibleEmbeddingClient implements EmbeddingClient {
 				body: JSON.stringify({ model: this.model, input: [...texts] })
 			});
 		} catch (error) {
-			throw new EmbeddingError(`embedding request failed: ${error instanceof Error ? error.message : String(error)}`, 'network');
+			throw new EmbeddingError(redact(`embedding request failed: ${error instanceof Error ? error.message : String(error)}`), 'network');
 		}
 		if (!response.ok) {
 			throw new EmbeddingError(`embedding request returned HTTP ${response.status}`, 'http');
@@ -82,7 +83,7 @@ export class OpenAiCompatibleEmbeddingClient implements EmbeddingClient {
 		try {
 			payload = await response.json();
 		} catch (error) {
-			throw new EmbeddingError(`embedding response was not JSON: ${error instanceof Error ? error.message : String(error)}`, 'malformed-response');
+			throw new EmbeddingError(redact(`embedding response was not JSON: ${error instanceof Error ? error.message : String(error)}`), 'malformed-response');
 		}
 		const data = (payload as { data?: Array<{ embedding?: unknown }> })?.data;
 		if (!Array.isArray(data) || data.length !== texts.length) {

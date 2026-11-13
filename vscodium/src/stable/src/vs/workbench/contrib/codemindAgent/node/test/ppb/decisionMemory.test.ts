@@ -64,6 +64,37 @@ function options() {
 	return { now: () => new Date('2026-01-01T00:00:00.000Z'), newId: () => `id-${++counter}` };
 }
 
+/**
+ * Event table fake that honours `ORDER BY occurred_at ASC` the way PostgreSQL does, so the
+ * assertion is about the *returned chronology* rather than about SQL text.
+ */
+class ChronologicalEventClient {
+	readonly calls: string[] = [];
+	private readonly _events: Array<Record<string, unknown>> = [];
+
+	async query(text: string, params: readonly unknown[] = []): Promise<{ rows: Array<Record<string, unknown>> }> {
+		this.calls.push(text);
+		if (text.includes('INSERT INTO events')) {
+			this._events.push({
+				id: params[0], project_id: params[1], event_type: params[2], description: params[3],
+				occurred_at: params[4], source_ref: params[5]
+			});
+			return { rows: [] };
+		}
+		if (text.includes('INSERT INTO neo4j_outbox')) {
+			return { rows: [] };
+		}
+		if (text.includes('FROM events')) {
+			const limit = Number(/LIMIT (\d+)/.exec(text)?.[1] ?? 100);
+			const ordered = [...this._events].sort((a, b) =>
+				String(a.occurred_at).localeCompare(String(b.occurred_at))
+			);
+			return { rows: ordered.slice(0, limit) };
+		}
+		return { rows: [] };
+	}
+}
+
 suite('PPB decision and event memory (spec §10/§11)', () => {
 
 	test('createDecision persists an accepted decision and queues its projection', async () => {
@@ -119,6 +150,42 @@ suite('PPB decision and event memory (spec §10/§11)', () => {
 		assert.ok(call.text.includes('WHERE project_id = $1'));
 		assert.ok(call.text.includes('ORDER BY occurred_at ASC'));
 		assert.ok(call.text.includes('LIMIT 25'));
+	});
+
+	test('listEvents returns events oldest-first regardless of insertion order (§11.3)', async () => {
+		const client = new ChronologicalEventClient();
+		// Insert out of order to prove the ordering comes from the query, not the write order.
+		await recordEvent(client, { projectId: 'projectA', eventType: 'changed', description: 'Now on PostgreSQL', occurredAt: '2026-03-01T00:00:00.000Z' });
+		await recordEvent(client, { projectId: 'projectA', eventType: 'added', description: 'Adopted MongoDB', occurredAt: '2026-01-01T00:00:00.000Z' });
+		await recordEvent(client, { projectId: 'projectA', eventType: 'migrated', description: 'Moved to PostgreSQL', occurredAt: '2026-02-01T00:00:00.000Z' });
+
+		const events = await listEvents(client, 'projectA');
+
+		assert.deepStrictEqual(
+			events.map(event => event.description),
+			['Adopted MongoDB', 'Moved to PostgreSQL', 'Now on PostgreSQL'],
+			'ASC means the history reads oldest → newest'
+		);
+		assert.deepStrictEqual(
+			events.map(event => event.occurredAt),
+			['2026-01-01T00:00:00.000Z', '2026-02-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z'],
+			'timestamps are normalised ISO and monotonic'
+		);
+		assert.ok(events.every(event => event.projectId === 'projectA'));
+	});
+
+	test('listEvents keeps the earliest events when the limit truncates (§11.3)', async () => {
+		const client = new ChronologicalEventClient();
+		for (const [index, occurredAt] of [
+			'2026-01-01T00:00:00.000Z', '2026-02-01T00:00:00.000Z',
+			'2026-03-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z'
+		].entries()) {
+			await recordEvent(client, { projectId: 'projectA', eventType: 'changed', description: `event ${index}`, occurredAt });
+		}
+
+		const events = await listEvents(client, 'projectA', 2);
+		assert.deepStrictEqual(events.map(event => event.description), ['event 0', 'event 1']);
+		assert.deepStrictEqual(events.map(event => event.occurredAt), ['2026-01-01T00:00:00.000Z', '2026-02-01T00:00:00.000Z']);
 	});
 
 	test('validation rejects a missing project or empty decision/description (§6.12)', async () => {
