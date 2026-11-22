@@ -12,7 +12,7 @@
  */
 
 import type { WriteQueryable } from '../storage/write.js';
-import { PPB_EMBEDDING_DIM } from '../config.js';
+import { PPB_EMBEDDING_DIM, PPB_EMBEDDING_STORAGE } from '../config.js';
 import { HNSW_MAX_DIM } from '../storage/migrations/005_embedding_index.js';
 
 export type EmbeddingOwnerKind = 'fact' | 'decision' | 'event';
@@ -22,11 +22,19 @@ export type EmbeddingOwnerKind = 'fact' | 'decision' | 'event';
  * index. `halfvec` indexes up to 4000 dims, so when the pinned dim is wider we (a) build the
  * expression HNSW index in migration 007 and (b) order by the *identical* halfvec expression here so
  * the planner can use it. Below the limit we keep the plain `vector` operator from migration 005.
+ *
+ * Storage precision (OD-2): when `PPB_EMBEDDING_STORAGE=halfvec`, the column itself is half precision
+ * (2 bytes/dim), so both the write cast and the distance expression use `halfvec`.
  */
-const USE_HALFVEC = PPB_EMBEDDING_DIM > HNSW_MAX_DIM;
-/** Cosine-distance expression that matches the migration-007 expression index when it exists. */
+const STORE_HALFVEC = PPB_EMBEDDING_STORAGE === 'halfvec';
+const USE_HALFVEC_INDEX = PPB_EMBEDDING_DIM > HNSW_MAX_DIM;
+/** pgvector parameter/column type for the configured storage precision. */
+function vectorType(): string {
+	return STORE_HALFVEC ? `halfvec(${PPB_EMBEDDING_DIM})` : 'vector';
+}
+/** Cosine-distance expression matching the index that exists for the configured layout. */
 function distanceExpr(): string {
-	return USE_HALFVEC
+	return STORE_HALFVEC || USE_HALFVEC_INDEX
 		? `e.embedding::halfvec(${PPB_EMBEDDING_DIM}) <=> $1::halfvec(${PPB_EMBEDDING_DIM})`
 		: 'e.embedding <=> $1::vector';
 }
@@ -57,7 +65,7 @@ export async function upsertEmbedding(
 ): Promise<void> {
 	await client.query(
 		`INSERT INTO embeddings (owner_kind, owner_id, embedding, embedded_text, embedded_at)
-		 VALUES ($1, $2, $3::vector, $4, now())
+		 VALUES ($1, $2, $3::${vectorType()}, $4, now())
 		 ON CONFLICT (owner_kind, owner_id)
 		 DO UPDATE SET embedding = EXCLUDED.embedding, embedded_text = EXCLUDED.embedded_text, embedded_at = now()`,
 		[input.ownerKind, input.ownerId, toVectorLiteral(input.embedding), input.embeddedText]

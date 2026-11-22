@@ -14,7 +14,7 @@
  * through `owner_kind` (documented in docs/ppb/schema.md).
  */
 
-import { PPB_EMBEDDING_DIM } from '../../config.js';
+import { PPB_EMBEDDING_DIM, PPB_EMBEDDING_COLUMN_TYPE } from '../../config.js';
 
 export const version = '002_embeddings';
 
@@ -24,7 +24,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS embeddings (
 	owner_kind TEXT NOT NULL CHECK (owner_kind IN ('fact','decision','event')),
 	owner_id UUID NOT NULL,
-	embedding vector(${PPB_EMBEDDING_DIM}) NOT NULL,
+	embedding ${PPB_EMBEDDING_COLUMN_TYPE()} NOT NULL,
 	embedded_text TEXT NOT NULL,
 	embedded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	PRIMARY KEY (owner_kind, owner_id)

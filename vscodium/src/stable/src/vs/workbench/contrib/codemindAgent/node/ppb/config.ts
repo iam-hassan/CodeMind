@@ -49,6 +49,28 @@ export const PPB_EMBEDDING_MODEL = process.env.PPB_EMBED_MODEL ?? 'bge-m3';
 /** Must match the configured embedding model. Env-overridable so a deployment can pin its model (OD-2). */
 export const PPB_EMBEDDING_DIM = Number.parseInt(process.env.PPB_EMBEDDING_DIM ?? '', 10) || 1024;
 
+/**
+ * Physical precision of the stored embedding vector (OD-2, storage).
+ *
+ * `vector` stores float32 (4 bytes per dimension). `halfvec` stores half precision (2 bytes per
+ * dimension), halving the embedding footprint. Retrieval is unchanged: the distance is still
+ * cosine, and migration 007 already builds the HNSW index on `embedding::halfvec`, so half-precision
+ * storage only perturbs distances below the ranking order (see 007's note). Default `vector`
+ * preserves the original schema byte-for-byte; opt into the compact layout with
+ * `PPB_EMBEDDING_STORAGE=halfvec`.
+ */
+export type PpbEmbeddingStorage = 'vector' | 'halfvec';
+export const PPB_EMBEDDING_STORAGE: PpbEmbeddingStorage =
+	process.env.PPB_EMBEDDING_STORAGE === 'halfvec' ? 'halfvec' : 'vector';
+
+/** Bytes stored per embedding dimension for the configured precision (float32 vs half). */
+export const PPB_EMBEDDING_BYTES_PER_DIM = PPB_EMBEDDING_STORAGE === 'halfvec' ? 2 : 4;
+
+/** The pgvector column/parameter type for the configured storage precision. */
+export function PPB_EMBEDDING_COLUMN_TYPE(dim: number = PPB_EMBEDDING_DIM): string {
+	return PPB_EMBEDDING_STORAGE === 'halfvec' ? `halfvec(${dim})` : `vector(${dim})`;
+}
+
 /** Master feature gate. On by default: the brain is part of CodeMind now. Set
  * `CODEMIND_PPB_ENABLED=0` to turn it off entirely (zero behaviour change when off). */
 export function isPpbEnabled(env: PpbEnv = process.env): boolean {

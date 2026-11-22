@@ -15,6 +15,11 @@ import { formatInjectionBlock } from '../orchestration/injectionBlock.js';
 // Removed ProjectBrainTool import because it cannot be loaded cross-project in this mocha run
 const ProjectBrainTool: any = null;
 
+// Baseline the developer's real registry before any test runs (the launcher legitimately creates
+// it), so the guard below can tell "a test wrote the real file" apart from "it already existed".
+const REAL_REGISTRY_PATH = path.join(os.homedir(), '.codemind', 'projects.json');
+const REAL_REGISTRY_SNAPSHOT = fs.existsSync(REAL_REGISTRY_PATH) ? fs.readFileSync(REAL_REGISTRY_PATH, 'utf8') : null;
+
 suite('PPB › End-to-End', () => {
 	
 	let _tempRegistryDir: string;
@@ -183,9 +188,10 @@ suite('PPB › End-to-End', () => {
 	});
 
 	test('Guard: real registry file must not be modified or created', () => {
-		const realRegistryPath = path.join(os.homedir(), '.codemind', 'projects.json');
-		const exists = fs.existsSync(realRegistryPath);
-		assert.strictEqual(exists, false, 'The real ~/.codemind/projects.json was created by a test!');
+		const exists = fs.existsSync(REAL_REGISTRY_PATH);
+		const current = exists ? fs.readFileSync(REAL_REGISTRY_PATH, 'utf8') : null;
+		assert.strictEqual(exists, REAL_REGISTRY_SNAPSHOT !== null, 'A test created the real ~/.codemind/projects.json');
+		assert.strictEqual(current, REAL_REGISTRY_SNAPSHOT, 'A test modified the real ~/.codemind/projects.json');
 	});
 
 });
