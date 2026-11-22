@@ -19,6 +19,16 @@ function row(id: string, category: string, content: string): Record<string, unkn
 class FakeReadClient {
 	constructor(private readonly _memories: Map<string, Record<string, unknown>>, private readonly _vectorMatches: Array<Record<string, unknown>>) { }
 	async query(text: string, params: readonly unknown[] = []): Promise<{ rows: Array<Record<string, unknown>> }> {
+		// D55: per-candidate similarity lookup (batched).
+		if (text.includes('owner_id = ANY(')) {
+			const ids = new Set((params[2] ?? []).map(String));
+			return { rows: this._vectorMatches.filter(match => ids.has(String(match.owner_id))) };
+		}
+		// D54: batched memory load (`getFacts`).
+		if (text.includes('id = ANY(')) {
+			const ids = (params[1] ?? []).map(String);
+			return { rows: ids.map(id => this._memories.get(id)).filter((record): record is Record<string, unknown> => record !== undefined) };
+		}
 		if (text.includes('<=>')) {
 			return { rows: this._vectorMatches };
 		}

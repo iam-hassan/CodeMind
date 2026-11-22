@@ -36,8 +36,14 @@ export function formatInjectionBlock(
 	let injected = 0;
 
 	for (const fact of safeFacts) {
-		// Tokens roughly chars / 4
-		const line = `• ${fact.category.charAt(0).toUpperCase() + fact.category.slice(1)}: ${fact.content} (score ${fact.score.toFixed(2)})\n`;
+		// Tokens roughly chars / 4. D48: append provenance so "who/when" questions are answerable.
+		const date = fact.extractedAt ? fact.extractedAt.slice(0, 10) : 'unknown date';
+		const provenance = (fact.author || fact.extractedAt) ? ` — ${fact.author ?? 'unknown'}, ${date}` : '';
+		// D57: append graph impact edges so multi-hop "what is affected if X changes?" is answerable.
+		const related = Array.isArray(fact.related) && fact.related.length > 0
+			? ` (${fact.related.map(entry => `${entry.type}: ${entry.content}`).join('; ')})`
+			: '';
+		const line = `• ${fact.category.charAt(0).toUpperCase() + fact.category.slice(1)}: ${fact.content}${provenance}${related} (score ${fact.score.toFixed(2)})\n`;
 		const tokens = Math.ceil(line.length / 4);
 
 		if (currentTokens + tokens > budgetTokens) {

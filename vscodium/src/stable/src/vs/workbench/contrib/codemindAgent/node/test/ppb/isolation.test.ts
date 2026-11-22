@@ -26,6 +26,21 @@ class RelationalStore {
 
 	async query(text: string, params: readonly unknown[] = []): Promise<{ rows: Array<Record<string, unknown>> }> {
 		this.calls.push({ text, params });
+		// D55: per-candidate similarity lookup (batched), scoped by the id list.
+		if (text.includes('owner_id = ANY(')) {
+			const ids = new Set((params[2] ?? []).map(String));
+			return {
+				rows: this.embeddings
+					.filter(entry => ids.has(entry.owner_id))
+					.map(entry => ({ owner_id: entry.owner_id, owner_kind: entry.owner_kind, similarity: entry.similarity }))
+			};
+		}
+		// D54: batched memory load (`getFacts`), scoped by project AND the id list.
+		if (text.includes('id = ANY(')) {
+			const projectId = String(params[0]);
+			const ids = new Set((params[1] ?? []).map(String));
+			return { rows: this.memories.filter(memory => memory.project_id === projectId && ids.has(memory.id)) as unknown as Array<Record<string, unknown>> };
+		}
 		if (text.includes('<=>')) {
 			const projectId = String(params[1]);
 			return {

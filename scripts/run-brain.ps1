@@ -27,6 +27,13 @@ function Test-Port([int]$Port) {
 	return (Test-NetConnection -ComputerName '127.0.0.1' -Port $Port -WarningAction SilentlyContinue).TcpTestSucceeded
 }
 
+# Reads the host port out of a connection URL (postgres://, redis://, bolt://). Returns 0 when
+# the URL has no explicit port, so callers can tell "not specified" apart from a real value.
+function Get-UrlPort([string]$Url) {
+	if (-not $Url) { return 0 }
+	try { return ([Uri]$Url).Port } catch { return 0 }
+}
+
 # 1. Optional overrides from ppb.env (KEY=VALUE lines). By default the brain follows the provider
 #    configured in the CodeMind panel — model, endpoint and key — so this file is usually empty.
 if (Test-Path $envFile) {
@@ -46,6 +53,14 @@ if (-not $env:PPB_EMBEDDING_DIM)      { $env:PPB_EMBEDDING_DIM      = '2048' }
 if (-not $env:PPB_PG_URL)             { $env:PPB_PG_URL             = 'postgres://postgres:postgres@localhost:55432/codemind_ppb' }
 if (-not $env:PPB_NEO4J_URL)          { $env:PPB_NEO4J_URL          = 'bolt://localhost:57687' }
 if (-not $env:PPB_REDIS_URL)          { $env:PPB_REDIS_URL          = 'redis://localhost:56379' }
+
+# Keep the ports docker compose publishes in step with the URLs above. Without this, changing
+# PPB_PG_URL or PPB_REDIS_URL in ppb.env would move the client but leave the container bound to
+# the default port, and a port Windows has reserved (Hyper-V/WSL excluded ranges) would still
+# fail the bind. An explicit PPB_*_PORT always wins.
+if (-not $env:PPB_PG_PORT)         { $p = Get-UrlPort $env:PPB_PG_URL;         if ($p -gt 0) { $env:PPB_PG_PORT         = "$p" } }
+if (-not $env:PPB_REDIS_PORT)      { $p = Get-UrlPort $env:PPB_REDIS_URL;      if ($p -gt 0) { $env:PPB_REDIS_PORT      = "$p" } }
+if (-not $env:PPB_NEO4J_BOLT_PORT) { $p = Get-UrlPort $env:PPB_NEO4J_URL;      if ($p -gt 0) { $env:PPB_NEO4J_BOLT_PORT = "$p" } }
 # Ranked-result cache (IF-12). Set PPB_REDIS_CACHE=0 to bypass it; the TTL is a placeholder default.
 if (-not $env:PPB_REDIS_CACHE)        { $env:PPB_REDIS_CACHE        = '1' }
 if (-not $env:PPB_REDIS_CACHE_TTL_SECONDS) { $env:PPB_REDIS_CACHE_TTL_SECONDS = '60' }
@@ -64,6 +79,15 @@ try {
 	try {
 		Write-Host 'Starting PostgreSQL / Neo4j / Redis ...'
 		docker compose -f infra/ppb/docker-compose.yml up -d | Out-Host
+		if ($LASTEXITCODE -ne 0) {
+			Write-Host 'One or more Docker services did not start.' -ForegroundColor Yellow
+			Write-Host 'If the error says "ports are not available" or "forbidden by its access permissions",' -ForegroundColor Yellow
+			Write-Host 'Windows has reserved that TCP port for Hyper-V/WSL (the reservations move across' -ForegroundColor Yellow
+			Write-Host "reboots). Pick free ports in $envFile, for example:" -ForegroundColor Yellow
+			Write-Host '  PPB_PG_URL=postgres://postgres:postgres@localhost:54632/codemind_ppb' -ForegroundColor Yellow
+			Write-Host '  PPB_REDIS_URL=redis://localhost:56632' -ForegroundColor Yellow
+			Write-Host 'This launcher passes the ports from those URLs to docker compose, so both sides agree.' -ForegroundColor Yellow
+		}
 	} catch {
 		Write-Host "Could not start the Docker services ($($_.Exception.Message))." -ForegroundColor Yellow
 		Write-Host 'Start Docker Desktop and run this launcher again.' -ForegroundColor Yellow

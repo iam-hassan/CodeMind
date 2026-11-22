@@ -8,6 +8,8 @@ export interface RetrievedFact {
 
 export interface IProjectBrainRetriever {
 	retrieve(req: any): Promise<RetrievedFact[]>;
+	/** Optional: list the stored memories for a project (IF-11 read half). */
+	list?(projectId: string): Promise<Array<{ id: string; category?: string; content: string; status?: string; sourceRef?: string }>>;
 }
 
 export interface ISegmentSink {
@@ -47,7 +49,11 @@ export async function executeProjectBrainOperation(
 	}
 
 	if (input.operation === 'list') {
-		return { type: 'text', text: 'List operation not yet implemented.' };
+		if (typeof retriever.list === 'function') {
+			const memories = await retriever.list(projectId);
+			return { type: 'text', text: memories.length ? JSON.stringify(memories) : 'No memories stored for this project yet.' };
+		}
+		return { type: 'text', text: 'List operation not available.' };
 	}
 
 	return { type: 'text', text: 'Unknown operation.' };

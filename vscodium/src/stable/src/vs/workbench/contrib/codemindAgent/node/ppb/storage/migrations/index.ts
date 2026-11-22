@@ -19,6 +19,7 @@ import { down as seedDown, sql as seed, version as seedVersion } from './003_see
 import { down as writeDown, sql as writeSql, version as writeVersion } from './004_write_path.js';
 import { down as indexDown, sql as indexSql, version as indexVersion } from './005_embedding_index.js';
 import { down as relDown, sql as relSql, version as relVersion } from './006_relationships.js';
+import { down as halfvecDown, sql as halfvecSql, version as halfvecVersion } from './007_hnsw_halfvec.js';
 
 export interface PpbMigration {
 	readonly version: string;
@@ -33,5 +34,6 @@ export const PPB_MIGRATIONS: readonly PpbMigration[] = [
 	{ version: seedVersion, sql: seed, down: seedDown },
 	{ version: writeVersion, sql: writeSql, down: writeDown },
 	{ version: indexVersion, sql: indexSql, down: indexDown },
-	{ version: relVersion, sql: relSql, down: relDown }
+	{ version: relVersion, sql: relSql, down: relDown },
+	{ version: halfvecVersion, sql: halfvecSql, down: halfvecDown }
 ];

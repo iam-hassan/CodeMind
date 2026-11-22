@@ -65,6 +65,7 @@ import { GraphRepository } from './ppb/graph/graphRepo.js';
 import { createNeo4jDriver } from './ppb/storage/neo4j.js';
 import { createPgClient } from './ppb/storage/pg.js';
 import { registerProjectBrainTool, setProjectBrainRetrieverAdapter, type McpToolFactory, type ZodLike } from './ppb/tool.js';
+import { startPpbBridge, type PpbBridge } from './ppb/bridgeServer.js';
 import { createRetrievalCache, type RetrievalCache } from './ppb/storage/redis.js';
 import { redactJson } from './ppb/redact.js';
 
@@ -803,6 +804,9 @@ class CodeMindAgentEngineMainService extends Disposable {
 	 * itself is running against, captured from the panel's selection rather than a static value. */
 	private _ppbModelTarget: ExtractionTarget | undefined;
 	private _ppbMcpServer: unknown | undefined;
+	/** A7 — loopback bridge the spawned Claude Code CLI's ProjectBrainTool calls (see bridgeServer.ts). */
+	private _ppbBridge: PpbBridge | undefined;
+	private _ppbBridgeStarting = false;
 	private _sdkCreateMcpServer: unknown | undefined;
 	private _sdkTool: McpToolFactory | undefined;
 	private _sdkZod: ZodLike | undefined;
@@ -1377,6 +1381,14 @@ class CodeMindAgentEngineMainService extends Disposable {
 			env.CODEMIND_CURRENT_PROJECT_ID = this._currentProjectId;
 		}
 
+		// A7 — the canonical `ProjectBrainTool` runs in the spawned Claude Code CLI child, which
+		// cannot import the live PPB stack. Hand it the loopback bridge URL+token so its memory
+		// operations are served by the live stack. Absent means the child keeps its null backend.
+		if (this._ppbBridge) {
+			env.CODEMIND_PPB_BACKEND_URL = this._ppbBridge.url;
+			env.CODEMIND_PPB_BACKEND_TOKEN = this._ppbBridge.token;
+		}
+
 		// The SDK caps one assistant response at 32k tokens by default, which truncates long file writes
 		// and forces a manual "continue". There is no engine-side cap on input or cache tokens (the
 		// model's context window is the only limit). For output, set the ceiling to the model's real
@@ -1495,18 +1507,28 @@ class CodeMindAgentEngineMainService extends Disposable {
 				? new PpbExtractor({ client: createExtractionClient(target.baseUrl, target.model, target.apiKey ?? '', config.extractTimeoutMs) })
 				: undefined;
 			const stack = this._ensurePpbStack();
-			setSink(new PpbSegmentSink({
+			const sink = new PpbSegmentSink({
 				extractor,
 				write: stack?.read,
 				projector: stack?.graph,
+				preferences: stack?.graph,
 				embedder: stack ? createEmbeddingClient(config) : undefined,
 				cache: stack?.cache,
 				onEvent: (event) => this._onPpbSinkEvent(event)
-			}));
+			});
+			setSink(sink);
 			if (stack) {
 				// The real retriever replaces the NullRetriever used before the stack is live (M4/T09).
 				this._retriever = stack.retriever;
 				setProjectBrainRetrieverAdapter(stack.retriever);
+				// A7 — expose the live stack to the spawned CLI's ProjectBrainTool over loopback HTTP
+				// so its memory operations hit the live stack (it cannot import these modules).
+				if (!this._ppbBridge && !this._ppbBridgeStarting) {
+					this._ppbBridgeStarting = true;
+					startPpbBridge({ read: stack.read, graph: stack.graph, retriever: stack.retriever, sink })
+						.then(bridge => { this._ppbBridge = bridge; })
+						.catch(() => { this._ppbBridgeStarting = false; /* best-effort; in-process MCP tool remains */ });
+				}
 			}
 		} catch {
 			// Never block startup or a turn on PPB wiring.

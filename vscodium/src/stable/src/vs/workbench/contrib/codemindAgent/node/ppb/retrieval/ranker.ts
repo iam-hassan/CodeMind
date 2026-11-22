@@ -16,7 +16,14 @@ import type { MemoryCategory } from '../ontology.js';
 import type { RankingContextCarrier } from './rankerContext.js';
 import type { RetrievalCandidate } from './hybrid.js';
 
-/** The seven ranking signals (§16.2, preserve exactly). Each is normalized to [0,1]. */
+/**
+ * Ranking signals. The first seven are the §16.2 set (preserved exactly). `similarity` is added
+ * on top of them (benchmark deviation D47): the hybrid retriever already computes the vector
+ * cosine similarity for every semantic candidate (`RetrievalCandidate.similarity`), but the
+ * original seven-signal weighted sum never read it, so the only signal that knows the *meaning*
+ * of the query had zero weight and semantic matches could be evicted from the top-k by recency.
+ * Each signal is normalized to [0,1].
+ */
 export interface RankingSignals {
 	readonly recency: number;
 	readonly importance: number;
@@ -25,13 +32,22 @@ export interface RankingSignals {
 	readonly currentFile: number;
 	readonly developerIntent: number;
 	readonly projectModule: number;
+	/** Vector cosine similarity mapped to [0,1]; 0 when the candidate has no vector score (D47). */
+	readonly similarity: number;
+	/** Query-term overlap over content+provenance in [0,1]; 0 for non-lexical candidates (D51). */
+	readonly lexical: number;
 }
 
 export type RankingWeights = RankingSignals;
 
-/** Configurable — PLACEHOLDER defaults; Part 3 tunes via the exposed profile (T14). */
+/**
+ * Configurable defaults. `similarity` carries the highest weight because it is the only
+ * *relevance* signal here — the rest are recency/context priors. `lexical` is the keyword
+ * counterpart that recovers exact-token and provenance matches the vector path misses (D51).
+ * Weights remain adjustable through the published profile (T14). PLACEHOLDER values (D47/D51).
+ */
 export const DEFAULT_RANKING_WEIGHTS: RankingWeights = {
-	recency: 1, importance: 1, frequency: 1, currentTask: 1, currentFile: 1, developerIntent: 1, projectModule: 1
+	recency: 1, importance: 1, frequency: 1, currentTask: 1, currentFile: 1, developerIntent: 1, projectModule: 1, similarity: 3, lexical: 2
 };
 
 export interface RankingContext extends RankingContextCarrier {
@@ -80,7 +96,7 @@ function clamp01(value: number): number {
 	return Math.max(0, Math.min(1, value));
 }
 
-/** Compute the seven normalized signals for one candidate (§16.2/§16.3). */
+/** Compute the normalized signals for one candidate (§16.2/§16.3 + D47 similarity). */
 export function computeSignals(candidate: RetrievalCandidate, context: RankingContext, now: Date): RankingSignals {
 	const fact = candidate.fact;
 	const ageMs = Math.max(0, now.getTime() - new Date(fact.extractedAt).getTime());
@@ -92,7 +108,12 @@ export function computeSignals(candidate: RetrievalCandidate, context: RankingCo
 	const intentCategories = INTENT_CATEGORIES[(context.intent ?? '').toLowerCase()];
 	const developerIntent = intentCategories?.includes(fact.category) ? 1 : 0;
 	const projectModule = overlapRatio(tokenize(context.projectModule), fact.content);
-	return { recency, importance: clamp01(fact.importance), frequency, currentTask, currentFile, developerIntent, projectModule };
+	// D47: cosine similarity from the vector path, mapped [-1,1] → [0,1]. Graph-only candidates
+	// (no vector score) get 0 rather than a neutral 0.5 so they cannot outrank real semantic hits.
+	const similarity = candidate.similarity === undefined ? 0 : clamp01((candidate.similarity + 1) / 2);
+	// D51: lexical overlap from the keyword channel; 0 for candidates the vector path alone found.
+	const lexical = clamp01(candidate.lexical ?? 0);
+	return { recency, importance: clamp01(fact.importance), frequency, currentTask, currentFile, developerIntent, projectModule, similarity, lexical };
 }
 
 /**
@@ -113,7 +134,9 @@ export function rank(candidates: readonly RetrievalCandidate[], context: Ranking
 			weights.currentTask * signals.currentTask +
 			weights.currentFile * signals.currentFile +
 			weights.developerIntent * signals.developerIntent +
-			weights.projectModule * signals.projectModule;
+			weights.projectModule * signals.projectModule +
+			weights.similarity * signals.similarity +
+			weights.lexical * signals.lexical;
 		return { ...candidate, score: clamp01(weighted / weightSum), signals };
 	});
 

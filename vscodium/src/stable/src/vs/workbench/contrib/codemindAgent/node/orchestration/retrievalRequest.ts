@@ -25,6 +25,16 @@ export interface RetrievedFact {
 	category: 'decision' | 'pattern' | 'fact' | 'convention';
 	sourceRef?: string;
 	projectId: string;
+	/** Provenance (D48). Surfaced into the injection block so "who decided X / when" is answerable. */
+	author?: string;
+	extractedAt?: string;
+	/**
+	 * D57: graph impact edges incident to this memory ("depends on X" / "required by Y"), each
+	 * resolved to the related memory's content. Surfaced into the injection block so multi-hop
+	 * impact questions ("what is affected if X changes?") are answerable — the markdown view has no
+	 * edges to traverse at all.
+	 */
+	related?: Array<{ readonly type: string; readonly content: string }>;
 }
 
 export interface IProjectBrainRetriever {

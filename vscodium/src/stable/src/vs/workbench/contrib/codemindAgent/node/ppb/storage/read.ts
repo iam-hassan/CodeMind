@@ -111,3 +111,33 @@ export async function getFact(client: ReadQueryable, projectId: string, id: stri
 	);
 	return result.rows.length > 0 ? toMemory(result.rows[0]) : undefined;
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Project-scoped batch lookup by id, keyed by memory id. One round trip for a whole candidate pool
+ * (D54) instead of N sequential `getFact` calls. Ids that are not uuids — e.g. graph expansion
+ * returns the Project node and synthetic technology nodes — are skipped rather than aborting the
+ * query, because `id` is a uuid column and a non-uuid bind raises (§15).
+ */
+export async function getFacts(
+	client: ReadQueryable,
+	projectId: string,
+	ids: readonly string[]
+): Promise<Map<string, MemoryRecord>> {
+	const project = requireProject(projectId);
+	const out = new Map<string, MemoryRecord>();
+	const unique = [...new Set(ids)].filter(id => typeof id === 'string' && UUID_RE.test(id));
+	if (unique.length === 0) {
+		return out;
+	}
+	const result = await client.query(
+		`SELECT ${SELECT_COLUMNS} FROM memories WHERE project_id = $1 AND id = ANY($2::uuid[])`,
+		[project, unique]
+	);
+	for (const row of result.rows) {
+		const fact = toMemory(row);
+		out.set(fact.id, fact);
+	}
+	return out;
+}

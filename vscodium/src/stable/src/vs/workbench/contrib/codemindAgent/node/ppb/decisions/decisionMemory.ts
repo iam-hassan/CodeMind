@@ -182,6 +182,20 @@ export async function listDecisions(client: WriteQueryable, projectId: string, s
 }
 
 /**
+ * Project-scoped lookup by exact decision text. Used by the ingestion sink to avoid re-recording
+ * the same decision when a conversation turn is re-ingested (§10, idempotent intake). Returns the
+ * newest match, or `undefined`.
+ */
+export async function findDecisionByText(client: WriteQueryable, projectId: string, decision: string): Promise<DecisionRecord | undefined> {
+	const project = requireProject(projectId);
+	const result = await client.query(
+		`SELECT ${DECISION_COLUMNS} FROM decisions WHERE project_id = $1 AND decision = $2 ORDER BY created_at DESC LIMIT 1`,
+		[project, decision]
+	);
+	return result.rows.length > 0 ? toDecision(result.rows[0]) : undefined;
+}
+
+/**
  * Replace a decision with a newer one (§10.4/§13): the previous decision becomes `superseded` and
  * is linked to its replacement, which becomes the active decision. Nothing is deleted.
  */
@@ -223,6 +237,32 @@ export async function recordEvent(client: WriteQueryable, input: EventInput, opt
 	);
 	await queueOutbox(client, 'event_upsert', { eventId: id, projectId, eventType: input.eventType }, now);
 	return { id, projectId, eventType: input.eventType, description, occurredAt, sourceRef: input.sourceRef };
+}
+
+/**
+ * Project-scoped lookup by (type, description). Used by the ingestion sink to avoid re-recording the
+ * same event when a conversation turn is re-ingested (§11, idempotent intake). Returns the oldest
+ * match, or `undefined`.
+ */
+export async function findEventByDescription(client: WriteQueryable, projectId: string, eventType: EventType, description: string): Promise<EventRecord | undefined> {
+	const project = requireProject(projectId);
+	const result = await client.query(
+		`SELECT id, project_id, event_type, description, occurred_at, source_ref FROM events
+		 WHERE project_id = $1 AND event_type = $2 AND description = $3 ORDER BY occurred_at ASC LIMIT 1`,
+		[project, eventType, description]
+	);
+	if (result.rows.length === 0) {
+		return undefined;
+	}
+	const row = result.rows[0];
+	return {
+		id: String(row.id),
+		projectId: String(row.project_id),
+		eventType: String(row.event_type) as EventType,
+		description: String(row.description),
+		occurredAt: new Date(String(row.occurred_at)).toISOString(),
+		sourceRef: row.source_ref == null ? undefined : String(row.source_ref)
+	};
 }
 
 /** Project-scoped chronological listing (§11.3). */

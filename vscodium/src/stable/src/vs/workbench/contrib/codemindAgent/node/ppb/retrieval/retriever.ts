@@ -20,10 +20,10 @@
 
 import type { IProjectBrainRetriever, RetrievalRequest, RetrievedFact } from '../../orchestration/retrievalRequest.js';
 import type { EmbeddingClient } from '../embeddings/embedder.js';
-import type { GraphRepository } from '../graph/graphRepo.js';
+import type { GraphRelationship, GraphRepository } from '../graph/graphRepo.js';
 import type { MemoryCategory } from '../ontology.js';
 import { redact } from '../redact.js';
-import type { ReadQueryable } from '../storage/read.js';
+import { getFacts, type ReadQueryable } from '../storage/read.js';
 import { retrievalCacheSignature, type RetrievalCache } from '../storage/redis.js';
 import { hybridRetrieve } from './hybrid.js';
 import { rank, type RankingWeights } from './ranker.js';
@@ -79,6 +79,17 @@ export function applyTokenBudget(facts: readonly RetrievedFact[], maxTokenBudget
 	return kept;
 }
 
+/** Memory ids are uuids — the graph can also surface structural (non-uuid) nodes to skip. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Direction labels for the impact edges surfaced into the injection block (D57). */
+const RELATION_OUT_LABEL: Readonly<Record<string, string>> = {
+	DEPENDS_ON: 'depends on', AFFECTS: 'affects', USES: 'uses', HOSTED_ON: 'hosted on'
+};
+const RELATION_IN_LABEL: Readonly<Record<string, string>> = {
+	DEPENDS_ON: 'required by', AFFECTS: 'affected by', USES: 'used by', HOSTED_ON: 'hosts'
+};
+
 export interface RetrieverDeps {
 	readonly read: ReadQueryable;
 	readonly graph: GraphRepository;
@@ -123,7 +134,7 @@ export class PpbRetriever implements IProjectBrainRetriever {
 			signature = retrievalCacheSignature(req, this.weightProfile);
 			const cached = await this._cacheGet(cache, projectId, signature);
 			if (cached !== undefined) {
-				return cached;
+				return await this._withGlobalPreferences(projectId, cached);
 			}
 		}
 
@@ -140,27 +151,87 @@ export class PpbRetriever implements IProjectBrainRetriever {
 			}
 
 			const maxResults = Number((req as { maxResults?: unknown }).maxResults) || this._profile.topK;
-			const candidates = await hybridRetrieve(this._deps, projectId, queryEmbedding, { maxResults });
+			const candidates = await hybridRetrieve(this._deps, projectId, queryEmbedding, { maxResults, queryText: typeof query === 'string' ? query : undefined });
 			const ranked = rank(candidates, {
 				intent: (req as { intent?: string }).intent,
 				openFiles: (req as { openFiles?: readonly string[] }).openFiles,
 				currentTask: typeof query === 'string' ? query : undefined
 			}, { weights: this._profile.weights, topK: maxResults });
 
+			// D57 — resolve the graph impact edges of the ranked memories into related content so
+			// multi-hop "what is affected if X changes?" questions are answerable. Best-effort.
+			const relatedById = await this._related(projectId, ranked.map(entry => entry.fact.id));
+
 			// §8 — redact credential-shaped content before it can be cached or injected.
-			const mapped = ranked.map(entry => ({
-				id: entry.fact.id,
-				content: redact(entry.fact.content),
-				score: entry.score,
-				category: CATEGORY_TO_RETRIEVED[entry.fact.category],
-				sourceRef: entry.fact.sourceRef,
-				projectId
-			}));
+			const mapped = ranked.map(entry => {
+				const related = relatedById.get(entry.fact.id);
+				return {
+					id: entry.fact.id,
+					content: redact(entry.fact.content),
+					score: entry.score,
+					category: CATEGORY_TO_RETRIEVED[entry.fact.category],
+					sourceRef: entry.fact.sourceRef,
+					projectId,
+					author: entry.fact.author,
+					extractedAt: entry.fact.extractedAt,
+					...(related && related.length > 0 ? { related } : {})
+				};
+			});
 			const result = applyTokenBudget(mapped, (req as { maxTokenBudget?: unknown }).maxTokenBudget);
 			if (cache && signature) {
 				await this._cacheSet(cache, projectId, signature, result);
 			}
-			return result;
+			return await this._withGlobalPreferences(projectId, result);
+		} catch {
+			return [];
+		}
+	}
+
+	/**
+	 * §6.6 — global developer preferences are available in **every** project. They are read from the
+	 * shared `Preference` store (never from this project's `memories`, so they never appear in
+	 * project-scoped knowledge) and prepended so they always reach the injection block. Best-effort:
+	 * a graph without `retrievePreferences` is skipped and any failure degrades to no globals.
+	 */
+	private async _withGlobalPreferences(projectId: string, facts: RetrievedFact[]): Promise<RetrievedFact[]> {
+		const globals = await this._globalPreferences(projectId);
+		if (globals.length === 0) {
+			return facts;
+		}
+		const seen = new Set(globals.map(fact => fact.id));
+		return [...globals, ...facts.filter(fact => !seen.has(fact.id))];
+	}
+
+	private async _globalPreferences(projectId: string): Promise<RetrievedFact[]> {
+		const graph = this._deps.graph as GraphRepository & {
+			retrievePreferences?: (projectId: string) => Promise<Array<{ id: string; properties?: Record<string, unknown> }>>;
+		};
+		if (typeof graph.retrievePreferences !== 'function') {
+			return [];
+		}
+		try {
+			const nodes = await graph.retrievePreferences(projectId);
+			const out: RetrievedFact[] = [];
+			for (const node of nodes) {
+				const props = node.properties ?? {};
+				if (props.scope !== 'global') {
+					continue;
+				}
+				const text = typeof props.content === 'string' ? props.content
+					: (typeof props.description === 'string' ? props.description : '');
+				if (text.length === 0) {
+					continue;
+				}
+				out.push({
+					id: String(node.id),
+					content: redact(`(global preference) ${text}`),
+					score: 1,
+					category: 'convention',
+					projectId,
+					sourceRef: 'global-preference'
+				});
+			}
+			return out;
 		} catch {
 			return [];
 		}
@@ -185,5 +256,66 @@ export class PpbRetriever implements IProjectBrainRetriever {
 		} catch {
 			/* cache writes are best-effort (§9.4) */
 		}
+	}
+
+	/**
+	 * D57 — map each ranked memory id to the content of the impact-related memories it points at
+	 * (outgoing) or that point at it (incoming). One graph query for the whole ranked set plus one
+	 * batched read of the neighbour contents. Every failure degrades to "no relations" and never
+	 * breaks retrieval (§24). A graph implementation without `relationshipsForSeeds` is skipped, so
+	 * lightweight test doubles keep working.
+	 */
+	private async _related(projectId: string, ids: readonly string[]): Promise<Map<string, Array<{ type: string; content: string }>>> {
+		const out = new Map<string, Array<{ type: string; content: string }>>();
+		const graph = this._deps.graph as GraphRepository & {
+			relationshipsForSeeds?: (projectId: string, seedIds: readonly string[]) => Promise<GraphRelationship[]>;
+		};
+		if (typeof graph.relationshipsForSeeds !== 'function') {
+			return out;
+		}
+		const seedIds = ids.filter(id => UUID_RE.test(id));
+		if (seedIds.length === 0) {
+			return out;
+		}
+		try {
+			const relationships = await graph.relationshipsForSeeds(projectId, seedIds);
+			if (relationships.length === 0) {
+				return out;
+			}
+			const neighbourIds = [...new Set(relationships.flatMap(rel => [rel.fromId, rel.toId]))].filter(id => UUID_RE.test(id));
+			const loaded = await getFacts(this._deps.read, projectId, neighbourIds);
+			const contentOf = (id: string): string | undefined => loaded.get(id)?.content;
+
+			const perFact = new Map<string, Array<{ type: string; content: string }>>();
+			const push = (owner: string, other: string, label: (type: string) => string, type: string): void => {
+				const text = contentOf(other);
+				if (!text) {
+					return;
+				}
+				const list = perFact.get(owner) ?? [];
+				list.push({ type: label(type), content: redact(text) });
+				perFact.set(owner, list);
+			};
+			for (const rel of relationships) {
+				push(rel.fromId, rel.toId, type => RELATION_OUT_LABEL[type] ?? type.toLowerCase(), rel.type);
+				push(rel.toId, rel.fromId, type => RELATION_IN_LABEL[type] ?? `incoming ${type.toLowerCase()}`, rel.type);
+			}
+			// Deterministic order + de-duplication so the injected block is stable across runs.
+			for (const [id, list] of perFact) {
+				if (!seedIds.includes(id)) {
+					continue;
+				}
+				const seen = new Set<string>();
+				const unique = list
+					.filter(entry => { const key = `${entry.type}|${entry.content}`; if (seen.has(key)) { return false; } seen.add(key); return true; })
+					.sort((a, b) => a.type.localeCompare(b.type) || a.content.localeCompare(b.content));
+				if (unique.length > 0) {
+					out.set(id, unique);
+				}
+			}
+		} catch {
+			/* relations are best-effort (§24) */
+		}
+		return out;
 	}
 }

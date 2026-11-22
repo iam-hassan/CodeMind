@@ -48,8 +48,11 @@ suite('PPB migrations (spec §9)', () => {
 		assert.deepStrictEqual(versions, [...versions].sort());
 		for (const migration of PPB_MIGRATIONS) {
 			assert.ok(migration.version.length > 0);
+			// A migration may be a documented no-op when its feature does not apply to the configured
+			// deployment (e.g. 007_hnsw_halfvec when the pinned dim <= 2000, where 005's vector index
+			// already applies).
 			assert.ok(
-				migration.sql.includes('CREATE TABLE') || migration.sql.includes('CREATE EXTENSION') || migration.sql.includes('CREATE INDEX'),
+				migration.sql.includes('CREATE TABLE') || migration.sql.includes('CREATE EXTENSION') || migration.sql.includes('CREATE INDEX') || migration.sql.includes('SELECT 1'),
 				`up SQL missing for ${migration.version}`
 			);
 			assert.ok(migration.down.includes('DROP TABLE') || migration.down.includes('DROP INDEX'), `down SQL missing for ${migration.version}`);

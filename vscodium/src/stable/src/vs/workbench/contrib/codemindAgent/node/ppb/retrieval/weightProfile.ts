@@ -14,9 +14,11 @@
 
 import { DEFAULT_RANKING_WEIGHTS, type RankingSignals, type RankingWeights } from './ranker.js';
 
-/** The seven signal names in profile order (§16.2, preserve exactly). */
+/**
+ * Signal names in profile order: the seven §16.2 signals plus `similarity` (D47) and `lexical` (D51).
+ */
 export const RANKING_SIGNAL_NAMES: readonly (keyof RankingSignals)[] = [
-	'recency', 'importance', 'frequency', 'currentTask', 'currentFile', 'developerIntent', 'projectModule'
+	'recency', 'importance', 'frequency', 'currentTask', 'currentFile', 'developerIntent', 'projectModule', 'similarity', 'lexical'
 ];
 
 export interface RankingWeightProfile {
@@ -27,8 +29,8 @@ export interface RankingWeightProfile {
 	readonly topK: number;
 }
 
-/** Bumped when the published shape changes (§33). */
-export const WEIGHT_PROFILE_VERSION = '1.0.0';
+/** Bumped when the published shape changes (§33). 1.1.0 adds the `similarity` signal (D47). */
+export const WEIGHT_PROFILE_VERSION = '1.1.0';
 
 export const DEFAULT_TOP_K = 8;
 

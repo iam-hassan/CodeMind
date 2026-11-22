@@ -45,7 +45,7 @@ export interface DedupOptions {
 export const DEFAULT_SIMILARITY_THRESHOLD = 0.92;
 
 /** Replacement language suggesting an intentional change of prior knowledge (§8.7, §12.3–§12.5). */
-const REPLACEMENT_PATTERN = /\b(switch|switching|switched|migrat(?:e|ed|ing)|replac(?:e|ed|ing)|chang(?:e|ed|ing)|instead of|no longer|dropped?|mov(?:e|ed|ing))\b/i;
+const REPLACEMENT_PATTERN = /\b(switch|switching|switched|migrat(?:e|ed|ing)|replac(?:e|ed|ing)|chang(?:e|ed|ing)|instead of|no longer|dropped?|mov(?:e|ed|ing)|abandon(?:ed|ing)?|previously|used to|decommission(?:ed)?|retir(?:e|ed)|discontinu(?:e|ed)|superseded|phased out)\b/i;
 
 /** Additive language suggesting new detail rather than a change (the "added endpoint" case, §12.3). */
 const ADDITIVE_PATTERN = /\b(add(?:ed|ing)?|also|new(?:ly)?|introduc(?:e|ed|ing)|another)\b/i;
@@ -53,6 +53,48 @@ const ADDITIVE_PATTERN = /\b(add(?:ed|ing)?|also|new(?:ly)?|introduc(?:e|ed|ing)
 /** Normalised content for exact comparison — case- and whitespace-insensitive (§8.3). */
 export function normaliseContent(text: string): string {
 	return text.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+// ── Subject matching (§8.4/§12.3) ─────────────────────────────────────────────
+//
+// Dedup and conflict detection both need to know whether two statements are about the *same thing*.
+// With no embedding model, content-word overlap is the stand-in (D51). A change to the caching layer
+// shares "redis"/"caching" with the caching memory and must be treated as a contradiction; it shares
+// nothing with the persistence memory and must not touch it.
+const SUBJECT_STOPWORDS = new Set([
+	'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'for', 'of', 'to', 'in',
+	'on', 'at', 'by', 'with', 'and', 'or', 'that', 'this', 'it', 'its', 'as', 'we', 'our', 'project',
+	'use', 'uses', 'used', 'using', 'must', 'should', 'will', 'can', 'code', 'new', 'now'
+]);
+
+/** Content words of a statement (lowercase, punctuation-stripped, stopwords removed). */
+export function contentTokens(text: string): Set<string> {
+	return new Set(
+		(text.toLowerCase().match(/[a-z0-9][a-z0-9_+-]*/g) ?? [])
+			.filter(token => token.length >= 2 && !SUBJECT_STOPWORDS.has(token))
+	);
+}
+
+/** True when two statements share at least one content word — i.e. they are about the same subject. */
+export function sharesSubject(a: string, b: string): boolean {
+	return contentTokens(a).size > 0 && [...contentTokens(b)].some(token => contentTokens(a).has(token));
+}
+
+/** Jaccard similarity over content-word sets — 1 means the same words, 0 means none shared. */
+export function lexicalSimilarity(a: string, b: string): number {
+	const left = contentTokens(a);
+	const right = contentTokens(b);
+	if (left.size === 0 || right.size === 0) {
+		return 0;
+	}
+	let intersection = 0;
+	for (const token of left) {
+		if (right.has(token)) {
+			intersection++;
+		}
+	}
+	const union = left.size + right.size - intersection;
+	return union === 0 ? 0 : intersection / union;
 }
 
 /** Candidate set for dedup/conflict — same project, same category, active knowledge (§8.2/§8.6). */

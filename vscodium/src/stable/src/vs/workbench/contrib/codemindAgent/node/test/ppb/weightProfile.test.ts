@@ -27,6 +27,16 @@ function memoryRow(id: string, content: string, importance: number, extractedAt:
 class FakeReadClient {
 	constructor(private readonly _rows: Map<string, Record<string, unknown>>) { }
 	async query(text: string, params: readonly unknown[] = []): Promise<{ rows: Array<Record<string, unknown>> }> {
+		// D55: per-candidate similarity lookup (batched).
+		if (text.includes('owner_id = ANY(')) {
+			const ids = new Set((params[2] ?? []).map(String));
+			return { rows: [...this._rows.values()].filter(row => ids.has(String(row.id))).map(row => ({ owner_id: row.id, owner_kind: 'fact', similarity: 0.9 })) };
+		}
+		// D54: batched memory load (`getFacts`).
+		if (text.includes('id = ANY(')) {
+			const ids = (params[1] ?? []).map(String);
+			return { rows: ids.map(id => this._rows.get(id)).filter((row): row is Record<string, unknown> => row !== undefined) };
+		}
 		if (text.includes('<=>')) {
 			return { rows: [...this._rows.values()].map((row, index) => ({ owner_id: row.id, owner_kind: 'fact', similarity: 0.9 - index * 0.1 })) };
 		}
@@ -94,11 +104,14 @@ suite('PPB ranking weight profile (P1-T14, spec §16.7)', () => {
 		const retriever = new PpbRetriever({ read: new FakeReadClient(rows), graph, embedding });
 		const request: RetrievalRequest = { projectId: 'projectA', query: 'store', intent: 'architecture', openFiles: [], recentTurns: [], maxResults: 5, maxTokenBudget: 2000 };
 
-		retriever.configureWeights({ recency: 0, importance: 1, frequency: 0, currentTask: 0, currentFile: 0, developerIntent: 0, projectModule: 0 });
+		// Isolate the signal under test: zero every other weight, including the ones added after this
+		// test was written (D47 `similarity`, D51 `lexical`), so ordering is controlled solely by
+		// importance / recency.
+		retriever.configureWeights({ recency: 0, importance: 1, frequency: 0, currentTask: 0, currentFile: 0, developerIntent: 0, projectModule: 0, similarity: 0, lexical: 0 });
 		const byImportance = await retriever.retrieve(request);
 		assert.strictEqual(byImportance[0].id, 'important');
 
-		retriever.configureWeights({ recency: 1, importance: 0, frequency: 0, currentTask: 0, currentFile: 0, developerIntent: 0, projectModule: 0 });
+		retriever.configureWeights({ recency: 1, importance: 0, frequency: 0, currentTask: 0, currentFile: 0, developerIntent: 0, projectModule: 0, similarity: 0, lexical: 0 });
 		const byRecency = await retriever.retrieve(request);
 		assert.strictEqual(byRecency[0].id, 'recent', 'the tunable profile changes which memory ranks first');
 	});

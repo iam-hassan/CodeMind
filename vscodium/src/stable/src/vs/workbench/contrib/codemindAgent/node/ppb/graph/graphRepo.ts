@@ -88,6 +88,12 @@ export interface ExpansionOptions {
 	readonly relationshipTypes?: readonly GraphRelationshipType[];
 }
 
+/** D57 — typed relationship lookup for a set of seed memories. */
+export interface SeedRelationshipOptions {
+	/** Defaults to the §6.8 impact set. */
+	readonly types?: readonly GraphRelationshipType[];
+}
+
 /** §6.8 — the relationship types impact analysis traverses. */
 const IMPACT_RELATIONSHIPS: readonly GraphRelationshipType[] = ['DEPENDS_ON', 'AFFECTS', 'USES', 'HOSTED_ON'];
 
@@ -379,10 +385,52 @@ export class GraphRepository {
 	}
 
 	/**
+	 * §6.8 — typed relationships incident to a set of seed memories, in one query (D57).
+	 *
+	 * Retrieval already expands one hop to pull neighbours in as candidates; this returns the *typed
+	 * edge* itself so the injected context can state "X depends on Y" rather than leaving the model
+	 * to infer why two facts are adjacent. Defaults to the §6.8 impact set (DEPENDS_ON | AFFECTS |
+	 * USES | HOSTED_ON) — the same relationships `impactAnalysis` traverses.
+	 */
+	async relationshipsForSeeds(projectId: string, seedIds: readonly string[], options: SeedRelationshipOptions = {}): Promise<GraphRelationship[]> {
+		const project = GraphRepository._requireProject(projectId);
+		if (seedIds.length === 0) {
+			return [];
+		}
+		const types = options.types ?? IMPACT_RELATIONSHIPS;
+		for (const type of types) {
+			GraphRepository._requireRelationshipType(type);
+		}
+		const relPattern = types.map(type => `\`${type}\``).join('|');
+		return this._run(async session => {
+			const result = await session.run(
+				`MATCH (n {projectId: $projectId})-[r:${relPattern}]-(m {projectId: $projectId})
+				 WHERE n.id IN $seedIds
+				 RETURN type(r) AS relType, startNode(r).id AS fromId, endNode(r).id AS toId, r AS rel`,
+				{ projectId: project, seedIds: [...seedIds] }
+			);
+			const relationships: GraphRelationship[] = [];
+			for (const record of result.records) {
+				const relType = String(record.get('relType') ?? '');
+				if (!(GRAPH_RELATIONSHIP_TYPES as readonly string[]).includes(relType)) {
+					continue;
+				}
+				const rel = record.get('rel') as { properties?: Record<string, unknown> } | undefined;
+				relationships.push({
+					type: relType as GraphRelationshipType,
+					fromId: String(record.get('fromId') ?? ''),
+					toId: String(record.get('toId') ?? ''),
+					properties: rel?.properties ?? {}
+				});
+			}
+			return relationships;
+		});
+	}
+
+	/**
 	 * §6.8 historical traversal — the SUPERSEDES chain (either direction) and the rejected
 	 * alternatives reachable from a Decision/Event node (§13/§17).
-	 */
-	async history(projectId: string, id: string): Promise<{ chain: GraphNode[]; rejected: GraphNode[] }> {
+	 */	async history(projectId: string, id: string): Promise<{ chain: GraphNode[]; rejected: GraphNode[] }> {
 		const project = GraphRepository._requireProject(projectId);
 		return this._run(async session => {
 			const chainResult = await session.run(
