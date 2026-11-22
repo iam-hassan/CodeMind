@@ -98,21 +98,22 @@
 	 * that moving a step moves everything derived from it.
 	 * --------------------------------------------------------------------------------- */
 
-	/* Text sizes. 13px is the panel's reading size, 11px its secondary labels, 10px its
-	   smallest metadata, 12px the size code is set at. */
+	/* Text sizes. 13px is the panel's reading size, 11px its secondary labels and its
+	   smallest readable metadata, 12px the size code is set at. Nothing a user reads is
+	   smaller than 11px; the two tokens below 11px are disclosure-triangle glyphs only. */
 	--cm-text-base: 13px;
 	--cm-text-sm: 11px;
-	--cm-text-xs: 10px;
+	--cm-text-xs: 11px;
 	--cm-text-code: 12px;
 	--cm-text-title: calc(var(--cm-text-base) + var(--cm-space-1));   /* 17px — the empty state's headline is the one place that outranks body text */
 	--cm-text-modal: calc(var(--cm-text-base) + 3px);                 /* 16px — a modal's own heading */
 	--cm-text-panel: calc(var(--cm-text-base) + 2px);                 /* 15px — a panel window's heading, one step under a modal's */
 	--cm-text-code-lg: calc(var(--cm-text-code) + 0.5px);             /* 12.5px — a question prompt is code-sized but reads as prose, so it takes half a step more */
 	--cm-text-sm-lg: calc(var(--cm-text-sm) + 0.5px);                 /* 11.5px — half a step over a label, for rows that carry file paths */
-	--cm-text-xs-lg: calc(var(--cm-text-xs) + 0.5px);                 /* 10.5px — half a step over metadata, for chips that must stay legible */
-	--cm-text-2xs: calc(var(--cm-text-xs) - 0.5px);                   /* 9.5px — half a step under metadata */
-	--cm-text-3xs: calc(var(--cm-text-xs) - 1px);                     /* 9px — the smallest thing on screen: a disclosure triangle, a dot's label */
-	--cm-text-4xs: calc(var(--cm-text-xs) - 2px);                     /* 8px — a reasoning row's triangle, which is a hint rather than a glyph to read */
+	--cm-text-xs-lg: calc(var(--cm-text-xs) + 0.5px);                 /* 11.5px — half a step over metadata, for chips that must stay legible */
+	--cm-text-2xs: var(--cm-text-sm);                                 /* 11px — the readable floor, kept as a name so dense chips share it */
+	--cm-text-3xs: calc(var(--cm-text-xs) - 1px);                     /* 10px — disclosure-triangle glyph only */
+	--cm-text-4xs: calc(var(--cm-text-xs) - 2px);                     /* 9px — a reasoning row's triangle, a hint rather than text to read */
 
 	/* Line heights. Unitless, so they scale with whatever font size they land on. */
 	--cm-lh-base: 1.55;
@@ -173,18 +174,20 @@
 
 	/* Radii. */
 	--cm-radius-sm: 6px;
-	--cm-radius-md: 10px;
-	--cm-radius-pill: 100px;                                          /* a pill only needs a radius past half its height; nothing here is 200px tall */
+	--cm-radius-md: 8px;                                              /* cards — one step above a chip */
+	--cm-radius-pill: 6px;                                            /* chips and pills sit in the 4-6 chip band; nothing exceeds 8 */
 	--cm-radius-2px: calc(var(--cm-radius-sm) - 4px);                 /* 2px */
 	--cm-radius-3px: calc(var(--cm-radius-sm) - 3px);                 /* 3px */
 	--cm-radius-4px: calc(var(--cm-radius-sm) - 2px);                 /* 4px */
 	--cm-radius-5px: calc(var(--cm-radius-sm) - 1px);                 /* 5px */
 	--cm-radius-7px: calc(var(--cm-radius-sm) + 1px);                 /* 7px */
 	--cm-radius-8px: calc(var(--cm-radius-sm) + 2px);                 /* 8px */
-	--cm-radius-9px: calc(var(--cm-radius-md) - 1px);                 /* 9px */
-	--cm-radius-12px: calc(var(--cm-radius-md) + 2px);                /* 12px */
-	--cm-radius-14px: calc(var(--cm-radius-md) + var(--cm-space-1));  /* 14px */
-	--cm-radius: var(--cm-radius-12px);                               /* the original name, kept so the message bubble keeps reading well */
+	/* The old sheet's larger corners (modals, reasoning panels) are clamped to the
+	   8px ceiling of the design system rather than kept at 9-14px. */
+	--cm-radius-9px: var(--cm-radius-8px);
+	--cm-radius-12px: var(--cm-radius-8px);
+	--cm-radius-14px: var(--cm-radius-8px);
+	--cm-radius: var(--cm-radius-8px);                                /* the original name now resolves to the ceiling */
 
 	/* Motion. Fast is a press, base is a state change, slow is something opening. */
 	--cm-duration-fast: 80ms;
@@ -239,6 +242,37 @@
 	--cm-tok-num: var(--vscode-debugTokenExpression-number, var(--cm-warning));
 	--cm-tok-kw: var(--vscode-symbolIcon-keywordForeground, var(--cm-accent));
 	--cm-tok-fn: var(--vscode-symbolIcon-functionForeground, var(--cm-link));
+
+	/* ---------------------------------------------------------------------------------
+	 * Constellation identity (Section 11). Two accent voices sit *beside* the functional
+	 * palette above, not on top of it. Neither replaces --cm-accent — that is still the
+	 * theme's own link/focus blue for links, the user bubble and focus. These two are
+	 * reserved for the memory mechanism:
+	 *
+	 *   --cm-signal  the cool teal a *recalled / persisted* fact takes when the brain
+	 *                hands knowledge back into a turn. The one colour that makes the
+	 *                graph read as its own thing rather than as another blue.
+	 *   --cm-agent   the warm amber of the *live turn* and Aristotle. A distinct warm
+	 *                voice so the pet and the running turn never share the graph's
+	 *                colour, nor the theme's warning orange (--cm-warning).
+	 *
+	 * Both are derived, never literal, so the high-contrast collapse below and the light
+	 * deepening one section further undo them exactly like the four desc weights above.
+	 * `--cm-node` is the graph's dot and reuses the signal; `--cm-edge` and
+	 * `--cm-ground-veil` are the linework and the faint ground it rests on, and both are
+	 * decorative — every element that uses them is aria-hidden, so they carry no
+	 * contrast requirement and are removed in high-contrast themes.
+	 * --------------------------------------------------------------------------------- */
+	--cm-signal: var(--vscode-terminal-ansiCyan, color-mix(in srgb, var(--cm-accent) 50%, var(--cm-success) 50%));
+	--cm-signal-muted: color-mix(in srgb, var(--cm-signal) 45%, transparent);
+	--cm-agent: var(--vscode-terminal-ansiYellow, var(--cm-warning));
+	--cm-agent-muted: color-mix(in srgb, var(--cm-agent) 45%, transparent);
+	--cm-node: var(--cm-signal);
+	--cm-edge: color-mix(in srgb, var(--cm-fg) 24%, transparent);
+	--cm-ground-veil: color-mix(in srgb, var(--cm-fg) 2%, transparent);
+	/* The micro-mono voice: the same source the code blocks already use, under one name so
+	   the small readout labels (counts, paths, statuses) stay in step with code. */
+	--cm-mono: var(--vscode-editor-font-family, 'SF Mono', Monaco, Consolas, 'Cascadia Mono', monospace);
 }
 
 /* ---------- Theme-conditional tokens ----------
@@ -252,6 +286,12 @@
    against for no accessibility gain. */
 body.vscode-light {
 	--cm-error-fg: var(--vscode-gitDecoration-deletedResourceForeground, var(--vscode-editorError-foreground, var(--vscode-errorForeground)));
+	/* Constellation: `terminal.ansiCyan` is tuned against a terminal ground, so in a light
+	   theme it lands near 3:1 — a fine line, but the signal also labels small "recalled"
+	   chips, which need AA text contrast. Deepen it toward the foreground (dark in light
+	   themes), the same move the error token makes one line above. `--cm-signal-muted` and
+	   `--cm-node` read `var(--cm-signal)`, so they deepen with it. */
+	--cm-signal: color-mix(in srgb, var(--vscode-terminal-ansiCyan, color-mix(in srgb, var(--cm-accent) 50%, var(--cm-success) 50%)) 55%, var(--cm-fg) 45%);
 }
 
 /* The high-contrast themes are the one place where `descriptionForeground` is itself
@@ -277,6 +317,17 @@ body.vscode-high-contrast-light {
 	   apply here. Both weights take the background as the theme set it. */
 	--cm-badge-bg-rest: var(--cm-badge-bg);
 	--cm-badge-bg-hover: var(--cm-badge-bg);
+	/* Constellation: a high-contrast theme's premise is that nothing recedes, so the two
+	   identity accents collapse to the theme's own contrast border rather than holding a
+	   decorative hue, the muted weights are made solid so they never double-fade a colour the
+	   theme has already set exact, and the decorative graph linework disappears — a hairline
+	   at 24% foreground is precisely the receding wash this theme exists to forbid. */
+	--cm-signal: var(--vscode-contrastActiveBorder, var(--cm-fg));
+	--cm-agent: var(--vscode-contrastActiveBorder, var(--cm-fg));
+	--cm-signal-muted: var(--cm-signal);
+	--cm-agent-muted: var(--cm-agent);
+	--cm-edge: transparent;
+	--cm-ground-veil: transparent;
 }
 
 /* With both weights equal the two composer pills would lose their hover feedback, so they take
@@ -548,6 +599,34 @@ body {
 	text-align: center;
 	color: var(--cm-desc);
 	min-height: var(--cm-vh-panel);
+	/* The constellation texture sits behind the welcome copy. `isolation` keeps the
+	   z-index:-1 layer inside this box rather than dropping it behind the panel. */
+	position: relative;
+	isolation: isolate;
+	overflow: hidden;
+}
+
+/* The faint node/edge field behind the welcome copy (Section 11). Decorative and
+   aria-hidden: it is drawn in --cm-edge, which the high-contrast themes set to
+   transparent, so it vanishes exactly where nothing may recede. */
+.constellation-bg {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	z-index: -1;
+	pointer-events: none;
+	opacity: 0.55;
+}
+
+.constellation-bg .constellation-lines {
+	stroke: var(--cm-edge);
+	stroke-width: 1;
+	fill: none;
+}
+
+.constellation-bg .constellation-nodes {
+	fill: var(--cm-edge);
 }
 
 .empty-state .logo-mark {
@@ -2401,8 +2480,16 @@ body.plan-mode .composer {
 	height: 100%;
 	width: 0;
 	border-radius: var(--cm-radius-2px);
-	background: var(--cm-accent);
+	/* The healthy fill is the constellation signal: pressure drawn as a trace. */
+	background: var(--cm-signal);
 	transition: width var(--cm-duration-slide) ease-out;
+}
+
+/* The meter's number reads as an instrument, so it takes the micro-mono voice and
+   tabular figures the way a readout does. */
+.context-text {
+	font-family: var(--cm-mono);
+	font-variant-numeric: tabular-nums;
 }
 
 .context-meter.is-warning {
@@ -3377,7 +3464,7 @@ body.plan-mode .composer {
 	border-radius: 50%;
 	background: var(--vscode-badge-background);
 	color: var(--vscode-badge-foreground);
-	font-size: 9px;
+	font-size: 11px;
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -3393,7 +3480,7 @@ body.plan-mode .composer {
 	margin-top: 2px;
 }
 .cm-trace-io-label {
-	font-size: 9px;
+	font-size: 11px;
 	font-weight: 600;
 	letter-spacing: 0.08em;
 	color: var(--vscode-descriptionForeground);
@@ -3844,4 +3931,686 @@ body.vscode-high-contrast-light .vim-indicator[data-mode="visual"] { border-colo
 
 .hidden {
 	display: none !important;
+}
+
+/* =============================================================================
+ * Constellation — main agent surface
+ * The graph is not wallpaper: it appears only as the transcript's quiet event rail
+ * and the first-run empty-state diagram. Controls stay native and theme-led.
+ * ============================================================================= */
+
+/* Product identity is carried by the small graph mark and the recalled-knowledge
+   signal; links and keyboard focus continue to use the active VS Code theme. */
+.logo svg,
+.empty-state .logo-mark {
+	color: var(--cm-signal);
+}
+
+.logo {
+	letter-spacing: 0;
+}
+
+.session-name,
+.session-tags {
+	font-family: var(--cm-mono);
+	font-size: var(--cm-text-xs-lg);
+	font-variant-numeric: tabular-nums;
+	border: var(--cm-hairline) solid var(--cm-border);
+	background: transparent;
+}
+
+.status-pill {
+	font-family: var(--cm-mono);
+	font-size: var(--cm-text-xs-lg);
+	font-variant-numeric: tabular-nums;
+}
+
+.status-dot.ready {
+	background: var(--cm-signal);
+}
+
+.status-dot.thinking {
+	background: var(--cm-agent);
+}
+
+/* A slender rail makes each assistant turn read as one event in the conversation.
+   Nodes are structural cues, not a claim that every message is a retrieved fact. */
+.message {
+	position: relative;
+	gap: var(--cm-space-6px);
+	margin-bottom: var(--cm-space-3);
+}
+
+.message-rail {
+	position: relative;
+	width: var(--cm-space-2);
+	flex: 0 0 var(--cm-space-2);
+	align-self: stretch;
+	min-height: var(--cm-space-4);
+}
+
+.message-rail-line {
+	position: absolute;
+	left: 50%;
+	top: var(--cm-space-4);
+	bottom: calc(var(--cm-space-4) * -1);
+	width: var(--cm-hairline);
+	background: var(--cm-edge);
+	transform: translateX(-50%);
+}
+
+.message-rail-node {
+	position: absolute;
+	left: 50%;
+	top: var(--cm-space-2);
+	width: var(--cm-space-2px);
+	height: var(--cm-space-2px);
+	border-radius: 50%;
+	background: var(--cm-edge);
+	transform: translateX(-50%);
+}
+
+.message.assistant .message-rail-node {
+	width: var(--cm-space-6px);
+	height: var(--cm-space-6px);
+	background: var(--cm-signal);
+}
+
+.message.user .message-rail,
+.message.system .message-rail,
+.message.is-notice .message-rail {
+	display: none;
+}
+
+.message.user {
+	gap: var(--cm-space-2);
+}
+
+.message.assistant .message-content {
+	background: transparent;
+	border-radius: 0;
+	padding: var(--cm-space-2px) var(--cm-space-2) var(--cm-space-18px);
+}
+
+.message.assistant .message-header {
+	gap: var(--cm-space-2);
+	margin-bottom: var(--cm-space-2);
+}
+
+.message.assistant .message-role {
+	color: var(--cm-signal);
+}
+
+.message.assistant .message-time,
+.session-tokens,
+.thinking-elapsed,
+.turn-duration {
+	font-family: var(--cm-mono);
+	font-variant-numeric: tabular-nums;
+}
+
+.message.assistant .message-avatar {
+	color: var(--cm-signal);
+	background: transparent;
+	border-color: var(--cm-edge);
+}
+
+.message.user .message-content {
+	border-radius: var(--cm-radius-5px);
+	background: color-mix(in srgb, var(--cm-accent) 8%, var(--cm-sidebar-bg));
+}
+
+body.vscode-high-contrast .message.user .message-content,
+body.vscode-high-contrast-light .message.user .message-content {
+	background: var(--cm-sidebar-bg);
+}
+
+/* The tool call is a compact event row. Its status dot is the state; no thick
+   coloured edge or nested-card treatment competes with the conversation. */
+.tool-card {
+	margin: var(--cm-space-2) 0;
+	border: var(--cm-hairline) solid var(--cm-edge);
+	border-radius: var(--cm-radius-4px);
+	background: transparent;
+	font-family: var(--cm-mono);
+	font-size: var(--cm-text-xs-lg);
+}
+
+.tool-card > summary {
+	min-height: var(--cm-space-28px);
+	height: auto;
+	gap: var(--cm-space-2);
+	color: var(--cm-fg);
+}
+
+.tool-card > summary:hover {
+	background: var(--cm-toolbar-hover);
+	border-radius: var(--cm-radius-4px);
+}
+
+.tool-card > summary:focus-visible,
+.tool-card > summary:focus {
+	outline: var(--cm-hairline) solid var(--cm-focus);
+	outline-offset: calc(var(--cm-space-2px) * -1);
+}
+
+.tool-card .tool-name {
+	color: var(--cm-fg);
+	font-weight: 600;
+}
+
+.tool-card .tool-target {
+	color: var(--cm-desc);
+	font-size: var(--cm-text-xs-lg);
+}
+
+.tool-mark.is-ok {
+	color: var(--cm-signal);
+}
+
+.tool-card[data-status="running"] .tool-mark .spinner {
+	border-top-color: var(--cm-agent);
+}
+
+.tool-card-body {
+	margin: 0 var(--cm-space-2) var(--cm-space-2);
+	padding: var(--cm-space-2) 0 0;
+	border-top: var(--cm-hairline) solid var(--cm-edge);
+	background: transparent;
+}
+
+.tool-card.is-error {
+	box-shadow: none;
+	border-color: var(--cm-error-fg);
+}
+
+.tool-outcome,
+.tool-card-body .tool-label {
+	font-family: var(--cm-mono);
+	font-variant-numeric: tabular-nums;
+}
+
+/* The composer is the main working surface: clear field boundary, one restrained
+   signal action, and the workbench's own focus colour for keyboard navigation. */
+.composer {
+	background: var(--cm-sidebar-bg);
+	border-top-color: var(--cm-border);
+	border-radius: var(--cm-radius-4px) var(--cm-radius-4px) 0 0;
+	padding-inline: var(--cm-space-2);
+}
+
+#input {
+	border: var(--cm-hairline) solid var(--cm-input-line-mid);
+	border-radius: var(--cm-radius-4px);
+	background: var(--cm-input-bg);
+	padding: var(--cm-space-2) var(--cm-space-2);
+	transition: border-color var(--cm-duration-base), box-shadow var(--cm-duration-base);
+}
+
+#input:focus {
+	border-color: var(--cm-focus);
+	outline: none;
+	box-shadow: 0 0 0 var(--cm-hairline) var(--cm-focus);
+}
+
+.send-btn {
+	background: var(--cm-signal);
+	color: var(--cm-bg);
+}
+
+.send-btn:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--cm-signal) 86%, var(--cm-fg));
+}
+
+.context-meter {
+	font-family: var(--cm-mono);
+	font-variant-numeric: tabular-nums;
+}
+
+.context-bar {
+	height: var(--cm-space-2px);
+	background: color-mix(in srgb, var(--cm-fg) 16%, transparent);
+}
+
+.context-bar-fill {
+	background: var(--cm-signal);
+}
+
+.context-meter.is-warning .context-bar-fill {
+	background: var(--cm-warning);
+}
+
+.context-meter.is-blocked .context-bar-fill {
+	background: var(--cm-error-fg);
+}
+
+.session-tokens {
+	font-variant-numeric: tabular-nums;
+}
+
+.model-pill,
+.mode-pill,
+.bg-pill,
+.hint-chip {
+	border-radius: var(--cm-radius-4px);
+}
+
+.model-pill:focus-visible,
+.mode-pill:focus-visible,
+.bg-pill:focus-visible,
+.hint-chip:focus-visible,
+.icon-btn:focus-visible,
+.composer-icon:focus-visible,
+.send-btn:focus-visible,
+.stop-btn:focus-visible {
+	outline: var(--cm-hairline) solid var(--cm-focus);
+	outline-offset: var(--cm-space-2px);
+}
+
+.empty-state {
+	gap: var(--cm-space-3);
+}
+
+.empty-state .logo-mark {
+	width: var(--cm-space-36px);
+	height: var(--cm-space-36px);
+	opacity: 1;
+}
+
+.empty-state p {
+	max-width: 32ch;
+}
+
+.hint-chip {
+	font-size: var(--cm-text-sm);
+	border-color: var(--cm-border);
+}
+
+/* In high-contrast mode even decorative geometry goes away; all meaningful
+   identity colours resolve to the theme's own contrast border above. */
+body.vscode-high-contrast .constellation-bg,
+body.vscode-high-contrast-light .constellation-bg {
+	display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.message-rail-node,
+	.constellation-bg .constellation-nodes {
+		animation: none !important;
+	}
+}
+
+/* ---------- Agent completion pass --------------------------------------------------
+ * These rules complete the sidebar world without changing the markup contracts used by
+ * agent.js, input.js and panels.js. They refine every visible state that users reach while
+ * working: streaming, reasoning, code, menus, queued work, dialogs and settings sheets.
+ */
+
+/* Header: the panel reads like an IDE instrument, not a marketing masthead. */
+.header {
+	background: color-mix(in srgb, var(--cm-sidebar-bg) 94%, var(--cm-signal) 6%);
+	border-bottom-color: var(--cm-header-line);
+	}
+
+.header-actions .icon-btn {
+	border-radius: var(--cm-radius-4px);
+	}
+
+.header-actions .icon-btn:hover {
+	color: var(--cm-signal);
+	background: color-mix(in srgb, var(--cm-signal) 10%, transparent);
+}
+
+.header-actions .icon-btn:focus-visible {
+	outline: var(--cm-hairline) solid var(--cm-focus);
+	outline-offset: var(--cm-space-2px);
+}
+
+.status-pill {
+	min-height: var(--cm-space-20px);
+	padding: 0 var(--cm-space-2);
+	border: var(--cm-hairline) solid var(--cm-edge);
+	border-radius: var(--cm-radius-4px);
+	}
+
+.status-dot {
+	box-shadow: 0 0 0 var(--cm-space-2px) color-mix(in srgb, currentColor 12%, transparent);
+}
+
+/* Transcript rhythm: assistant turns have a little more breathing room than tool rows;
+   code and data then pull density back in where scanning needs it. */
+.message.assistant .message-body {
+	max-width: 75ch;
+}
+
+.message-body > p:first-child {
+	margin-top: 0;
+}
+
+.message-body > p:last-child {
+	margin-bottom: 0;
+}
+
+.message.assistant .message-body a {
+	text-underline-offset: 2px;
+	text-decoration-thickness: var(--cm-hairline);
+}
+
+.message.assistant .message-body blockquote {
+	margin-left: 0;
+	padding-left: var(--cm-space-3);
+	border-left: var(--cm-hairline) solid var(--cm-signal);
+	color: var(--cm-desc);
+}
+
+/* Thinking is a quiet branch of the rail. */
+.thinking {
+	border-left: var(--cm-hairline) solid var(--cm-edge);
+	padding-left: var(--cm-space-2);
+}
+
+.thinking > summary::before {
+	color: var(--cm-agent);
+}
+
+.thinking[open] > summary {
+	color: var(--cm-agent);
+}
+
+.thinking-body {
+	border-left-color: color-mix(in srgb, var(--cm-agent) 55%, transparent);
+}
+
+/* Streaming has a single live signal, not a blinking collection of decorations. */
+.streaming-cursor {
+	background: var(--cm-agent);
+}
+
+/* Numbered tool events: the counter is CSS-only and therefore does not alter content or
+   accessibility announcements. Nested calls remain visually nested by the existing DOM. */
+.message.assistant .message-content {
+	counter-reset: tool-event;
+}
+
+.message.assistant .tool-card {
+	counter-increment: tool-event;
+}
+
+.message.assistant .tool-card > summary::before {
+	content: '#' counter(tool-event, decimal-leading-zero);
+	color: var(--cm-desc-70);
+	font-size: var(--cm-text-xs);
+	font-variant-numeric: tabular-nums;
+	flex: 0 0 auto;
+}
+
+.tool-children .tool-card > summary::before {
+	content: '·';
+	font-size: var(--cm-text-base);
+	color: var(--cm-signal-muted);
+}
+
+.tool-card[data-status="running"] > summary {
+	color: var(--cm-agent);
+	}
+
+.tool-card[data-status="running"] {
+	border-color: color-mix(in srgb, var(--cm-agent) 42%, var(--cm-edge));
+	}
+
+.tool-card[data-status="done"] .tool-outcome {
+	color: var(--cm-signal);
+	}
+
+.tool-card-body pre,
+.plain-output,
+.code-block pre {
+	font-family: var(--cm-mono);
+	tab-size: 2;
+	}
+
+.code-block pre {
+	border-left: var(--cm-space-2px) solid color-mix(in srgb, var(--cm-signal) 55%, transparent);
+	}
+
+.code-block .code-bar {
+	font-family: var(--cm-mono);
+	font-variant-numeric: tabular-nums;
+	color: var(--cm-signal);
+	}
+
+.copy-btn:focus-visible {
+	outline: var(--cm-hairline) solid var(--cm-focus);
+	outline-offset: var(--cm-space-2px);
+	}
+
+/* Diff and todo surfaces use the product signal only for positive state. The existing
+   semantic git/error colours remain authoritative for additions and deletions. */
+.todo-item.is-complete,
+.todo-check.is-complete {
+	color: var(--cm-signal);
+}
+
+/* Menus: dense native pickers with one obvious active row. */
+.model-menu,
+.slash-menu,
+.mention-menu,
+.bg-tasks {
+	border-color: var(--cm-border);
+	border-radius: var(--cm-radius-4px);
+	box-shadow: 0 var(--cm-space-4) var(--cm-space-24px) color-mix(in srgb, var(--cm-fg) 22%, transparent);
+	}
+
+.model-menu-item:hover,
+.model-menu-item[aria-selected="true"],
+.slash-item:hover,
+.slash-item.is-active,
+.mention-item:hover,
+.mention-item.is-active {
+	background: color-mix(in srgb, var(--cm-signal) 12%, var(--cm-dropdown-bg));
+	}
+
+.model-menu-item[aria-selected="true"]::before,
+.slash-item.is-active::before,
+.mention-item.is-active::before {
+	background: var(--cm-signal);
+	}
+
+.model-menu-search:focus,
+.history-search:focus,
+.picker-models-search:focus {
+	border-color: var(--cm-focus);
+	box-shadow: 0 0 0 var(--cm-hairline) var(--cm-focus);
+	outline: none;
+	}
+
+/* Composer controls share one vocabulary. */
+.model-pill,
+.mode-pill {
+	font-family: var(--cm-mono);
+	font-size: var(--cm-text-xs-lg);
+	font-variant-numeric: tabular-nums;
+	border-color: var(--cm-border);
+	}
+
+.model-pill:hover,
+.mode-pill:hover,
+.model-pill[aria-expanded="true"],
+.mode-pill[aria-expanded="true"] {
+	border-color: var(--cm-signal);
+	color: var(--cm-signal);
+	background: color-mix(in srgb, var(--cm-signal) 9%, transparent);
+	}
+
+.composer-icon:hover,
+.composer-icon:focus-visible {
+	color: var(--cm-signal);
+	}
+
+.input-mode {
+	border: var(--cm-hairline) solid color-mix(in srgb, var(--cm-signal) 36%, transparent);
+	background: color-mix(in srgb, var(--cm-signal) 8%, transparent);
+	color: var(--cm-signal);
+	font-family: var(--cm-mono);
+	}
+
+.queued-prompt {
+	border-color: color-mix(in srgb, var(--cm-agent) 45%, var(--cm-border));
+	background: color-mix(in srgb, var(--cm-agent) 6%, var(--cm-code-bg));
+	}
+
+.queued-index {
+	color: var(--cm-agent);
+	font-family: var(--cm-mono);
+	}
+
+.bg-pill-dot {
+	background: var(--cm-agent);
+	}
+
+.bg-pill:hover,
+.bg-pill[aria-expanded="true"] {
+	border-color: var(--cm-agent);
+	color: var(--cm-agent);
+	}
+
+/* API-key and permission surfaces: one strong heading, one precise payload, clear actions. */
+.modal {
+	border-color: color-mix(in srgb, var(--cm-signal) 35%, var(--cm-border));
+	border-radius: var(--cm-radius-6px);
+	box-shadow: 0 var(--cm-space-4) var(--cm-space-24px) color-mix(in srgb, var(--cm-fg) 22%, transparent);
+	}
+
+.modal h2 {
+	letter-spacing: -0.01em;
+	}
+
+.modal .form-group input:focus,
+.modal .form-group textarea:focus,
+.permission-modal .perm-feedback input:focus {
+	border-color: var(--cm-focus);
+	box-shadow: 0 0 0 var(--cm-hairline) var(--cm-focus);
+	}
+
+.permission-modal .perm-tool-name {
+	border-color: color-mix(in srgb, var(--cm-agent) 50%, var(--cm-border));
+	color: var(--cm-agent);
+	}
+
+.permission-modal .perm-input {
+	border-left: var(--cm-space-2px) solid var(--cm-agent);
+	border-radius: 0 var(--cm-radius-4px) var(--cm-radius-4px) 0;
+	}
+
+.permission-modal .perm-scope:hover,
+.permission-modal .perm-scope:focus-visible {
+	background: color-mix(in srgb, var(--cm-signal) 8%, transparent);
+	outline: none;
+	}
+
+.btn,
+.modal-actions .btn {
+	border-radius: var(--cm-radius-4px);
+	}
+
+.btn:focus-visible,
+.form-group input:focus-visible,
+.form-group textarea:focus-visible,
+.form-group select:focus-visible {
+	outline: var(--cm-hairline) solid var(--cm-focus);
+	outline-offset: var(--cm-space-2px);
+	}
+
+.btn-primary {
+	background: var(--cm-signal);
+	color: var(--cm-bg);
+	}
+
+.btn-primary:hover {
+	background: color-mix(in srgb, var(--cm-signal) 84%, var(--cm-fg));
+	}
+
+/* Settings/MCP/Memory/Skills/Tasks/History sheets. These are dense operational views,
+   so their identity comes from alignment, rules and the active signal—not oversized cards. */
+.panel-window {
+	border-color: color-mix(in srgb, var(--cm-signal) 35%, var(--cm-border));
+	border-radius: var(--cm-radius-6px);
+	box-shadow: 0 var(--cm-space-4) var(--cm-space-24px) color-mix(in srgb, var(--cm-fg) 22%, transparent);
+	}
+
+.panel-header {
+	background: color-mix(in srgb, var(--cm-sidebar-bg) 92%, var(--cm-signal) 8%);
+	border-bottom-color: var(--cm-header-line);
+	}
+
+.panel-header h2,
+.panel-body > h2 {
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	}
+
+.panel-body {
+	background: var(--cm-sidebar-bg);
+	}
+
+.panel-body code,
+.panel-body .setting-hint,
+.panel-body .provider-name,
+.panel-body .history-meta {
+	font-family: var(--cm-mono);
+	}
+
+.setting-group,
+.provider-row,
+.mcp-row,
+.panel-row,
+.history-row {
+	border-color: var(--cm-border);
+	}
+
+.setting-group > label,
+.panel-body .setting-label {
+	font-size: var(--cm-text-sm);
+	font-weight: 600;
+	}
+
+.setting-hint,
+.panel-empty {
+	color: var(--cm-desc);
+	}
+
+.panel-body input,
+.panel-body textarea,
+.panel-body select {
+	border-radius: var(--cm-radius-4px);
+	}
+
+.panel-body input:focus,
+.panel-body textarea:focus,
+.panel-body select:focus {
+	border-color: var(--cm-focus);
+	box-shadow: 0 0 0 var(--cm-hairline) var(--cm-focus);
+	outline: none;
+	}
+
+.panel-close:hover {
+	color: var(--cm-signal);
+	}
+
+/* Browser surfaces: selection, caret and scrollbars belong to the same system. */
+::selection {
+	background: color-mix(in srgb, var(--cm-signal) 35%, var(--vscode-editor-selectionBackground));
+	color: var(--vscode-editor-foreground);
+}
+
+textarea,
+input {
+	caret-color: var(--cm-signal);
+}
+
+body.vscode-high-contrast .message-rail-line,
+body.vscode-high-contrast-light .message-rail-line,
+body.vscode-high-contrast .message-rail-node,
+body.vscode-high-contrast-light .message-rail-node {
+	display: none;
 }

@@ -836,7 +836,9 @@ export class CodeMindAgentViewPane extends ViewPane {
 	<header class="header">
 		<div class="header-left">
 			<div class="logo" aria-hidden="true">
-				<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+				<!-- Constellation mark: one hub node (the agent) joined to three knowledge
+				     nodes — memory as a graph, the one glyph that is CodeMind's own. -->
+				<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12l-7-6M12 12l-7 6M12 12l7-3"/><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/><circle cx="5" cy="6" r="1.8" fill="currentColor" stroke="none"/><circle cx="5" cy="18" r="1.8" fill="currentColor" stroke="none"/><circle cx="19" cy="9" r="1.8" fill="currentColor" stroke="none"/></svg>
 				<span>CodeMind</span>
 			</div>
 			<span class="session-name hidden" id="sessionName" title="Session name (/rename)"></span>

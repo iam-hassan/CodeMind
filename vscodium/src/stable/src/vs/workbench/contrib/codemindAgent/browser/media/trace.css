@@ -8,12 +8,31 @@
 :root {
 	--cm-text-base: 13px;
 	--cm-text-sm: 11px;
-	--cm-text-xs: 10px;
+	--cm-text-xs: 11px;
 	--cm-space-1: 4px;
 	--cm-space-2: 8px;
 	--cm-space-3: 12px;
 	--cm-space-4: 16px;
-	--cm-radius-md: 10px;
+	--cm-radius-md: 8px;
+	--cm-signal: color-mix(in srgb, var(--vscode-terminal-ansiCyan, var(--vscode-textLink-foreground, var(--vscode-focusBorder))) 72%, var(--vscode-foreground) 28%);
+	--cm-agent: color-mix(in srgb, var(--vscode-terminal-ansiYellow, var(--vscode-editorWarning-foreground, var(--vscode-foreground))) 78%, var(--vscode-foreground) 22%);
+	--cm-signal-soft: color-mix(in srgb, var(--cm-signal) 12%, transparent);
+	--cm-agent-soft: color-mix(in srgb, var(--cm-agent) 12%, transparent);
+	--cm-mono: var(--vscode-editor-font-family, ui-monospace, Consolas, monospace);
+	--cm-hairline: var(--vscode-widget-border, var(--vscode-panel-border));
+}
+
+body.vscode-light {
+	--cm-signal: color-mix(in srgb, var(--vscode-terminal-ansiCyan, var(--vscode-textLink-foreground, var(--vscode-focusBorder))) 52%, var(--vscode-foreground) 48%);
+	--cm-agent: color-mix(in srgb, var(--vscode-terminal-ansiYellow, var(--vscode-editorWarning-foreground, var(--vscode-foreground))) 58%, var(--vscode-foreground) 42%);
+}
+
+body.vscode-high-contrast,
+body.vscode-high-contrast-light {
+	--cm-signal: var(--vscode-contrastActiveBorder, var(--vscode-foreground));
+	--cm-agent: var(--vscode-foreground);
+	--cm-signal-soft: transparent;
+	--cm-agent-soft: transparent;
 }
 
 * { box-sizing: border-box; }
@@ -54,7 +73,7 @@ body {
 	gap: var(--cm-space-2);
 }
 .trace-mark {
-	color: var(--vscode-editorWarning-foreground);
+	color: var(--cm-signal);
 	margin-top: 2px;
 	flex-shrink: 0;
 }
@@ -106,7 +125,7 @@ body {
 
 /* ---------- Trace card (ported from agent.css .cm-trace-*) ---------- */
 .cm-trace-card {
-	border-left: 2px solid var(--vscode-editorWarning-foreground);
+	border-left: 1px solid var(--cm-signal);
 	background: color-mix(in srgb, var(--vscode-editorWidget-background) 60%, transparent);
 	border-radius: var(--cm-radius-md);
 	padding: var(--cm-space-2) var(--cm-space-3);
@@ -146,7 +165,7 @@ body {
 	border-radius: 50%;
 	background: var(--vscode-badge-background);
 	color: var(--vscode-badge-foreground);
-	font-size: 9px;
+	font-size: 11px;
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -162,7 +181,7 @@ body {
 	margin-top: 2px;
 }
 .cm-trace-io-label {
-	font-size: 9px;
+	font-size: 11px;
 	font-weight: 600;
 	letter-spacing: 0.08em;
 	color: var(--vscode-descriptionForeground);
@@ -202,7 +221,7 @@ body {
 }
 .cm-headroom-row { display: contents; }
 .cm-headroom-k {
-	font-size: 9px;
+	font-size: 11px;
 	font-weight: 600;
 	letter-spacing: 0.04em;
 	text-transform: uppercase;
@@ -257,11 +276,13 @@ body {
 }
 .cm-hr-time {
 	font-size: var(--cm-text-xs);
+	font-family: var(--cm-mono);
 	color: var(--vscode-descriptionForeground);
+	font-variant-numeric: tabular-nums;
 }
 .cm-hr-section { display: flex; flex-direction: column; gap: 2px; }
 .cm-hr-label {
-	font-size: 9px;
+	font-size: 11px;
 	font-weight: 600;
 	letter-spacing: 0.08em;
 	text-transform: uppercase;
@@ -281,8 +302,9 @@ body {
 }
 .cm-hr-tokens {
 	font-size: var(--cm-text-sm);
-	font-family: var(--vscode-editor-font-family);
+	font-family: var(--cm-mono);
 	color: var(--vscode-foreground);
+	font-variant-numeric: tabular-nums;
 }
 .cm-hr-saved { color: var(--vscode-testing-iconPassed, #3fb950); }
 .cm-hr-reason {
@@ -291,6 +313,7 @@ body {
 }
 .cm-hr-meta {
 	font-size: var(--cm-text-xs);
+	font-family: var(--cm-mono);
 	color: var(--vscode-descriptionForeground);
 	word-break: break-all;
 }

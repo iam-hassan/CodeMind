@@ -239,6 +239,28 @@ window with it. The API key never reaches the webview or the disk: the renderer
 reads it from secret storage and passes it to the worker as a call argument, and
 the worker puts it in the environment it hands the SDK for that query.
 
+## Design system
+
+The panel, the consensus and trace views, and the Project Brain dashboard share
+one visual language, called *Constellation*: cool cyan marks recalled knowledge,
+warm amber marks the live agent, and everything else sits on hairline borders and
+a node-and-edge grammar. Prose uses the workbench UI font; code, paths, metrics,
+statuses and counters use the editor font. Colour still comes from the active
+theme's `var(--vscode-*)` tokens, so light, dark and both high-contrast themes
+are first-class rather than an afterthought, and the standalone dashboard carries
+its own copy of the same tokens.
+
+Three documents describe it:
+
+- `DESIGN.md` — the system: tokens, type and radius scales, motion rules, and
+  the accessibility floors (WCAG AA contrast, an 11px text minimum, visible
+  keyboard focus, reduced-motion handling).
+- `PRODUCT.md` — what the panel is for, and the product truths the UI has to
+  respect.
+- `redesign/` — the working record: the changelog of the redesign, the list of
+  selectors it is not allowed to change, deferred items, and reference renders
+  under `redesign/screens/`.
+
 ## Verification
 
 The panel was verified at runtime rather than by unit tests: 81 checks (T-000

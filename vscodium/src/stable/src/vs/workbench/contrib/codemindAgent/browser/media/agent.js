@@ -163,9 +163,9 @@ const bgPillEl = document.getElementById('bgPill');
 const bgPillTextEl = document.getElementById('bgPillText');
 
 // ---------- Icons ----------
-const LOGO_MARK_SVG = `<svg viewBox="0 0 24 24" width="52" height="52" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>`;
+const LOGO_MARK_SVG = `<svg viewBox="0 0 24 24" width="52" height="52" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12l-7-6M12 12l-7 6M12 12l7-3"/><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/><circle cx="5" cy="6" r="1.9" fill="currentColor" stroke="none"/><circle cx="5" cy="18" r="1.9" fill="currentColor" stroke="none"/><circle cx="19" cy="9" r="1.9" fill="currentColor" stroke="none"/></svg>`;
 const USER_AVATAR_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`;
-const AGENT_AVATAR_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>`;
+const AGENT_AVATAR_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12l-7-6M12 12l-7 6M12 12l7-3"/><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/><circle cx="5" cy="6" r="1.8" fill="currentColor" stroke="none"/><circle cx="5" cy="18" r="1.8" fill="currentColor" stroke="none"/><circle cx="19" cy="9" r="1.8" fill="currentColor" stroke="none"/></svg>`;
 const ERROR_AVATAR_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
 const SYSTEM_AVATAR_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
 const TERMINAL_AVATAR_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`;
@@ -2965,6 +2965,19 @@ function observeSentinel() {
 function renderEmptyState() {
 	messagesEl.innerHTML = `
 		<div class="empty-state">
+			<svg class="constellation-bg" viewBox="0 0 200 160" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">
+				<path class="constellation-lines" d="M40 30 L95 55 L150 40 M95 55 L80 110 M80 110 L130 120 M80 110 L45 120"/>
+				<g class="constellation-nodes">
+					<circle cx="40" cy="30" r="2"/>
+					<circle cx="95" cy="55" r="2.4"/>
+					<circle cx="150" cy="40" r="2"/>
+					<circle cx="80" cy="110" r="2.4"/>
+					<circle cx="130" cy="120" r="2"/>
+					<circle cx="45" cy="120" r="2"/>
+					<circle cx="175" cy="105" r="1.6"/>
+					<circle cx="30" cy="82" r="1.6"/>
+				</g>
+			</svg>
 			<div class="logo-mark">${LOGO_MARK_SVG}</div>
 			<h2>CodeMind Agent</h2>
 			<p>Claude Code, rebuilt as a native CodeMind panel. Ask anything about your project.</p>
@@ -3053,6 +3066,7 @@ function renderMessage(msg) {
 
 	return `
 		<div class="message ${msg.type}${isNotice ? ' is-notice' : ''}${entering}" data-id="${escapeAttr(msg.id)}">
+			<div class="message-rail" aria-hidden="true"><span class="message-rail-line"></span><span class="message-rail-node"></span></div>
 			<div class="message-avatar" aria-hidden="true">${avatar}</div>
 			<div class="message-content">
 				<div class="message-header">

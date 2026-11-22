@@ -45,7 +45,7 @@
 	/* Scale */
 	--cm-text-base: 13px;
 	--cm-text-sm: 11px;
-	--cm-text-xs: 10px;
+	--cm-text-xs: 11px;
 	--cm-text-title: 20px;
 	--cm-text-panel: 15px;
 	--cm-space-1: 4px;
@@ -56,8 +56,27 @@
 	--cm-space-6: 24px;
 	--cm-radius: 8px;
 	--cm-radius-sm: 5px;
-	--cm-radius-lg: 12px;
+	--cm-radius-lg: 8px;
 	--cm-lh-base: 1.55;
+	--cm-signal: color-mix(in srgb, var(--vscode-terminal-ansiCyan, var(--cm-accent)) 72%, var(--cm-fg) 28%);
+	--cm-agent: color-mix(in srgb, var(--vscode-terminal-ansiYellow, var(--cm-warning)) 78%, var(--cm-fg) 22%);
+	--cm-signal-soft: color-mix(in srgb, var(--cm-signal) 12%, transparent);
+	--cm-agent-soft: color-mix(in srgb, var(--cm-agent) 12%, transparent);
+	--cm-mono: var(--vscode-editor-font-family, ui-monospace, Consolas, monospace);
+	--cm-hairline: var(--vscode-widget-border, var(--cm-border));
+}
+
+body.vscode-light {
+	--cm-signal: color-mix(in srgb, var(--vscode-terminal-ansiCyan, var(--cm-accent)) 52%, var(--cm-fg) 48%);
+	--cm-agent: color-mix(in srgb, var(--vscode-terminal-ansiYellow, var(--cm-warning)) 58%, var(--cm-fg) 42%);
+}
+
+body.vscode-high-contrast,
+body.vscode-high-contrast-light {
+	--cm-signal: var(--vscode-contrastActiveBorder, var(--cm-fg));
+	--cm-agent: var(--vscode-foreground, var(--cm-fg));
+	--cm-signal-soft: transparent;
+	--cm-agent-soft: transparent;
 }
 
 * { box-sizing: border-box; }
@@ -105,8 +124,8 @@ body {
 	width: 38px;
 	height: 38px;
 	border-radius: var(--cm-radius);
-	background-color: var(--cm-accent-soft);
-	color: var(--cm-accent);
+	background-color: var(--cm-signal-soft);
+	color: var(--cm-signal);
 	flex: none;
 }
 
@@ -266,8 +285,8 @@ textarea:focus {
 	display: flex;
 	align-items: center;
 	gap: var(--cm-space-3);
-	background-color: var(--cm-accent-soft);
-	border: 1px solid var(--cm-accent-line);
+	background-color: var(--cm-agent-soft);
+	border: 1px solid color-mix(in srgb, var(--cm-agent) 38%, var(--cm-hairline));
 	border-radius: var(--cm-radius);
 	padding: var(--cm-space-3) var(--cm-space-4);
 }
@@ -276,7 +295,7 @@ textarea:focus {
 	width: 9px;
 	height: 9px;
 	border-radius: 50%;
-	background-color: var(--cm-accent);
+	background-color: var(--cm-agent);
 	flex: none;
 	animation: pulse 1.4s ease-in-out infinite;
 }
@@ -321,11 +340,11 @@ textarea:focus {
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
-	box-shadow: 0 1px 3px var(--cm-shadow-soft);
-	transition: border-color .15s ease, box-shadow .15s ease;
+	box-shadow: none;
+	transition: border-color .15s ease, background-color .15s ease, transform .15s ease;
 }
 
-.model-card:hover { box-shadow: 0 4px 12px var(--cm-shadow-soft); }
+.model-card:hover { border-color: color-mix(in srgb, var(--cm-signal) 48%, var(--cm-widget-border)); transform: translateY(-1px); }
 
 .model-card.faulty {
 	border-color: color-mix(in srgb, var(--cm-error-fg) 55%, var(--cm-widget-border));
@@ -354,7 +373,7 @@ textarea:focus {
 .card-confidence {
 	font-size: var(--cm-text-sm);
 	font-weight: 600;
-	color: var(--cm-success);
+	color: var(--cm-signal);
 	white-space: nowrap;
 }
 
@@ -415,17 +434,16 @@ textarea:focus {
 	padding: var(--cm-space-2) var(--cm-space-3);
 	background-color: var(--cm-sidebar-bg);
 	border: 1px solid var(--cm-border);
-	border-radius: var(--cm-radius-lg);
-	border-bottom-left-radius: var(--cm-radius-sm);
+	border-radius: var(--cm-radius-sm);
 	color: var(--cm-fg);
 	line-height: 1.4;
-	box-shadow: 0 1px 2px var(--cm-shadow-soft);
+	box-shadow: none;
 	animation: popIn 0.2s ease-out;
 }
 
 .event-item.critique-bubble {
-	border-left: 3px solid var(--cm-accent);
-	background-color: var(--cm-accent-soft);
+	border-left: 1px solid var(--cm-signal);
+	background-color: var(--cm-signal-soft);
 }
 
 .event-item.error {
@@ -450,8 +468,8 @@ textarea:focus {
 
 .final-result {
 	background-color: var(--cm-widget-bg);
-	border: 1px solid var(--cm-accent-line);
-	border-left: 3px solid var(--cm-accent);
+	border: 1px solid color-mix(in srgb, var(--cm-signal) 48%, var(--cm-hairline));
+	border-left: 1px solid var(--cm-signal);
 	padding: var(--cm-space-5);
 	border-radius: var(--cm-radius);
 }
