@@ -18,11 +18,22 @@ import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { dirname, resolve, join } from 'path';
 import { readFile, rm, readdir } from 'fs/promises';
+import { readFileSync } from 'fs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(resolve(here, '..', 'vscodium', 'vscode', 'package.json'));
 const { Client } = require('pg');
 const neo4j = require('neo4j-driver');
+
+// Load ~/.codemind/ppb.env so the dashboard always talks to the same stack as the engine,
+// however it was started (scripts\run-brain.ps1 loads this file too). Without it, a bare
+// `node brain-dashboard.mjs` falls back to the placeholder ports and shows an empty graph.
+try {
+	for (const line of readFileSync(join(os.homedir(), '.codemind', 'ppb.env'), 'utf8').split(/\r?\n/)) {
+		const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+		if (m && process.env[m[1]] === undefined) { process.env[m[1]] = m[2].trim(); }
+	}
+} catch { /* no env file — fall back to defaults below */ }
 
 const PORT = Number(process.env.BRAIN_DASHBOARD_PORT ?? 20200);
 const PG_URL = process.env.PPB_PG_URL ?? 'postgres://postgres:postgres@localhost:55432/codemind_ppb';
@@ -44,7 +55,9 @@ const LAYERS = [
 
 async function readRegistry() {
 	try {
-		const parsed = JSON.parse(await readFile(REGISTRY_FILE, 'utf8'));
+		// PowerShell's `Set-Content -Encoding UTF8` prepends a BOM; JSON.parse rejects it, which
+		// would silently empty the project list (the launcher rewrites this file on every run).
+		const parsed = JSON.parse((await readFile(REGISTRY_FILE, 'utf8')).replace(/^\uFEFF/, ''));
 		const projects = parsed?.projects && typeof parsed.projects === 'object' ? parsed.projects : {};
 		return Object.values(projects).map((rec) => ({
 			projectId: rec?.identity?.projectId ?? null,
@@ -128,11 +141,20 @@ async function neo4jData(project) {
 		const rels = (await session.run(relQuery, params)).records.map((r) => ({ from: String(r.get('from')), to: String(r.get('to')), type: r.get('type') }));
 		const labelCounts = {};
 		for (const n of nodes) { const l = (n.labels && n.labels[0]) || 'Node'; labelCounts[l] = (labelCounts[l] || 0) + 1; }
-		return { nodes, rels, labelCounts };
+		// Unscoped totals, so the UI can tell "empty for this project" apart from "empty graph".
+		const totalNodes = neo4jInt((await session.run('MATCH (n) RETURN count(n) AS c')).records[0]?.get('c'));
+		const totalRels = neo4jInt((await session.run('MATCH ()-[r]->() RETURN count(r) AS c')).records[0]?.get('c'));
+		return { nodes, rels, labelCounts, nodeCount: nodes.length, relCount: rels.length, totalNodes, totalRels };
 	} finally {
 		await session.close();
 		await driver.close();
 	}
+}
+
+/** neo4j integer (or plain number) → JS number. */
+function neo4jInt(value) {
+	if (value === null || value === undefined) { return 0; }
+	return typeof value.toNumber === 'function' ? value.toNumber() : Number(value);
 }
 
 function mergeProjects(dbProjects, registry, memoryCounts, embeddingCounts) {
@@ -245,6 +267,23 @@ async function resetData(project) {
 	}
 }
 
+/** Clears the Neo4j knowledge graph only — PostgreSQL and SDK runtime are left untouched. */
+async function resetGraph(project) {
+	const driver = neo4j.driver(NEO4J_URL, neo4j.auth.basic(NEO4J_USER, NEO4J_PASSWORD));
+	const session = driver.session();
+	try {
+		const result = await session.run(
+			project ? 'MATCH (n {projectId:$p}) DETACH DELETE n' : 'MATCH (n) DETACH DELETE n',
+			project ? { p: project } : {}
+		);
+		const updates = result.summary.counters.updates();
+		return { nodes: updates.nodesDeleted, rels: updates.relationshipsDeleted };
+	} finally {
+		await session.close();
+		await driver.close();
+	}
+}
+
 const server = http.createServer(async (req, res) => {
 	try {
 		const url = new URL(req.url ?? '/', 'http://localhost');
@@ -269,6 +308,24 @@ const server = http.createServer(async (req, res) => {
 				return;
 			}
 			const deleted = await resetData(wantsAll ? null : project);
+			res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+			res.end(JSON.stringify({ ok: true, scope: wantsAll ? 'all' : project, deleted }));
+			return;
+		}
+		if (url.pathname === '/api/reset-neo4j' && req.method === 'POST') {
+			let body = '';
+			req.on('data', (c) => (body += c));
+			await new Promise((resolve) => req.on('end', resolve));
+			let parsed = {};
+			try { parsed = JSON.parse(body || '{}'); } catch { parsed = {}; }
+			const wantsAll = parsed.all === true;
+			const project = typeof parsed.project === 'string' ? parsed.project.trim() : '';
+			if (!wantsAll && !project) {
+				res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+				res.end(JSON.stringify({ ok: false, error: 'Send {"project":"<id>"} or {"all":true}.' }));
+				return;
+			}
+			const deleted = await resetGraph(wantsAll ? null : project);
 			res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
 			res.end(JSON.stringify({ ok: true, scope: wantsAll ? 'all' : project, deleted }));
 			return;

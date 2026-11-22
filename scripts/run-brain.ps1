@@ -136,7 +136,9 @@ if (Test-Path $prefsFile) {
 		Write-Host "projects.json was unreadable; replacing it with defaults." -ForegroundColor Yellow
 	}
 }
-$prefs | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $prefsFile -Encoding UTF8
+$prefsJson = $prefs | ConvertTo-Json -Depth 8
+# Write UTF-8 WITHOUT a BOM: JSON.parse on the engine/dashboard side rejects a leading BOM.
+[System.IO.File]::WriteAllText($prefsFile, $prefsJson, (New-Object System.Text.UTF8Encoding($false)))
 
 Write-Host ''
 Write-Host 'Project Brain enabled. Launching CodeMind ...' -ForegroundColor Green

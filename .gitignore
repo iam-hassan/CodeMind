@@ -68,3 +68,12 @@ Thumbs.db
 .opencode.json
 # Python bytecode from the one-off asset scripts in scripts/.
 __pycache__/
+
+# ---------------------------------------------------------------------------
+# Evaluation workspace (local only)
+# ---------------------------------------------------------------------------
+# The benchmark harness, fixtures, generated results and raw evidence form a
+# large local working tree (tens of thousands of generated files). It is kept
+# out of the product repository on purpose.
+/benchmark/
+/REDESIGN_PLAN.md

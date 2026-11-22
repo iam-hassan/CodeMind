@@ -161,7 +161,9 @@ async function load(): Promise<void> {
 	_loaded = true;
 	try {
 		const raw = await readFile(registryFile(), 'utf8');
-		const parsed = JSON.parse(raw) as Partial<RegistryFile>;
+		// PowerShell's `Set-Content -Encoding UTF8` prepends a BOM; JSON.parse rejects it and the
+		// catch below would silently drop every project and all global prefs. Strip it first.
+		const parsed = JSON.parse(raw.replace(/^\uFEFF/, '')) as Partial<RegistryFile>;
 
 		// Validate global prefs separately — a corrupt block cannot touch projects
 		_globalPrefs = validateGlobalPrefs(parsed.globalPrefs);

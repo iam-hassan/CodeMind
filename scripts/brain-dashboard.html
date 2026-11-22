@@ -72,6 +72,7 @@
 		<button id="refresh">Refresh</button>
 		<button id="resetProject" class="danger">Reset project</button>
 		<button id="resetAll" class="danger">Reset all</button>
+		<button id="resetGraph" class="danger">Reset Neo4j</button>
 	</div>
 </header>
 
@@ -195,8 +196,15 @@ function renderGraph(neo){
 	const canvas = el('graph'), ctx = canvas.getContext('2d');
 	const dpr = window.devicePixelRatio||1, W = canvas.clientWidth||600, H = canvas.clientHeight||460;
 	canvas.width=W*dpr; canvas.height=H*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
-	el('graphMeta').textContent = '· '+(nodes.length)+' nodes, '+(rels.length)+' relationships';
-	if(!nodes.length){ ctx.clearRect(0,0,W,H); ctx.fillStyle=css('--muted','#9ba8b4'); ctx.font='13px '+css('--mono','sans-serif'); ctx.fillText('No nodes for this selection.',16,28); el('legend').innerHTML=''; return; }
+	el('graphMeta').textContent = '· '+(nodes.length)+' nodes, '+(rels.length)+' relationships'
+		+ (neo.totalNodes!=null && neo.totalNodes!==nodes.length ? (' ('+neo.totalNodes+' nodes in the whole graph)') : '');
+	if(!nodes.length){
+		ctx.clearRect(0,0,W,H); ctx.fillStyle=css('--muted','#9ba8b4'); ctx.font='13px '+css('--mono','sans-serif');
+		const extra = (neo.totalNodes>0)
+			? ('No nodes for this selection — the graph holds '+neo.totalNodes+' node'+(neo.totalNodes===1?'':'s')+' overall; choose "All projects".')
+			: 'No nodes in the graph yet — write to the brain, or check the Neo4j connection.';
+		ctx.fillText(extra,16,28); el('legend').innerHTML=''; return;
+	}
 	const idx = new Map();
 	const pts = nodes.map((n,i)=>{ idx.set(n.eid,i); return { x:W/2+(Math.random()-.5)*W*.7, y:H/2+(Math.random()-.5)*H*.7, vx:0, vy:0, n }; });
 	const edges = rels.map(r=>({a:idx.get(r.from), b:idx.get(r.to)})).filter(e=>e.a!=null&&e.b!=null);
@@ -244,7 +252,7 @@ function render(data){
 	table(el('decisions'),[{key:'decision',label:'decision',render:v=>short(v,50)},{key:'reason',label:'reason',render:v=>short(v,50)},{key:'status',label:'status'},{key:'decided_at',label:'date',render:v=>v?esc(new Date(v).toLocaleDateString()):''}],pg.decisions||[]);
 	table(el('events'),[{key:'event_type',label:'type'},{key:'description',label:'description',render:v=>short(v,70)},{key:'occurred_at',label:'date',render:ts}],pg.events||[]);
 	table(el('conflicts'),[{key:'category',label:'category'},{key:'severity',label:'severity'},{key:'question',label:'question',render:v=>short(v,60)},{key:'status',label:'status'},{key:'resolution',label:'resolution'}],pg.conflicts||[]);
-	if(!neo.error){ const sig=(neo.nodes||[]).length+':'+(neo.rels||[]).length+':'+(neo.nodes||[]).map(n=>n.eid).join(','); if(sig!==graphSignature){ graphSignature=sig; renderGraph(neo); } }
+	if(!neo.error){ const sig=(neo.nodes||[]).length+':'+(neo.rels||[]).length+':'+(neo.totalNodes??'')+':'+(neo.nodes||[]).map(n=>n.eid).join(','); if(sig!==graphSignature){ graphSignature=sig; renderGraph(neo); } }
 	else { const c=el('graph'),ctx=c.getContext('2d'); ctx.clearRect(0,0,c.width,c.height); ctx.fillStyle=css('--bad','#ef7770'); ctx.font='13px '+css('--mono','sans-serif'); ctx.fillText('Neo4j error: '+neo.error,12,24); }
 }
 
@@ -255,6 +263,20 @@ async function load(){
 el('refresh').addEventListener('click', load);
 el('resetProject').addEventListener('click', () => { const v = el('project').value; if (!v) { alert('Select a project first.'); return; } doReset(v); });
 el('resetAll').addEventListener('click', () => doReset(''));
+el('resetGraph').addEventListener('click', () => doResetGraph());
+async function doResetGraph() {
+	const scope = el('project').value;
+	const label = scope ? ('project "' + scope + '"') : 'ENTIRE graph';
+	if (!confirm('Delete the Neo4j knowledge graph for ' + label + '? This clears the graph only (PostgreSQL and sessions are untouched). This cannot be undone.')) { return; }
+	el('meta').textContent = 'resetting Neo4j...';
+	try {
+		const r = await fetch('/api/reset-neo4j', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(scope ? { project: scope } : { all: true }) });
+		const j = await r.json();
+		el('meta').textContent = 'Neo4j reset: removed ' + (j.deleted?.nodes ?? 0) + ' nodes, ' + (j.deleted?.rels ?? 0) + ' relationships';
+	} catch (e) { el('meta').textContent = 'Neo4j reset failed: ' + e; return; }
+	graphSignature = '';
+	load();
+}
 async function doReset(scope) {
 	if (!scope) {
 		// "Reset all" only when nothing is selected; otherwise the project button is explicit.
